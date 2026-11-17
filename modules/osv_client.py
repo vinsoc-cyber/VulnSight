@@ -378,12 +378,15 @@ def fetch_osv(ecosystem: str, cwes: list[str], affects: str | None = None,
     """
     if ecosystem in (None, "", "any"):
         raise OsvError("OSV bulk mode needs a specific ecosystem (not 'any')")
-    want = {normalize_cwe_id(c) for c in cwes}
+    # str(): a non-string here raised out as an AttributeError, which is
+    # not an OsvError, so it escaped per-source degradation and 500'd the
+    # entire search instead of dropping OSV.
+    want = {normalize_cwe_id(str(c)) for c in cwes}
     records = _load_records(ecosystem, force=force_refresh)
 
     out = []
     for r in records:
-        rec_cwes = {normalize_cwe_id(c) for c in r.get("cwes") or []}
+        rec_cwes = {normalize_cwe_id(str(c)) for c in r.get("cwes") or []}
         if not (rec_cwes & want):
             continue
         if not matches_common_filters(
@@ -441,10 +444,17 @@ def cache_status() -> list[dict]:
     status = []
     for ghsa_eco, osv_eco in ECOSYSTEM_MAP.items():
         p = _zip_path(osv_eco)
-        if os.path.exists(p):
-            status.append({
-                "ecosystem": ghsa_eco,
-                "size_mb": round(os.path.getsize(p) / 1e6, 1),
-                "age_hours": round((time.time() - os.path.getmtime(p)) / 3600, 1),
-            })
+        try:
+            size = os.path.getsize(p)
+            mtime = os.path.getmtime(p)
+        except OSError:
+            # Deleted between the check and the read, or never there.
+            # These caches are documented as safe to delete at any time,
+            # and this renders on every healthcheck.
+            continue
+        status.append({
+            "ecosystem": ghsa_eco,
+            "size_mb": round(size / 1e6, 1),
+            "age_hours": round((time.time() - mtime) / 3600, 1),
+        })
     return status

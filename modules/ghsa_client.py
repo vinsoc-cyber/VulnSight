@@ -168,11 +168,15 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
 
     next_url = None
     for line in header_blob.splitlines():
-        if line.lower().startswith("link:"):
-            m = _LINK_NEXT_RE.search(line)
-            if m:
-                next_url = m.group(1)
+        if not line.lower().startswith("link:"):
+            continue
+        m = _LINK_NEXT_RE.search(line)
+        if m:
+            next_url = m.group(1)
             break
+        # Keep scanning: HTTP permits repeated Link headers, and breaking on
+        # the first one regardless of whether it held rel="next" stopped
+        # pagination at page 1 if rel="prev" happened to arrive first.
 
     body = body.strip()
     if not body:
@@ -258,10 +262,17 @@ def fetch_advisories(params: SearchParams) -> list[dict]:
 
 
 def _strip_to_path(url: str) -> str:
+    """The pagination cursor, reduced to the path+query `gh api` accepts.
+
+    The value comes from a response header and becomes an argv element, so it
+    is checked rather than trusted: anything that is not an /advisories path
+    would otherwise be handed to gh's flag parser.
+    """
     parts = urlsplit(url)
-    if parts.query:
-        return f"{parts.path}?{parts.query}"
-    return parts.path
+    path = f"{parts.path}?{parts.query}" if parts.query else parts.path
+    if not path.startswith("/advisories"):
+        raise GhCliError(f"refusing a pagination cursor outside /advisories: {url!r}")
+    return path
 
 
 # ---------------------------------------------------------------------------

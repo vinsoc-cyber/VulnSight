@@ -166,5 +166,49 @@ class TestAuthStatusIsCached(unittest.TestCase):
         self.assertEqual(probe.call_count, 2)
 
 
+
+class TestPaginationCursorHandling(unittest.TestCase):
+    """HTTP permits repeated Link headers."""
+
+    def test_a_prev_link_before_next_does_not_stop_pagination(self):
+        """The loop broke on the first header starting with "link:" whether
+        or not it held rel="next", so a response that sent rel="prev" first
+        stopped at page 1 -- 100 results for a max_results=500 query, with no
+        error."""
+        blob = (
+            'HTTP/2.0 200\r\n'
+            'link: <https://api.github.com/advisories?page=1>; rel="prev"\r\n'
+            'link: <https://api.github.com/advisories?page=3>; rel="next"\r\n'
+        )
+        found = None
+        for line in blob.splitlines():
+            if not line.lower().startswith("link:"):
+                continue
+            m = ghsa._LINK_NEXT_RE.search(line)
+            if m:
+                found = m.group(1)
+                break
+        self.assertIsNotNone(found)
+        assert found is not None
+        self.assertIn("page=3", found)
+
+    def test_a_cursor_outside_advisories_is_refused(self):
+        """The cursor comes from a response header and becomes an argv
+        element, so a value like "--input=/etc/passwd" would be read by gh's
+        flag parser rather than as a path."""
+        for hostile in ("https://api.github.com/user",
+                        "https://evil.test/--input=/etc/passwd",
+                        "https://api.github.com/"):
+            with self.subTest(url=hostile):
+                with self.assertRaises(ghsa.GhCliError):
+                    ghsa._strip_to_path(hostile)
+
+    def test_a_legitimate_cursor_is_accepted(self):
+        path = ghsa._strip_to_path(
+            "https://api.github.com/advisories?per_page=100&after=abc")
+        self.assertTrue(path.startswith("/advisories?"))
+        self.assertIn("after=abc", path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

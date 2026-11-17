@@ -100,7 +100,10 @@ def _build_date_windows(
         })
         if cursor_start <= start:
             break
-        cursor_end = cursor_start - timedelta(milliseconds=1)
+        # A full day back, not a millisecond: the dates are truncated to
+        # midnight/23:59:59.999 below, so a millisecond stayed inside the
+        # same day and both windows fetched it.
+        cursor_end = cursor_start - timedelta(days=1)
     return windows
 
 
@@ -157,14 +160,14 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     """Fetch all CVEs matching a single CWE, paginating as needed."""
     base_q: dict[str, str] = {
         "cweId": f"CWE-{normalize_cwe_id(cwe)}",
-        "resultsPerPage": str(min(params.results_per_page, 2000)),
         "noRejected": "",
     }
     if params.severity and params.severity != "any":
-        nvd_sev = params.severity.upper()
-        if nvd_sev in _SEVERITY_MAP.values():
-            nvd_sev = {v: k for k, v in _SEVERITY_MAP.items()}[nvd_sev]
-        base_q["cvssV3Severity"] = nvd_sev
+        # NVD wants the uppercase form, which is what _SEVERITY_MAP's keys
+        # are. The inverse lookup that used to sit here could never fire --
+        # an upper-cased severity is never one of that map's lowercase values
+        # -- so it was dead code that made the passthrough look conditional.
+        base_q["cvssV3Severity"] = params.severity.upper()
 
     if params.keyword:
         base_q["keywordSearch"] = params.keyword

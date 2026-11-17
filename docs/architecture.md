@@ -17,9 +17,9 @@ modules/
   http_retry.py        165   one retry/backoff policy for all four upstreams
   cwe_categories.py   749   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py      303   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py       393   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py       450   bulk export download, parse, CWE + keyword filters
+  ghsa_client.py      314   `gh api /advisories`, cursor pagination, normalize()
+  nvd_client.py       396   NVD API v2, 120-day windowing, rate-limit sleeps
+  osv_client.py       460   bulk export download, parse, CWE + keyword filters
   epss_client.py      108   FIRST EPSS scores, batched
   cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            479   SQLite: advisories + verdicts, jobs, migrations

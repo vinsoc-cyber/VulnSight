@@ -247,6 +247,86 @@ class TestNormalizeCVSSFallback(unittest.TestCase):
         self.assertEqual(n["severity"], "critical")
 
 
+class TestDateWindowsDoNotOverlap(unittest.TestCase):
+    """Adjacent windows shared a day, and the duplicates ate the budget.
+
+    _format_nvd_date truncates to the date and expands to
+    00:00:00.000/23:59:59.999, so `cursor_start - 1ms` still landed inside
+    the previous day. _fetch_cves_for_cwe counts rows against max_results
+    before the later de-duplication, so a 100-result query spanning several
+    windows silently returned fewer than 100 unique CVEs.
+    """
+
+    def _windows(self, published, now=None):
+        now = now or datetime(2026, 8, 17, 14, 32, 11, tzinfo=timezone.utc)
+        return nvd_client._build_date_windows(published, now=now)
+
+    def test_adjacent_windows_do_not_share_a_day(self):
+        windows = self._windows(">=2026-01-01")
+        self.assertGreater(len(windows), 1, "need several windows to test this")
+        for earlier, later in zip(windows[1:], windows[:-1]):
+            with self.subTest(start=later["pubStartDate"]):
+                self.assertLess(earlier["pubEndDate"][:10],
+                                later["pubStartDate"][:10])
+
+    def test_the_requested_start_is_still_covered(self):
+        windows = self._windows(">=2026-01-01")
+        self.assertEqual(windows[-1]["pubStartDate"][:10], "2026-01-01")
+
+    def test_the_range_has_no_gap(self):
+        """One day back must not skip a day either."""
+        windows = self._windows(">=2024-01-01")
+        for earlier, later in zip(windows[1:], windows[:-1]):
+            end = datetime.strptime(earlier["pubEndDate"][:10], "%Y-%m-%d")
+            start = datetime.strptime(later["pubStartDate"][:10], "%Y-%m-%d")
+            self.assertEqual((start - end).days, 1,
+                             f"gap between {earlier['pubEndDate']} and "
+                             f"{later['pubStartDate']}")
+
+
+class TestTheQuerySentToNvd(unittest.TestCase):
+    """Driven through _fetch_cves_for_cwe, because the query is built inline."""
+
+    def _capture(self, **params):
+        seen = []
+
+        def fake_page(query, timeout=60):
+            seen.append(dict(query))
+            return {"vulnerabilities": [], "totalResults": 0}
+
+        with mock.patch.object(nvd_client, "_fetch_page", fake_page), \
+             mock.patch.object(nvd_client.time, "sleep", lambda s: None):
+            nvd_client._fetch_cves_for_cwe(
+                "79", nvd_client.NvdSearchParams(cwes=["79"], **params))
+        self.assertTrue(seen, "no request was built")
+        return seen
+
+    def test_severity_is_sent_in_the_form_nvd_wants(self):
+        """The inverse-map lookup that used to sit here could never fire: an
+        upper-cased severity is never one of _SEVERITY_MAP's lowercase
+        values. It was dead code that made the passthrough look
+        conditional."""
+        self.assertEqual(self._capture(severity="critical")[0]["cvssV3Severity"],
+                         "CRITICAL")
+
+    def test_no_severity_means_no_severity_filter(self):
+        for value in ("any", "", None):
+            with self.subTest(severity=value):
+                query = self._capture(severity=value)[0]
+                self.assertNotIn("cvssV3Severity", query)
+
+    def test_the_page_size_that_ships_is_the_computed_one(self):
+        """base_q carried a resultsPerPage that every call site overrode, so
+        the assignment never reached a request."""
+        params = nvd_client.NvdSearchParams(cwes=["79"], max_results=10)
+        expected = min(max(params.results_per_page, 10), 2000)
+        query = self._capture(max_results=10)[0]
+        self.assertEqual(query["resultsPerPage"], str(expected))
+
+    def test_the_cwe_is_sent_normalised(self):
+        self.assertEqual(self._capture()[0]["cweId"], "CWE-79")
+
+
 class TestOneBadRecordDoesNotSinkTheBatch(unittest.TestCase):
     """normalize() dereferences fields the NVD schema does not guarantee.
 
