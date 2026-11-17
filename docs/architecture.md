@@ -28,7 +28,7 @@ modules/
   openapi.py          473   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
-static/app.js        1555   all UI logic; server data arrives via window.BOOT
+static/app.js        1651   all UI logic; server data arrives via window.BOOT
 static/style.css     1728   design tokens + components, light and dark
 tools/generate_cwe_catalog.py                       226   regenerates modules/cwe_catalog.py from MITRE XML
 tools/sync_module_map.py                        69   rewrites the line counts in this very table

@@ -485,16 +485,24 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return scored.slice(0, COMBO_LIMIT).map(pair => pair[1]);
     }
 
-    function isPicked(entry) {
-      return entry.kind === 'class'
-        ? $$('input[name=category]').some(c => c.value === entry.key && c.checked)
-        : PICKED.has(entry.id);
+    // Hoisted out of the per-option loop: this used to run a full-document
+    // querySelectorAll for each of the 40 rendered options, so one keystroke
+    // cost 40 document queries over 29 checkboxes, and so did each arrow key.
+    function checkedClassKeys() {
+      return new Set($$('input[name=category]:checked').map(c => c.value));
+    }
+
+    function isPicked(entry, checked) {
+      if (entry.kind === 'class') {
+        return (checked || checkedClassKeys()).has(entry.key);
+      }
+      return PICKED.has(entry.id);
     }
 
     // Two rows: code + full name + level, then the aliases and the curated class
     // that already covers this CWE. The name gets the space it needs; the
     // secondary line is what truncates.
-    function comboOptionHtml(entry, index) {
+    function comboOptionHtml(entry, index, checked) {
       // The sidebar is ~300px wide, so the covering class is shown as its short
       // key ("BAC") with the full name on hover — the CWE name gets the room.
       const cls = entry.kind === 'cwe' && (CLASS_BY_CWE[entry.id] || [])[0];
@@ -508,7 +516,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         ? `<span class="combo-sub">${aliases}${covered}</span>` : '';
       // "Already added" was conveyed only by opacity and a CSS checkmark, and
       // aria-selected="false" told assistive tech the opposite.
-      const picked = isPicked(entry);
+      const picked = isPicked(entry, checked);
       return `<li class="combo-option ${entry.kind}${picked ? ' picked' : ''}"
           role="option" id="cwe-option-${index}" data-key="${safeAttr(entry.key)}"
           aria-selected="${index === comboActive}"${picked ? ' aria-disabled="true"' : ''}>
@@ -539,7 +547,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         list.innerHTML = `<li class="combo-empty">${esc(why)} “${esc(query)}”</li>`;
       } else {
         if (comboActive >= comboMatches.length) comboActive = comboMatches.length - 1;
-        list.innerHTML = comboMatches.map(comboOptionHtml).join('');
+        const checked = checkedClassKeys();
+        list.innerHTML = comboMatches
+          .map((entry, index) => comboOptionHtml(entry, index, checked)).join('');
       }
       list.hidden = false;
       input.setAttribute('aria-expanded', 'true');
@@ -561,12 +571,26 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function moveComboActive(delta) {
       if (!comboMatches.length) return;
       const last = comboMatches.length - 1;
+      const previous = comboActive;
       comboActive = comboActive < 0
         ? (delta > 0 ? 0 : last)
         : Math.min(last, Math.max(0, comboActive + delta));
-      renderCombo();
+      // Only the highlight moved. renderCombo() here re-scored all 973
+      // catalog entries and rebuilt all 40 rows just to change which one is
+      // marked -- on every arrow key. The matches are already in
+      // comboMatches and nothing about them changed.
+      // .combo-option[aria-selected="true"] carries the highlight, so the
+      // attribute is both the a11y state and the style hook.
+      const before = previous >= 0 ? $(`#cwe-option-${previous}`) : null;
+      if (before) {
+        before.setAttribute('aria-selected', 'false');
+      }
       const el = $(`#cwe-option-${comboActive}`);
-      if (el) el.scrollIntoView({block: 'nearest'});
+      if (el) {
+        el.setAttribute('aria-selected', 'true');
+        $('#cwe-search').setAttribute('aria-activedescendant', el.id);
+        el.scrollIntoView({block: 'nearest'});
+      }
     }
 
     function announceSelection(message) {
@@ -687,10 +711,46 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       setTimeout(() => t.remove(), 5000);
     }
 
+    // The card carries role="dialog" aria-modal="true", but nothing made the
+    // background inert and nothing wrapped Tab -- so a keyboard user could
+    // Tab straight past "Continue" into the CWE search box behind the scrim,
+    // invisible, focus ring hidden under the overlay, every control they
+    // reached returning 401. Meanwhile a screen reader honouring aria-modal
+    // was told there was nothing outside the dialog. Same machinery the
+    // filter panel already uses.
+    function trapAuthGateTab(e) {
+      if (e.key !== 'Tab') return;
+      const gate = $('#auth-gate');
+      if (!gate || gate.hidden) return;
+      const items = Array.from(gate.querySelectorAll(FOCUSABLE))
+        .filter(el => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    function setAuthGateBackgroundInert(inert) {
+      ['.topbar', '.layout'].forEach(selector => {
+        const el = document.querySelector(selector);
+        if (!el) return;
+        if (inert) el.setAttribute('inert', '');
+        else el.removeAttribute('inert');
+      });
+    }
+
     function showAuthGate(msg) {
       const gate = $('#auth-gate');
       if (!gate) return;
       gate.hidden = false;
+      setAuthGateBackgroundInert(true);
+      document.addEventListener('keydown', trapAuthGateTab, true);
       const hint = $('#auth-gate-hint');
       if (hint && msg) hint.textContent = msg;
       const input = $('#auth-token');
@@ -703,6 +763,8 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function hideAuthGate() {
       const gate = $('#auth-gate');
       if (gate) gate.hidden = true;
+      setAuthGateBackgroundInert(false);
+      document.removeEventListener('keydown', trapAuthGateTab, true);
     }
 
     function saveAuthToken() {
@@ -1012,9 +1074,42 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         + (m.cached ? ` · <span class="summary-cached">${m.cached} already AI-scored</span>` : '');
     }
 
+    // render() replaces all of #results in one innerHTML write, so whatever
+    // had focus inside it is destroyed. A keyboard user who Tabbed to the
+    // Retry button on advisory 47 of 200 and pressed Enter lost focus to
+    // <body>, lost their scroll position, and Tabbed from the top of the
+    // document again -- with nothing announcing that the retry had worked.
+    function focusAnchor() {
+      const active = document.activeElement;
+      const results = $('#results');
+      if (!active || !results || !results.contains(active)) return null;
+      const card = active.closest('.card');
+      if (!card || !card.dataset.id) return null;
+      return {
+        id: card.dataset.id,
+        retry: active.classList.contains('verdict-retry'),
+        scrollY: window.scrollY,
+      };
+    }
+
+    function restoreFocus(anchor) {
+      if (!anchor) return;
+      let card = null;
+      try {
+        card = $('#results .card[data-id="' + CSS.escape(anchor.id) + '"]');
+      } catch (_) { card = null; }
+      if (!card) return;
+      const target = anchor.retry ? card.querySelector('.verdict-retry') : null;
+      // preventScroll, then put the page back where it was: focusing scrolls
+      // the element into view, which is its own jump.
+      if (target) target.focus({ preventScroll: true });
+      window.scrollTo({ top: anchor.scrollY });
+    }
+
     function render() {
       const items = currentItems();
       const el = $('#results');
+      const anchor = focusAnchor();
       renderSummary(items.length);
       if (!items.length) {
         // Distinguish "the query found nothing" from "your filter hid it all".
@@ -1027,6 +1122,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       }
       el.innerHTML = items.map(renderCard).join('');
       updateActionButtons();
+      restoreFocus(anchor);
     }
 
     // `overrides` lets the Auto pipeline run with its own source set without

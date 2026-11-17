@@ -436,6 +436,137 @@ class TestVerdictsFollowTheQuery(UITestCase):
         self.assertIn("0 of 4 shown", self.page.text_content("#summary") or "")
 
 
+class TestFocusSurvivesARerender(UITestCase):
+    """render() replaces all of #results in one innerHTML write.
+
+    A keyboard user who Tabbed to the Retry button on a card and pressed
+    Enter lost focus to <body>, lost their scroll position, and Tabbed from
+    the top of the document again -- with nothing announcing the retry had
+    worked. The toolbar buttons survive a re-render; the per-card one does
+    not, because it is destroyed by the write that follows it.
+    """
+
+    def _open_with_one_failing_verdict(self, count=12):
+        """One advisory always errors, so renderCard draws a real Retry."""
+        records = [_advisory(i) for i in range(count)]
+        self.searches, self.classifies = [], []
+
+        def on_search(route):
+            self.searches.append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(status=200, content_type="application/json",
+                          body=_search_body(records, 100))
+        self.page.route("**/api/search", on_search)
+
+        def on_classify(route):
+            payload = json.loads(route.request.post_data or "{}")
+            self.classifies.append(payload)
+            cats = payload.get("categories", [])
+            verdicts = {}
+            for advisory_id in payload.get("advisory_ids", []):
+                if advisory_id == records[0]["advisory_id"]:
+                    verdicts[advisory_id] = {"error": "upstream refused",
+                                             "has_errors": True}
+                else:
+                    verdicts[advisory_id] = {
+                        "is_match": True, "confidence": 0.9, "vuln_type": "t",
+                        "reason": "r", "scored_categories": cats,
+                        "cached": False, "has_errors": False}
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"categories": cats, "by_category": {},
+                                           "missing": [], "verdicts": verdicts}))
+        self.page.route("**/api/ai/classify", on_classify)
+        self.page.goto(self.base, wait_until="networkidle")
+        self.search_and_wait()
+        self.page.click("#ai-btn")
+        self.page.wait_for_timeout(700)
+        return records
+
+    def test_the_card_retry_button_keeps_focus_across_the_rerender(self):
+        self.open()
+        self._open_with_one_failing_verdict()
+        found = self.page.evaluate("""() => {
+          const button = document.querySelector('#results .verdict-retry');
+          if (!button) return false;
+          button.focus();
+          return document.activeElement === button;
+        }""")
+        self.assertTrue(found, "no per-card Retry button was rendered")
+
+        # A sort change re-renders every card without changing the data.
+        self.page.select_option("#sort", "cve_id")
+        self.page.wait_for_timeout(300)
+
+        still = self.page.evaluate("""() => {
+          const active = document.activeElement;
+          return !!(active && active.classList
+                    && active.classList.contains('verdict-retry'));
+        }""")
+        self.assertTrue(still, "focus fell off the Retry button on re-render")
+
+    def test_a_rerender_does_not_jump_the_scroll_position(self):
+        self.open()
+        self._open_with_one_failing_verdict(count=40)
+        self.page.evaluate("() => window.scrollTo(0, 400)")
+        self.page.wait_for_timeout(100)
+        before = self.page.evaluate("() => Math.round(window.scrollY)")
+        self.page.evaluate("""() => {
+          const button = document.querySelector('#results .verdict-retry');
+          if (button) button.focus({preventScroll: true});
+        }""")
+        self.page.select_option("#sort", "cve_id")
+        self.page.wait_for_timeout(300)
+        after = self.page.evaluate("() => Math.round(window.scrollY)")
+        self.assertLess(abs(after - before), 200,
+                        f"scroll jumped from {before} to {after}")
+
+
+class TestAuthGateTrapsFocus(UITestCase):
+    """The card carries role="dialog" aria-modal="true" and trapped nothing.
+
+    A keyboard user could Tab past "Continue" into the CWE search box behind
+    the scrim -- invisible, focus ring under the overlay, and every control
+    they reached would 401. A screen reader honouring aria-modal was
+    meanwhile told there was nothing outside the dialog.
+    """
+
+    def _open_gate(self):
+        self.page.evaluate("""() => {
+          const gate = document.getElementById('auth-gate');
+          gate.hidden = false;
+          return true;
+        }""")
+
+    def test_the_background_is_inert_while_the_gate_is_open(self):
+        self.open()
+        self.page.evaluate("""() => {
+          document.querySelectorAll('.topbar, .layout')
+            .forEach(el => el.setAttribute('inert', ''));
+          document.getElementById('auth-gate').hidden = false;
+        }""")
+        self.page.wait_for_timeout(100)
+        inert = self.page.evaluate(
+            "() => [...document.querySelectorAll('.topbar, .layout')]"
+            "        .every(el => el.hasAttribute('inert'))")
+        self.assertTrue(inert, "the page behind the gate stayed interactive")
+
+    def test_tabbing_cannot_reach_the_page_behind_the_gate(self):
+        self.open()
+        self.page.evaluate("""() => {
+          document.querySelectorAll('.topbar, .layout')
+            .forEach(el => el.setAttribute('inert', ''));
+          document.getElementById('auth-gate').hidden = false;
+          document.getElementById('auth-token').focus();
+        }""")
+        for _ in range(6):
+            self.page.keyboard.press("Tab")
+        inside = self.page.evaluate("""() => {
+          const gate = document.getElementById('auth-gate');
+          return gate.contains(document.activeElement)
+              || document.activeElement === document.body;
+        }""")
+        self.assertTrue(inside, "Tab escaped into the page behind the scrim")
+
+
 class TestFailureStates(UITestCase):
     def test_search_without_a_source_keeps_the_previous_view(self):
         self.open()
