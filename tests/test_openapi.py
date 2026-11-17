@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from modules import cache, openapi
+from modules import ai_classifier, cache, openapi
 from samples import SAMPLE
 
 
@@ -177,6 +177,66 @@ class TestSpecMatchesRealResponses(_AppCase):
                 json={"categories": ["bac"], "ecosystem": "maven"},
             ).get_json()
         self.assertEqual(validate(body, schema), [])
+
+    def test_a_real_cwe_catalog_response_validates(self):
+        """It was documented as an unconstrained object too, and the release
+        date it now carries was generated but read by nothing."""
+        schema = (self.spec["paths"]["/api/v1/cwes"]["get"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        body = self.client.get("/api/v1/cwes").get_json()
+        self.assertEqual(validate(body, schema), [], list(body)[:6])
+        self.assertTrue(body["released"], "the catalog must state its release date")
+
+    def test_a_real_classify_response_validates(self):
+        """The module's headline claim is that the document is checked
+        against what the server actually sends. That was vacuous for the
+        richest response in the API, which was documented as an
+        unconstrained {"type": "object"} and posted to by no test."""
+        schema = (self.spec["paths"]["/api/v1/ai/classify"]["post"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        verdict = {"is_match": True, "confidence": 0.9,
+                   "vuln_type": "BOLA/IDOR", "reason": "r"}
+        with mock.patch("modules.cache.get_advisories",
+                        return_value={"GHSA-aaaa": {
+                            "advisory_id": "GHSA-aaaa", "cve_id": "CVE-1",
+                            "summary": "s", "description": "d",
+                            "cwes": ["639"], "packages": []}}), \
+             mock.patch("modules.ai_classifier.load_config") as load_config, \
+             mock.patch("modules.ai_classifier.classify_one", return_value=verdict), \
+             mock.patch("modules.cache.save_classification"), \
+             mock.patch("modules.cache.get_classifications", return_value={}):
+            load_config.return_value = ai_classifier.AIConfig(
+                provider="glm", base_url="https://x", tokens=["k"], model="m")
+            body = self.client.post(
+                "/api/v1/ai/classify",
+                json={"categories": ["bac"],
+                      "advisory_ids": ["GHSA-aaaa", "GHSA-missing"]},
+            ).get_json()
+        self.assertEqual(validate(body, schema), [], body)
+        self.assertEqual(body["missing"], ["GHSA-missing"])
+
+    def test_a_classify_response_with_an_error_verdict_validates(self):
+        """The error branch used to return a different shape, so a schema
+        for this response could not have been written at all."""
+        schema = (self.spec["paths"]["/api/v1/ai/classify"]["post"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        with mock.patch("modules.cache.get_advisories",
+                        return_value={"GHSA-aaaa": {
+                            "advisory_id": "GHSA-aaaa", "cve_id": "CVE-1",
+                            "summary": "s", "description": "d",
+                            "cwes": ["639"], "packages": []}}), \
+             mock.patch("modules.ai_classifier.load_config") as load_config, \
+             mock.patch("modules.ai_classifier.classify_one",
+                        side_effect=ai_classifier.AIError("boom")), \
+             mock.patch("modules.cache.save_classification"), \
+             mock.patch("modules.cache.get_classifications", return_value={}):
+            load_config.return_value = ai_classifier.AIConfig(
+                provider="glm", base_url="https://x", tokens=["k"], model="m")
+            body = self.client.post(
+                "/api/v1/ai/classify",
+                json={"categories": ["bac"], "advisory_ids": ["GHSA-aaaa"]},
+            ).get_json()
+        self.assertEqual(validate(body, schema), [], body)
 
     def test_an_empty_search_response_validates(self):
         schema = self.spec["components"]["schemas"]["SearchResponse"]

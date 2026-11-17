@@ -241,7 +241,10 @@ class TestDataIntegrity(unittest.TestCase):
             code = cat["code"]
             with self.subTest(category=key):
                 self.assertTrue(code)
-                self.assertLessEqual(len(code), cwe.MAX_CATEGORY_CODE_LENGTH)
+                # Five characters: the picker renders the code in a
+                # fixed-width column beside the CWE name, and a longer
+                # one pushes the name out of a ~300px rail.
+                self.assertLessEqual(len(code), 5)
                 self.assertEqual(code, code.upper())
 
     def test_keyword_keys_are_known_categories(self):

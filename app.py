@@ -27,6 +27,7 @@ from modules import (
     search_service,
     security,
 )
+from modules.config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 from modules import ghsa_client as ghsa
 from modules.cwe_categories import (
     CATEGORIES,
@@ -45,12 +46,6 @@ logging.basicConfig(level=logging.INFO,
 
 logger = logging.getLogger(__name__)
 
-MAX_AI_BATCH = 100
-
-# One classify request fans out to len(categories) × len(advisory_ids) model
-# calls. Capping the product keeps a single request from turning into thousands
-# of paid calls; the UI sizes its batches from the same number.
-MAX_AI_CALLS_PER_REQUEST = 500
 
 
 @functools.lru_cache(maxsize=1)

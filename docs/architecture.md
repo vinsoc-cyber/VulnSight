@@ -8,14 +8,14 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                583   Flask routes, request guards, response headers
+app.py                578   Flask routes, request guards, response headers
 modules/
-  config.py            57   minimal .env loader; BASE_DIR / DATA_DIR
+  config.py            69   minimal .env loader; BASE_DIR / DATA_DIR
   search_service.py   828   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py    149   one filter vocabulary, applied after the merge
   records.py           69   per-record normalize guard shared by the clients
   http_retry.py        165   one retry/backoff policy for all four upstreams
-  cwe_categories.py   749   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_categories.py   754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py      314   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       396   NVD API v2, 120-day windowing, rate-limit sleeps
@@ -25,7 +25,7 @@ modules/
   cache.py            479   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             218   submit/poll queue for searches too slow to hold open
   ai_classifier.py   1051   provider client, prompt, verdict cache, key rotation
-  openapi.py          483   the OpenAPI description of /api/v1
+  openapi.py          572   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
 static/app.js        1682   all UI logic; server data arrives via window.BOOT

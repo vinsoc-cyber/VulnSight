@@ -10,7 +10,6 @@ What is enforced instead (tests/test_openapi.py):
 - every route in ``url_map`` under /api/v1 appears here, and vice versa, so a
   new endpoint cannot ship undescribed;
 - the methods match;
-- the example search request validates against the documented request schema;
 - a real response from the app validates against the documented response schema.
 
 That last one is the point: the document is checked against what the server
@@ -21,7 +20,9 @@ from __future__ import annotations
 
 import functools
 
+from .config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 from .cwe_categories import CATEGORIES, ECOSYSTEMS, SEVERITIES
+from .search_service import MAX_CATEGORY_INPUTS
 
 API_VERSION = "1.0.0"
 
@@ -249,6 +250,60 @@ _JOB = {
 }
 
 
+_VERDICT = {
+    "type": "object",
+    "description": (
+        "One advisory's answer, collapsed across every requested category. "
+        "Every branch returns the same keys; `error` is present only when "
+        "the pass failed outright."
+    ),
+    "properties": {
+        "is_match": {
+            "type": "boolean", "nullable": True,
+            "description": ("True if any category matched. null means the "
+                            "pass could not decide, which is not the same "
+                            "as false."),
+        },
+        "matched_category": {"type": "string", "nullable": True},
+        "confidence": {"type": "number", "nullable": True},
+        "vuln_type": {"type": "string", "nullable": True},
+        "reason": {"type": "string", "nullable": True},
+        "scored_categories": {
+            "type": "array", "items": {"type": "string"},
+            "description": ("Which categories this verdict actually answers "
+                            "for. A verdict that does not cover the current "
+                            "query is stale, not applicable."),
+        },
+        "has_errors": {"type": "boolean"},
+        "errors": {"type": "object", "additionalProperties": {"type": "string"}},
+        "cached": {"type": "boolean"},
+        "error": {"type": "string"},
+        "by_category": {"type": "object"},
+    },
+    "required": ["is_match", "scored_categories", "has_errors", "cached"],
+}
+
+_CLASSIFY_RESPONSE = {
+    "type": "object",
+    "properties": {
+        "category": {"type": "string",
+                     "description": "The first requested category."},
+        "categories": {"type": "array", "items": {"type": "string"}},
+        "verdicts": {"type": "object", "additionalProperties": _VERDICT,
+                     "description": "Keyed by advisory_id."},
+        "by_category": {
+            "type": "object",
+            "description": "Raw per-category verdicts, before aggregation.",
+        },
+        "missing": {
+            "type": "array", "items": {"type": "string"},
+            "description": "Requested ids that are not in the cache.",
+        },
+    },
+    "required": ["categories", "verdicts", "by_category", "missing"],
+}
+
+
 def _json_body(schema: dict, *, required: bool = True) -> dict:
     return {
         "required": required,
@@ -332,7 +387,25 @@ def build_spec(server_url: str = "/") -> dict:
                         "`If-None-Match` to get a 304 instead of ~66 KB."
                     ),
                     "responses": {
-                        "200": _json_response("Catalog", {"type": "object"}),
+                        "200": _json_response("Catalog", {
+                            "type": "object",
+                            "required": ["version", "released", "columns", "rows"],
+                            "properties": {
+                                "version": {"type": "string",
+                                            "description": "MITRE CWE release, e.g. 4.20."},
+                                "released": {"type": "string",
+                                             "description": "That release's date."},
+                                "columns": {"type": "array",
+                                            "items": {"type": "string"}},
+                                "rows": {
+                                    "type": "array",
+                                    "items": {"type": "array"},
+                                    "description": ("Column-oriented to keep the "
+                                                    "payload small; `columns` names "
+                                                    "the positions."),
+                                },
+                            },
+                        }),
                         "304": {"description": "Catalog unchanged"},
                     },
                 }
@@ -438,7 +511,8 @@ def build_spec(server_url: str = "/") -> dict:
                     "summary": "Run the LLM pass over cached advisories",
                     "description": (
                         "Costs `len(categories) × len(advisory_ids)` model "
-                        "calls, capped at 500 per request. Advisories must "
+                        "calls, capped at "
+                        f"{MAX_AI_CALLS_PER_REQUEST} per request. Advisories must "
                         "already be in the cache — run a search first; unknown "
                         "ids come back under `missing` rather than failing."
                     ),
@@ -447,10 +521,25 @@ def build_spec(server_url: str = "/") -> dict:
                         "type": "object",
                         "required": ["categories", "advisory_ids"],
                         "properties": {
-                            "categories": {"type": "array",
-                                           "items": {"type": "string"}},
-                            "advisory_ids": {"type": "array", "maxItems": 100,
-                                             "items": {"type": "string"}},
+                            "categories": {
+                                "type": "array",
+                                "maxItems": MAX_CATEGORY_INPUTS,
+                                "items": {"type": "string", "maxLength": 64},
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": ("Singular alias for a "
+                                                "one-element `categories`."),
+                            },
+                            "advisory_ids": {
+                                "type": "array", "maxItems": MAX_AI_BATCH,
+                                "items": {"type": "string", "maxLength": 128},
+                            },
+                            "ghsa_ids": {
+                                "type": "array", "maxItems": MAX_AI_BATCH,
+                                "items": {"type": "string", "maxLength": 128},
+                                "description": "Accepted alias for advisory_ids.",
+                            },
                             "force": {
                                 "type": "boolean", "default": False,
                                 "description":
@@ -459,7 +548,7 @@ def build_spec(server_url: str = "/") -> dict:
                         },
                     }),
                     "responses": {
-                        "200": _json_response("Verdicts", {"type": "object"}),
+                        "200": _json_response("Verdicts", _CLASSIFY_RESPONSE),
                         "400": _ERROR_RESPONSE,
                         "401": _ERROR_RESPONSE,
                         "429": _ERROR_RESPONSE,

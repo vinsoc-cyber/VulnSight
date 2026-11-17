@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import re
 
-from .cwe_catalog import ALIASES, ABSTRACTION, CWE_VERSION, DEPRECATED, NAMES
+from .cwe_catalog import (
+    ABSTRACTION, ALIASES, CWE_RELEASED, CWE_VERSION, DEPRECATED, NAMES,
+)
 
 # ---------------------------------------------------------------------------
 # Category -> metadata
@@ -40,7 +42,6 @@ from .cwe_catalog import ALIASES, ABSTRACTION, CWE_VERSION, DEPRECATED, NAMES
 # Every field is enforced by tests/test_cwe_categories.py. Adding a class also
 # needs a KEYWORDS entry below, or OSV-native records will never match it.
 # ---------------------------------------------------------------------------
-MAX_CATEGORY_CODE_LENGTH = 5
 
 CATEGORIES: dict[str, dict] = {
     "bac": {
@@ -597,7 +598,7 @@ def category_label(category: str) -> str:
 def category_description(category: str) -> str:
     cwe_id = parse_cwe_key(category)
     if cwe_id:
-        aliases = ", ".join(ALIASES.get(cwe_id, ()))
+        aliases = ", ".join(cwe_aliases(cwe_id))
         base = f"MITRE CWE-{cwe_id}: {cwe_label(cwe_id)}."
         return f"{base} Also known as: {aliases}." if aliases else base
     return CATEGORIES.get(category, {}).get("description", "")
@@ -630,7 +631,7 @@ def _cwe_keywords(cwe_id: str) -> list[str]:
     # Aliases go through the same filter: MITRE lists "CSS" as a historical
     # alternate term for cross-site scripting, and as a bare substring that
     # matches every advisory about a stylesheet.
-    terms += [a for a in ALIASES.get(cwe_id, ()) if _is_useful_prefilter_term(a)]
+    terms += [a for a in cwe_aliases(cwe_id) if _is_useful_prefilter_term(a)]
     if name:
         terms.append(name)
     return terms
@@ -692,9 +693,13 @@ def picker_catalog() -> dict:
     }
     return {
         "version": CWE_VERSION,
+        # The generator emitted this and nothing ever read it, so there was no
+        # way to see how old the taxonomy behind a result set was. Serving it
+        # is what makes a freshness check possible at all.
+        "released": CWE_RELEASED,
         "columns": ["id", "label", "aliases", "level"],
         "rows": [
-            [cwe_id, NAMES[cwe_id], "|".join(ALIASES.get(cwe_id, ())), level]
+            [cwe_id, NAMES[cwe_id], "|".join(cwe_aliases(cwe_id)), level]
             for cwe_id, level in sorted(level_by_id.items(), key=lambda kv: int(kv[0]))
             if cwe_id not in DEPRECATED
         ],
