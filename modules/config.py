@@ -23,6 +23,13 @@ def load_dotenv(path: str | None = None) -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
+            # A .env written to be `source`d often has `export FOO=bar`. Taken
+            # literally that sets a variable named "export FOO", which nothing
+            # reads -- the setting silently does not apply.
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if not key.isidentifier():
+                continue
             val = val.strip().strip('"').strip("'")
             # Do not clobber values already set in the real environment.
             os.environ.setdefault(key, val)

@@ -109,5 +109,51 @@ class TestLoadDotenvParsing(unittest.TestCase):
         config.load_dotenv("/nonexistent/.env")
 
 
+
+class TestDotenvQuirks(unittest.TestCase):
+    """A .env written to be `source`d is a normal thing to hand this tool."""
+
+    def _load(self, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            saved = {k: os.environ.get(k)
+                     for k in ("VS_PLAIN", "VS_EXPORTED", "VS_SPACED")}
+            for key in saved:
+                os.environ.pop(key, None)
+            try:
+                config.load_dotenv(path)
+                return {k: os.environ.get(k) for k in saved}
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    def test_an_exported_line_sets_the_variable_it_names(self):
+        """`export FOO=bar` used to set a variable literally named
+        "export FOO", which nothing reads -- the setting silently did not
+        apply, with no warning."""
+        loaded = self._load("export VS_EXPORTED=yes\nVS_PLAIN=ok\n")
+        self.assertEqual(loaded["VS_EXPORTED"], "yes")
+        self.assertEqual(loaded["VS_PLAIN"], "ok")
+
+    def test_a_key_that_is_not_an_identifier_is_skipped(self):
+        loaded = self._load("not a key = value\nVS_PLAIN=ok\n")
+        self.assertEqual(loaded["VS_PLAIN"], "ok")
+
+    def test_the_cooldown_file_lives_in_the_data_dir(self):
+        """It was the one piece of state VULNSIGHT_DATA_DIR did not relocate,
+        so in Docker it wrote to /app and was lost on every container
+        replacement -- while docs/operations.md lists it among the files that
+        move."""
+        from modules import ai_classifier
+        self.assertTrue(
+            ai_classifier.COOLDOWN_PATH.startswith(config.DATA_DIR),
+            f"{ai_classifier.COOLDOWN_PATH} is not under {config.DATA_DIR}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

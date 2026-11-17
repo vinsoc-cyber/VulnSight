@@ -133,7 +133,11 @@ _CONFIG_LOCK = threading.Lock()
 
 # Where key cooldowns survive a restart. Sits next to the advisory cache and is
 # git-ignored; holds only SHA-256 prefixes of the keys, never the keys.
-COOLDOWN_PATH = os.path.join(config.BASE_DIR, ".ai_key_cooldown.json")
+# DATA_DIR, not BASE_DIR: this is persistent state, and it was the only
+# file VULNSIGHT_DATA_DIR failed to relocate, so in Docker it was written
+# to /app and lost on every container replacement -- re-learning which
+# keys are spent by paying for a request on each one.
+COOLDOWN_PATH = os.path.join(config.DATA_DIR, ".ai_key_cooldown.json")
 
 
 def _read_cooldown_file() -> dict[str, float]:

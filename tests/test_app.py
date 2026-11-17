@@ -1051,6 +1051,44 @@ class TestAppAuthAndLimits(unittest.TestCase):
         self.assertIn("bug class", (response.get_json() or {}).get("error", ""))
         spend.assert_not_called()
 
+    def test_a_route_outside_api_is_not_unauthenticated_by_default(self):
+        """Auth matched on `request.path.startswith("/api/")` while the rate
+        limiter matched on the endpoint and carried a comment explaining why
+        the path was wrong. Two guards, two notions of "protected": the next
+        POST /export or /admin/reindex would have been open, and no test
+        would have noticed."""
+        self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_API_TOKEN": "s3cret",
+                    "VULNSIGHT_RATE_LIMIT": "off"})
+
+        @self.app.route("/admin/reindex", methods=["POST"])
+        def _admin_reindex():
+            from flask import jsonify
+            return jsonify({"ok": True})
+
+        client = self.app.test_client()
+        self.assertEqual(client.post("/admin/reindex").status_code, 401)
+        self.assertEqual(
+            client.post("/admin/reindex",
+                        headers={"X-VulnSight-Token": "s3cret"}).status_code,
+            200)
+
+    def test_public_reference_data_stays_readable_without_a_token(self):
+        self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_API_TOKEN": "s3cret",
+                    "VULNSIGHT_RATE_LIMIT": "off"})
+        client = self.app.test_client()
+        for path in ("/", "/api/v1/cwes", "/api/v1/meta",
+                     "/api/v1/openapi.json", "/api/v1/osv/status"):
+            with self.subTest(path=path):
+                self.assertEqual(client.get(path).status_code, 200)
+
+    def test_a_mutating_api_call_still_needs_the_token(self):
+        self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_API_TOKEN": "s3cret",
+                    "VULNSIGHT_RATE_LIMIT": "off"})
+        client = self.app.test_client()
+        self.assertEqual(
+            client.post("/api/v1/search", json={"categories": ["bac"]}).status_code,
+            401)
+
     def test_non_loopback_autogens_token(self):
         data_dir = tempfile.mkdtemp()
         self._make({

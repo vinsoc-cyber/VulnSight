@@ -167,6 +167,14 @@ def create_app():
     # Flask runs before_request hooks in registration order, so with it the
     # other way round an unauthenticated caller spent the operator's own bucket
     # and locked them out with a 429 while every one of its requests was 401.
+    # Reference data a reader may fetch without a token: the CWE catalog,
+    # the taxonomy, the spec, the status pills. Everything else -- including
+    # an endpoint added later -- needs one.
+    _UNAUTHENTICATED_ENDPOINTS = frozenset({
+        "index", "static", "api_meta", "api_cwes", "api_docs",
+        "api_openapi", "api_osv_status",
+    })
+
     @app.before_request
     def _auth_check():
         # Job polling is the one GET that is guarded. Every other GET serves
@@ -176,7 +184,13 @@ def create_app():
         guarded_read = request.endpoint == "api_jobs_get"
         if request.method not in ("POST", "PUT", "PATCH", "DELETE") and not guarded_read:
             return None
-        if not request.path.startswith("/api/"):
+        # An allowlist of endpoints that may be reached without a token,
+        # not a path prefix. The rate limiter already matches on the endpoint
+        # and says why; auth matching on the path meant the two guards held
+        # different notions of "protected", and a future route outside /api/
+        # would have been unauthenticated by default rather than failing
+        # closed. Unknown endpoint (404) also lands here and is guarded.
+        if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:
             return None
         expected = app.config.get("VULNSIGHT_TOKEN") or ""
         if not expected:
