@@ -29,6 +29,7 @@ import logging
 import re
 import secrets
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import cache
@@ -75,10 +76,38 @@ def startup(path: str | None = None) -> int:
     )
     if orphaned:
         logger.warning("Failed %d job(s) orphaned by a restart", orphaned)
-    cache.prune_jobs(
-        env_int("VULNSIGHT_JOB_RETENTION", DEFAULT_RETENTION_SECONDS), path=path
-    )
+    _prune(path, force=True)
     return orphaned
+
+
+# Pruning ran only here, at process start. docs/api.md, docs/automation.md and
+# docs/configuration.md all state that finished jobs are removed after
+# VULNSIGHT_JOB_RETENTION -- but the shipped deployment is one gunicorn worker
+# in a container that runs for weeks, so in practice nothing ever pruned. Each
+# row stores the full search payload, including every advisory's
+# source_records, so a nightly cron doing one max_results=500 sweep grew
+# advisories.db without bound. The table already carries idx_jobs_created for
+# a query that was never issued on a live process.
+_PRUNE_INTERVAL_SECONDS = 3600.0
+_last_prune = 0.0
+_prune_lock = threading.Lock()
+
+
+def _prune(path: str | None, *, force: bool = False) -> None:
+    """Prune finished jobs, at most once an hour unless *force*."""
+    global _last_prune
+    now = time.monotonic()
+    with _prune_lock:
+        if not force and (now - _last_prune) < _PRUNE_INTERVAL_SECONDS:
+            return
+        _last_prune = now
+    try:
+        cache.prune_jobs(
+            env_int("VULNSIGHT_JOB_RETENTION", DEFAULT_RETENTION_SECONDS), path=path
+        )
+    except Exception:
+        # Housekeeping must never be the reason a submission fails.
+        logger.exception("Could not prune finished jobs")
 
 
 def submit(kind: str, request: dict, runner, path: str | None = None) -> str:
@@ -92,6 +121,7 @@ def submit(kind: str, request: dict, runner, path: str | None = None) -> str:
     """
     job_id = new_job_id()
     cache.create_job(job_id, kind, request, path=path)
+    _prune(path)
     _pool().submit(_run, job_id, request, runner, path)
     return job_id
 
@@ -105,25 +135,44 @@ class JobFailure(Exception):
         self.status = status
 
 
+def _finish(job_id: str, path: str | None, **outcome) -> None:
+    """Record a terminal state, and never let that recording be what fails.
+
+    finish_job was called bare in all three branches. If it raised -- SQLite
+    "database is locked" past the busy timeout, a full disk, a non-serialisable
+    field creeping into a normalized record -- the exception was captured by a
+    Future nobody holds, the row stayed `running`, and because
+    fail_orphaned_jobs only runs at process start, a poller on a live server
+    waited for it forever.
+    """
+    try:
+        cache.finish_job(job_id, path=path, **outcome)
+    except Exception:
+        logger.exception("Could not record terminal state for job %s", job_id)
+
+
 def _run(job_id: str, request: dict, runner, path: str | None) -> None:
     try:
         cache.mark_job_running(job_id, path=path)
     except Exception:
+        # This branch used to return without recording anything, so the job
+        # sat in `queued` forever: the runner never executed and nothing ever
+        # told the caller. Failing to start is itself a terminal state.
         logger.exception("Could not mark job %s running", job_id)
+        _finish(job_id, path, error="Job could not be started. See server logs.",
+                error_status=503)
         return
     try:
         result = runner(request)
     except JobFailure as e:
-        cache.finish_job(job_id, error=e.public_message, error_status=e.status, path=path)
+        _finish(job_id, path, error=e.public_message, error_status=e.status)
     except Exception:
         # Full detail to the log, a generic message to the caller: the same
         # split the HTTP handlers make, for the same reason.
         logger.exception("Job %s failed", job_id)
-        cache.finish_job(
-            job_id, error="Job failed. See server logs.", error_status=500, path=path
-        )
+        _finish(job_id, path, error="Job failed. See server logs.", error_status=500)
     else:
-        cache.finish_job(job_id, result=result, path=path)
+        _finish(job_id, path, result=result)
 
 
 def get(job_id: str, path: str | None = None) -> dict | None:

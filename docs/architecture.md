@@ -21,8 +21,8 @@ modules/
   osv_client.py       375   bulk export download, parse, CWE + keyword filters
   epss_client.py      100   FIRST EPSS scores, batched
   cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py            357   SQLite: advisories + verdicts, jobs, migrations
-  jobs.py             159   submit/poll queue for searches too slow to hold open
+  cache.py            382   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py             208   submit/poll queue for searches too slow to hold open
   ai_classifier.py    992   provider client, prompt, verdict cache, key rotation
   openapi.py          449   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter

@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import tempfile
 import unittest
+from unittest import mock
 
 from modules import cache
 from modules import ghsa_client as ghsa
@@ -189,6 +190,75 @@ class TestCache(unittest.TestCase):
         for ext in ["-wal", "-shm"]:
             self.assertFalse(os.path.exists(self.db + ext),
                              msg=f"leaked SQLite sidecar file: {self.db + ext}")
+
+
+
+class TestMigrationsFailLoudly(unittest.TestCase):
+    """A migration that fails must not be recorded as applied.
+
+    Every OperationalError was swallowed and the version stamped anyway, so a
+    migration that failed for a real reason -- v4's json_set() on a SQLite
+    build without JSON1, say -- was marked done and never retried. The defect
+    it exists to repair then persisted forever, silently.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def _versions(self):
+        with sqlite3.connect(self.db) as conn:
+            return [r[0] for r in conn.execute("SELECT version FROM schema_version")]
+
+    def test_a_clean_run_records_every_migration(self):
+        cache.init_db(self.db)
+        self.assertEqual(sorted(self._versions()),
+                         [v for v, _ in cache._MIGRATIONS])
+
+    def test_rerunning_is_idempotent(self):
+        cache.init_db(self.db)
+        before = sorted(self._versions())
+        cache.init_db(self.db)
+        self.assertEqual(sorted(self._versions()), before)
+
+    def test_a_real_failure_is_raised_and_the_version_is_not_stamped(self):
+        broken = list(cache._MIGRATIONS) + [
+            (99, "UPDATE advisories SET data = no_such_function(data)")
+        ]
+        with mock.patch.object(cache, "_MIGRATIONS", broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                cache.init_db(self.db)
+        self.assertNotIn(99, self._versions())
+
+    def test_a_failed_migration_is_retried_on_the_next_start(self):
+        """The whole point: the version must stay un-stamped so a fixed
+        environment re-runs it."""
+        broken = list(cache._MIGRATIONS) + [
+            (99, "UPDATE advisories SET data = no_such_function(data)")
+        ]
+        with mock.patch.object(cache, "_MIGRATIONS", broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                cache.init_db(self.db)
+        repaired = list(cache._MIGRATIONS) + [
+            (99, "ALTER TABLE advisories ADD COLUMN repaired INTEGER")
+        ]
+        with mock.patch.object(cache, "_MIGRATIONS", repaired):
+            cache.init_db(self.db)
+        self.assertIn(99, self._versions())
+
+    def test_benign_rerun_errors_are_still_tolerated(self):
+        for message in ("duplicate column name: fingerprint",
+                        "table jobs already exists",
+                        "no such column: ghsa_id"):
+            self.assertTrue(cache._is_benign_migration_error(message), message)
+        self.assertFalse(
+            cache._is_benign_migration_error("no such function: json_set"))
 
 
 if __name__ == "__main__":

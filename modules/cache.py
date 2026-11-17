@@ -112,6 +112,22 @@ def _db(path: str | None = None):
         conn.close()
 
 
+# Re-running a migration is expected (the version table can be behind while
+# the objects already exist), and SQLite reports those as OperationalError
+# just like a genuine failure. These are the messages that mean "already
+# done"; everything else is a real problem and must not be swallowed.
+_BENIGN_MIGRATION_ERRORS = (
+    "duplicate column name",        # ALTER TABLE ADD COLUMN, re-run
+    "already exists",               # CREATE TABLE/INDEX without IF NOT EXISTS
+    "no such column",               # RENAME COLUMN, re-run (old name is gone)
+)
+
+
+def _is_benign_migration_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _BENIGN_MIGRATION_ERRORS)
+
+
 def init_db(path: str | None = None) -> None:
     """Create / migrate the database to the latest schema version."""
     db_path = path or DB_PATH
@@ -138,9 +154,18 @@ def init_db(path: str | None = None) -> None:
                     continue
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    # e.g. ALTER TABLE ADD COLUMN when column already exists
-                    pass
+                except sqlite3.OperationalError as exc:
+                    # Only the re-run cases are benign, and they are named.
+                    # Catching every OperationalError and stamping the version
+                    # anyway meant a migration that failed for a *real* reason
+                    # was recorded as applied and never retried: on a SQLite
+                    # build without JSON1, v4's json_set() raises "no such
+                    # function", so the advisory_id backfill silently never
+                    # happened and the defect it exists to repair persisted
+                    # forever. app.py is still patching around that downstream.
+                    if not _is_benign_migration_error(str(exc)):
+                        raise
+            # Stamped only after every statement in the migration survived.
             conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (version,),

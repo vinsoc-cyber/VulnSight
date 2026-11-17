@@ -11,8 +11,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 from modules import cache, jobs
 
@@ -127,6 +129,115 @@ class TestJobLifecycle(unittest.TestCase):
         ids = {jobs.new_job_id() for _ in range(200)}
         self.assertEqual(len(ids), 200)
         self.assertTrue(all(len(i) == jobs.JOB_ID_BYTES * 2 for i in ids))
+
+
+
+class TestAJobAlwaysReachesATerminalState(unittest.TestCase):
+    """A job stuck in `queued` or `running` is a poller that waits forever.
+
+    fail_orphaned_jobs only runs at process start, so nothing rescues a
+    stranded row on a live server.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+        cache.init_db(self.db)
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def _run_sync(self, job_id, request, runner):
+        jobs._run(job_id, request, runner, self.db)
+        return cache.get_job(job_id, path=self.db)
+
+    def test_a_job_that_cannot_be_marked_running_is_failed_not_abandoned(self):
+        """This branch used to log and return, leaving the row in `queued`
+        with the runner never executed and nothing telling the caller."""
+        job_id = jobs.new_job_id()
+        cache.create_job(job_id, "search", {}, path=self.db)
+        ran = []
+        with mock.patch.object(cache, "mark_job_running",
+                               side_effect=sqlite3.OperationalError("database is locked")):
+            row = self._run_sync(job_id, {}, lambda req: ran.append(1))
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_status"], 503)
+        self.assertEqual(ran, [], "the runner must not have executed")
+
+    def test_a_failure_to_record_success_does_not_strand_the_job(self):
+        job_id = jobs.new_job_id()
+        cache.create_job(job_id, "search", {}, path=self.db)
+        with mock.patch.object(cache, "finish_job",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            # Must not raise out of the worker; the Future holds nobody.
+            jobs._run(job_id, {}, lambda req: {"ok": True}, self.db)
+        self.assertEqual(cache.get_job(job_id, path=self.db)["status"], "running")
+
+    def test_a_normal_job_still_completes(self):
+        job_id = jobs.new_job_id()
+        cache.create_job(job_id, "search", {}, path=self.db)
+        row = self._run_sync(job_id, {"q": 1}, lambda req: {"count": 7})
+        self.assertEqual(row["status"], "done")
+        self.assertEqual(row["result"]["count"], 7)
+
+    def test_a_job_failure_keeps_its_status(self):
+        job_id = jobs.new_job_id()
+        cache.create_job(job_id, "search", {}, path=self.db)
+
+        def runner(req):
+            raise jobs.JobFailure("GHSA fetch failed.", status=502)
+
+        row = self._run_sync(job_id, {}, runner)
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_status"], 502)
+
+
+class TestFinishedJobsArePruned(unittest.TestCase):
+    """docs/api.md, docs/automation.md and docs/configuration.md all promise
+    retention-based pruning. It ran only in startup(), so the shipped
+    deployment -- one gunicorn worker in a long-lived container -- never
+    pruned at all, and every row stores a full search payload."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+        cache.init_db(self.db)
+        jobs._last_prune = 0.0
+
+    def tearDown(self):
+        jobs._last_prune = 0.0
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def test_submitting_prunes_old_finished_jobs(self):
+        stale = jobs.new_job_id()
+        cache.create_job(stale, "search", {}, path=self.db)
+        cache.finish_job(stale, result={"count": 0}, path=self.db)
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("UPDATE jobs SET created_at = ?, finished_at = ?",
+                         (time.time() - 90000, time.time() - 90000))
+
+        with mock.patch.dict(os.environ, {"VULNSIGHT_JOB_RETENTION": "3600"}):
+            jobs.submit("search", {}, lambda req: {"count": 1}, path=self.db)
+        time.sleep(0.3)
+        self.assertIsNone(cache.get_job(stale, path=self.db))
+
+    def test_pruning_is_rate_limited_not_run_on_every_submission(self):
+        calls = []
+        with mock.patch.object(cache, "prune_jobs", side_effect=lambda *a, **k: calls.append(1)):
+            for _ in range(5):
+                jobs._prune(self.db)
+        self.assertEqual(len(calls), 1)
+
+    def test_a_pruning_failure_never_fails_the_submission(self):
+        with mock.patch.object(cache, "prune_jobs",
+                               side_effect=sqlite3.OperationalError("locked")):
+            jobs._prune(self.db, force=True)   # must not raise
 
 
 if __name__ == "__main__":
