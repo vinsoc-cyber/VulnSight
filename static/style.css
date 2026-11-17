@@ -8,12 +8,13 @@
    each pair once and `color-scheme` picks the side, which leaves the explicit
    theme override as two one-line rules at the bottom.
 
-   THE COLOUR RULE: chroma means danger or verdict, and nothing else.
-   The whole chrome is graphite on paper. In a triage queue a coloured button
-   competing with a critical badge is a usability bug, not decoration -- so
-   severity, the AI verdict, and focus/selection are the only things in this
-   file allowed to carry a hue. Spend boldness there; keep everything else
-   quiet.
+   THE COLOUR RULE: chroma carries meaning, and nothing else carries chroma.
+   The chrome is graphite on paper. Severity and the AI verdict own the warm
+   and green hues; one cool indigo-slate marks focus, selection and the single
+   primary action. Everything else -- source, ecosystem and package badges,
+   section labels, the theme toggle -- is achromatic, because in a queue the
+   user scans for danger, and a badge that is merely informative must not win
+   that glance. Spend boldness on severity; keep the rest quiet.
 
    CONTRAST: every text tier has to clear WCAG AA 4.5:1 against the *worst*
    surface it can land on -- --panel-2 is the hover fill under .export-pop
@@ -66,15 +67,15 @@
   --scrollbar-thumb: light-dark(#b8c0c9, #434c57);
 
   /* -- Structure accent: focus, selection, brand ---------------------------
-     Indigo-slate, deliberately far from all four severity hues. It earns its
-     chroma because focus and selection are meaning, not ornament. The primary
-     button is NOT this colour -- it is graphite, so it cannot outshout a
-     critical badge. */
+     Indigo-slate, deliberately far from all four severity hues -- so the one
+     filled control on the page reads as "the action" and never competes with
+     an orange or red badge for the same glance. It earns its chroma because
+     focus, selection and the primary action are meaning, not ornament.
+     Source, ecosystem and package badges do NOT get a fill: they were louder
+     than the CWE that is the actual subject of the search. */
   --accent:     light-dark(#334e68, #8fb3d9);
   --accent-2:   light-dark(#24384c, #b3cde8);
   --accent-ink: light-dark(#ffffff, #121820);
-  --graphite:     light-dark(#2b3139, #e9ebef);
-  --graphite-ink: light-dark(#ffffff, #15181d);
 
   /* -- Signal: the only other chroma in the interface ----------------------
      --ok is the AI "confirmed match" green and is reserved for it, which is
@@ -87,7 +88,12 @@
   --bad:  light-dark(#b3123c, #ff7a90);
 
   --sev-critical:     light-dark(#c8102e, #ff5a74);
+  /* Ink that sits ON a severity fill. The warm fills take dark ink in both
+     themes; critical and low are dark enough in light mode to need their own
+     (measured: dark ink on the light steel-blue low fill is 3.58:1). */
+  --sev-ink:          #14181d;
   --sev-critical-ink: light-dark(#ffffff, #16181c);
+  --sev-low-ink:      light-dark(#ffffff, #14181d);
   --sev-high:         light-dark(#d2600f, #ff9348);
   --sev-medium:       light-dark(#cf9426, #e8b65a);
   --sev-low:          light-dark(#3e6e9e, #7fafd8);
@@ -96,10 +102,6 @@
   --shadow:       light-dark(0 18px 40px rgba(20, 24, 29, .10),
                              0 18px 48px rgba(0, 0, 0, .45));
   --card-shadow:  light-dark(rgba(20, 24, 29, .07), rgba(0, 0, 0, .35));
-  --shadow-sm:    light-dark(0 1px 2px rgba(20, 24, 29, .06),
-                             0 1px 2px rgba(0, 0, 0, .30));
-  --shadow-md:    light-dark(0 4px 12px rgba(20, 24, 29, .08),
-                             0 4px 12px rgba(0, 0, 0, .38));
 
   /* -- Type ----------------------------------------------------------------
      No webfonts: the CSP is `default-src 'self'` with no font-src, so a CDN
@@ -157,15 +159,19 @@
      prefers-reduced-motion further down the file. ------------------------- */
   --motion-fast: .14s;
   --motion-base: .2s;
-  --ease: cubic-bezier(.2, .6, .35, 1);
 
-  /* -- Layering: named, so a new overlay does not invent another number. -- */
-  --z-sticky:  30;
-  --z-rail:    50;
-  --z-topbar:  70;
-  --z-popover: 80;
-  --z-scrim:   100;
-  --z-modal:   200;
+  /* -- Layering. These name the stack the file already had; the numbers are
+     the ones that were in use, so naming them changes no ordering. Bottom to
+     top: the sticky result bar, dropdowns anchored in the rail, the topbar,
+     the mobile filter scrim and the panel above it, toasts, then the two
+     things that must clear everything. */
+  --z-sticky:   30;
+  --z-dropdown: 40;
+  --z-topbar:   50;
+  --z-scrim:    70;
+  --z-rail:     80;
+  --z-toast:    100;
+  --z-modal:    200;
 
   --header-h: 60px;
 }
@@ -254,7 +260,7 @@ fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
   position: fixed;
   top: 10px;
   left: 10px;
-  z-index: 200;
+  z-index: var(--z-modal);
   padding: 10px 14px;
   color: var(--accent-ink);
   background: var(--accent);
@@ -267,7 +273,7 @@ fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 50;
+  z-index: var(--z-topbar);
   min-height: var(--header-h);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -673,7 +679,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   position: absolute;
   right: 0;
   left: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   max-height: min(52vh, 380px);
   display: flex;
   flex-direction: column;
@@ -1071,7 +1077,7 @@ kbd {
 .result-command {
   position: sticky;
   top: var(--header-h);
-  z-index: 30;
+  z-index: var(--z-sticky);
   min-height: 64px;
   display: flex;
   align-items: center;
@@ -1141,7 +1147,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   width: 240px;
   padding: 6px;
   background: var(--surface-raised);
@@ -1235,7 +1241,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   flex: 0 0 auto;
   min-width: 72px;
   padding: 5px 8px;
-  color: #081018;
+  color: var(--sev-ink);
   border: 0;
   text-align: center;
   text-transform: uppercase;
@@ -1243,7 +1249,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   font-weight: 800;
   border-radius: 6px;
 }
-.sev.low { background: var(--sev-low); }
+.sev.low { color: var(--sev-low-ink); background: var(--sev-low); }
 .sev.medium { background: var(--sev-medium); }
 .sev.high { background: var(--sev-high); }
 .sev.critical { color: var(--sev-critical-ink); background: var(--sev-critical); }
@@ -1252,7 +1258,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
    treatment and the name is a quieter second field behind a hairline divider.
    Several of these can sit on one row, hence the cap and the ellipsis. */
 .badge.cwe {
-  max-width: min(100%, 28ch);
+  max-width: min(100%, 52ch);
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
@@ -1278,10 +1284,10 @@ button.warn-btn:disabled { background: var(--panel-2); }
 }
 .badge.pkg { font-weight: 500; }
 .badge.eco { letter-spacing: var(--tracking-code); }
-.badge.src { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.badge.src { color: var(--ink); border-color: var(--line-bright); font-weight: var(--weight-semi); }
 .badge--native { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
 .badge--withdrawn { color: var(--bad); text-decoration: line-through; }
-.badge--kev { color: #081018; background: var(--sev-high); border-color: var(--sev-high); font-weight: 800; }
+.badge--kev { color: var(--sev-ink); background: var(--sev-high); border-color: var(--sev-high); font-weight: var(--weight-bold); }
 .desc { margin-top: 8px; color: var(--muted); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .muted { color: var(--faint); }
 .meta {
@@ -1447,7 +1453,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   position: fixed;
   right: var(--space-4);
   bottom: var(--space-4);
-  z-index: var(--z-scrim);
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column-reverse;
   gap: var(--space-2);
@@ -1471,7 +1477,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
 .auth-gate {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1583,7 +1589,7 @@ code {
   .control-rail {
     position: fixed;
     inset: 0 auto 0 0;
-    z-index: 80;
+    z-index: var(--z-rail);
     width: min(400px, 92vw);
     height: auto;
     overflow: hidden;
@@ -1597,7 +1603,7 @@ code {
   .filter-scrim {
     position: fixed;
     inset: 0;
-    z-index: 70;
+    z-index: var(--z-scrim);
     width: 100%;
     height: 100%;
     min-height: 0;

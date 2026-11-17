@@ -17,6 +17,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VulnSight API</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='apidocs.css') }}">
+  <script nonce="{{ csp_nonce }}">
+    // Apply the theme chosen in the app before paint, so following the "API"
+    // link from a dark session does not flash a white page.
+    (function() {
+      var saved = localStorage.getItem('theme');
+      if (saved === 'light' || saved === 'dark') {
+        document.documentElement.dataset.theme = saved;
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="head">

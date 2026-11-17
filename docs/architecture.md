@@ -28,11 +28,9 @@ modules/
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
 static/app.js        1551   all UI logic; server data arrives via window.BOOT
-static/style.css     1722   design tokens + components, light and dark
-tools/generate_cwe_catalog.py
-                      188   regenerates modules/cwe_catalog.py from MITRE XML
-tools/sync_module_map.py
-                       69   rewrites the line counts in this very table
+static/style.css     1728   design tokens + components, light and dark
+tools/generate_cwe_catalog.py                       188   regenerates modules/cwe_catalog.py from MITRE XML
+tools/sync_module_map.py                        69   rewrites the line counts in this very table
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

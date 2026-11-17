@@ -1,32 +1,31 @@
 /* API reference page. Standalone rather than sharing style.css: that file is
-   1700 lines of app UI, and this page needs a dozen rules. Light and dark both
-   come from the same tokens. */
+   1700 lines of app UI and this page needs a dozen rules. The palette is the
+   app's, restated here as the small subset this page uses -- it used to be an
+   unrelated scheme that happened to reuse the same token names with different
+   values (--accent was a blue here and a green there), so the two pages did
+   not read as one product.
+
+   Same rule as the app: chroma carries meaning. The only hues are the HTTP
+   method tags, because GET and POST are the distinction a reader scans for. */
 
 :root {
-  --bg: #fbfbfd;
-  --panel: #ffffff;
-  --ink: #1a1d24;
-  --muted: #616a7a;
-  --line: #e2e6ee;
-  --accent: #2f5bd4;
-  --code-bg: #f1f3f8;
-  --get: #1f7a4d;
-  --post: #9a4d0f;
+  color-scheme: light dark;
+  --bg:      light-dark(#f7f8f9, #15181d);
+  --panel:   light-dark(#ffffff, #1e232a);
+  --ink:     light-dark(#14181d, #e9ebef);
+  --muted:   light-dark(#4e5862, #a6aeb9);
+  --line:    light-dark(#e3e6ea, #2a3038);
+  --accent:  light-dark(#334e68, #8fb3d9);
+  --code-bg: light-dark(#f1f3f5, #171b21);
+  --get:     light-dark(#1a6b4a, #4fc08d);
+  --post:    light-dark(#b4500a, #ff9348);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161b;
-    --panel: #1b1e25;
-    --ink: #e7eaf0;
-    --muted: #9aa3b4;
-    --line: #2b313c;
-    --accent: #7fa4ff;
-    --code-bg: #232833;
-    --get: #6ed3a0;
-    --post: #e9a765;
-  }
-}
+/* Honour the theme chosen in the app: it is stored per browser, and a reader
+   who picked dark there should not get a white page when they follow the
+   "API" link. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
