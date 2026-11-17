@@ -27,6 +27,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -102,7 +103,12 @@ def download_ecosystem(osv_eco: str, force: bool = False,
                 and os.path.getsize(path) > 0):
             return path
 
-        url = f"{OSV_BASE}/{osv_eco}/all.zip"
+        # quote(): several OSV ecosystem names contain a space ("GitHub
+        # Actions", "Rocky Linux"). Interpolated raw, http.client rejects the
+        # path outright -- so the `actions` ecosystem, which the UI offers in
+        # its dropdown, could never be fetched at all. The broad handler below
+        # then reported it as a generic "OSV fetch failed".
+        url = f"{OSV_BASE}/{urllib.parse.quote(osv_eco)}/all.zip"
         req = urllib.request.Request(url, headers={"user-agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:

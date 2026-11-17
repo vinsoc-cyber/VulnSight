@@ -292,7 +292,8 @@ per request. Over it you get `400` naming both factors. See
 [AI classification](ai-classification.md#what-a-pass-costs).
 
 Errors: `AI not configured. Set AI_* in .env.` · `No advisories to classify.` ·
-`Too many advisories; maximum batch size is 100.` ·
+`Too many advisory IDs; maximum is 100.` ·
+`Advisory identifiers may not exceed 128 characters.` ·
 `Request would issue N AI calls …`
 
 ## `POST /api/v1/ai/test`

@@ -41,8 +41,11 @@ CREATE TABLE IF NOT EXISTS ai_classification (
     created_at  REAL NOT NULL,
     PRIMARY KEY (advisory_id, category)
 );
-CREATE INDEX IF NOT EXISTS idx_adv_cve ON advisories(cve_id);
 """
+# No index on advisories(cve_id): nothing filters, joins or orders by it. Every
+# read of this table is either `WHERE advisory_id = ?` (served by the primary
+# key) or `COUNT(*)`. The index only cost a write on every upsert. The column
+# stays -- docs/operations.md shows operators querying it by hand.
 
 # ---------------------------------------------------------------------------
 # Schema migrations — append-only list of (version, sql) tuples.

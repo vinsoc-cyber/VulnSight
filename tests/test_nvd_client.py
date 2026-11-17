@@ -68,14 +68,18 @@ class TestNormalize(unittest.TestCase):
 
 
 class TestDateParams(unittest.TestCase):
+    # These asserted against _build_date_params, a "compatibility helper" that
+    # nothing but these tests called. Point them at the function that actually
+    # ships so the coverage is real.
     def test_empty(self):
-        self.assertEqual(nvd_client._build_date_params(None), {})
-        self.assertEqual(nvd_client._build_date_params(""), {})
+        self.assertEqual(nvd_client._build_date_windows(None), [])
+        self.assertEqual(nvd_client._build_date_windows(""), [])
 
     def test_recent_date(self):
-        params = nvd_client._build_date_params(">=2026-06-01")
-        self.assertIn("pubStartDate", params)
-        self.assertIn("pubEndDate", params)
+        windows = nvd_client._build_date_windows(">=2026-06-01")
+        self.assertTrue(windows)
+        self.assertIn("pubStartDate", windows[0])
+        self.assertIn("pubEndDate", windows[0])
 
     def test_old_date_is_split_without_losing_requested_start(self):
         now = datetime(2026, 8, 17, tzinfo=timezone.utc)

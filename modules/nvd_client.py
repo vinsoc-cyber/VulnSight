@@ -104,12 +104,6 @@ def _build_date_windows(
     return windows
 
 
-def _build_date_params(published: str | None) -> dict[str, str]:
-    """Compatibility helper returning the newest NVD date window."""
-    windows = _build_date_windows(published)
-    return windows[0] if windows else {}
-
-
 def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
     """Make a single NVD API GET request and return parsed JSON."""
     qs = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}"

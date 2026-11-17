@@ -8,25 +8,28 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                449   Flask routes, request guards, response headers. No logic.
+app.py                605   Flask routes, request guards, response headers
 modules/
-  config.py            29   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py   572   the pipeline: parse → fetch → merge → sort → enrich
+  config.py            50   minimal .env loader; BASE_DIR / DATA_DIR
+  search_service.py   687   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  query_filters.py    131   one filter vocabulary, applied after the merge
+  records.py           69   per-record normalize guard shared by the clients
   cwe_categories.py   691   bug classes, labels, cwe:<id> ad-hoc classes, keywords
-  cwe_catalog.py     1123   GENERATED — full MITRE names/aliases (tools/)
-  ghsa_client.py      210   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py       338   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py       336   bulk export download, parse, CWE + keyword filters
+  cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
+  ghsa_client.py      253   `gh api /advisories`, cursor pagination, normalize()
+  nvd_client.py       345   NVD API v2, 120-day windowing, rate-limit sleeps
+  osv_client.py       375   bulk export download, parse, CWE + keyword filters
   epss_client.py      100   FIRST EPSS scores, batched
-  cvss.py             138   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py            244   SQLite: advisories + verdicts, schema migrations
-  ai_classifier.py    835   provider client, prompt, verdict cache, key rotation
-  security.py         320   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html  410   page shell — HTML and Jinja only
+  cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
+  cache.py            357   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py             159   submit/poll queue for searches too slow to hold open
+  ai_classifier.py    887   provider client, prompt, verdict cache, key rotation
+  openapi.py          449   the OpenAPI description of /api/v1
+  security.py         436   bind/exposure checks, CSRF origin check, rate limiter
+templates/index.html  410   page shell -- HTML and Jinja only
 static/app.js        1476   all UI logic; server data arrives via window.BOOT
 static/style.css     1733   design tokens + components, light and dark
-tools/                184   generate_cwe_catalog.py
-tests/                      291 tests (270 offline + 21 optional browser)
+tools/                188   generate_cwe_catalog.py
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

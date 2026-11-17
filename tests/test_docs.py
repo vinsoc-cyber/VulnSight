@@ -157,6 +157,42 @@ class TestDocsMatchTheCode(unittest.TestCase):
         self._assert_claim("docs/api.md", rf"capped at \*\*{calls}\*\*")
         self._assert_claim("docs/api.md", rf"max {batch}")
 
+    def test_the_module_map_line_counts_are_real(self):
+        """The map had drifted on every row -- app.py read 449 against 605, and
+        four modules were missing from it entirely. Derive the numbers so the
+        map is either right or a failing test."""
+        block = re.search(r"## Module map\n+```\n(.*?)```",
+                          self.text["docs/architecture.md"], re.S)
+        self.assertIsNotNone(block, "docs/architecture.md has no fenced module map")
+        assert block is not None
+        rows = re.findall(r"^\s*([\w./]+\.\w+)\s+(\d+)\s", block.group(1), re.M)
+        self.assertGreater(len(rows), 15, "module map looks truncated")
+
+        listed = {}
+        for name, claimed in rows:
+            path = name if os.sep in name or "/" in name else None
+            for candidate in (name, f"modules/{name}", f"static/{name}",
+                              f"templates/{name}"):
+                full = os.path.join(ROOT, candidate)
+                if os.path.isfile(full):
+                    path = candidate
+                    break
+            self.assertIsNotNone(path, f"module map lists {name}, which does not exist")
+            assert path is not None
+            listed[path] = int(claimed)
+            actual = len(_read(os.path.join(ROOT, path)).splitlines())
+            self.assertEqual(
+                actual, int(claimed),
+                f"docs/architecture.md says {path} is {claimed} lines; it is {actual}")
+
+        # And the map has to stay complete, or a new module hides from it.
+        on_disk = {
+            f"modules/{f}" for f in os.listdir(os.path.join(ROOT, "modules"))
+            if f.endswith(".py") and f != "__init__.py"
+        }
+        self.assertEqual(on_disk - set(listed), set(),
+                         "modules missing from the docs/architecture.md map")
+
     def test_every_route_is_documented(self):
         # Only the URL map is wanted here. Without an declared bind, create_app()
         # sees an unknown (therefore exposed) listener and mints an API token

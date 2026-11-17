@@ -512,10 +512,10 @@ def create_app():
             return jsonify({"error": "AI not configured. Set AI_* in .env."}), 400
         if not advisory_ids:
             return jsonify({"error": "No advisories to classify."}), 400
-        if len(advisory_ids) > MAX_AI_BATCH:
-            return jsonify({
-                "error": f"Too many advisories; maximum batch size is {MAX_AI_BATCH}."
-            }), 400
+        # No batch-size check here: parse_str_list above was given
+        # max_items=MAX_AI_BATCH and raises on overflow, and the dict.fromkeys
+        # de-duplication can only shrink the list. The check that used to sit
+        # here was unreachable, and its wording is what docs/api.md quoted.
         if any(len(gid) > 128 for gid in advisory_ids):
             return jsonify({"error": "Advisory identifiers may not exceed 128 characters."}), 400
         planned_calls = len(categories) * len(advisory_ids)
