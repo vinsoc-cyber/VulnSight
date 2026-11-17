@@ -265,6 +265,42 @@ def parse_search_query(body: dict) -> SearchQuery:
 _SOURCE_PRIORITY = {name: index for index, name in
                     enumerate(("ghsa", "osv", "osv-native", "nvd"))}
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# Vocabularies the sources actually use that are not our four words. Without
+# these an unrecognised word scored 0, below "low", so merging a MODERATE
+# advisory with a low one silently reported "low" -- a downgrade, which is
+# the worst direction for a triage tool to fail in.
+_SEVERITY_SYNONYMS = {
+    "moderate": "medium",
+    "important": "high",
+    "severe": "high",
+    "none": "unknown",
+    "informational": "low",
+    "info": "low",
+}
+_severity_warned: set[str] = set()
+
+
+def canonical_severity(value: object) -> str:
+    """One of our four words, folding known synonyms and logging the rest.
+
+    The *value* is normalised, not just its rank: static/app.js whitelists
+    the severity for the badge class, so an un-folded "MODERATE" rendered as
+    `unknown` even once it ranked correctly.
+    """
+    text = str(value or "").strip().lower()
+    if text in _SEVERITY_RANK:
+        return text
+    mapped = _SEVERITY_SYNONYMS.get(text)
+    if mapped:
+        return mapped
+    if text and text not in _severity_warned:
+        _severity_warned.add(text)
+        logger.warning("Unknown severity vocabulary %r; treating it as unknown", text)
+    return "unknown"
+
+
+def _severity_rank(value: object) -> int:
+    return _SEVERITY_RANK[canonical_severity(value)]
 
 
 def _record_identifier_values(record: dict) -> list[str]:
@@ -389,10 +425,10 @@ def _merge_group(records: list[dict]) -> dict:
     # A medium+low GHSA pair therefore merged to "low", and reversing the page
     # order merged the same advisory to "medium".
     severity_by_source = {
-        source: max(
+        source: canonical_severity(max(
             (record.get("severity") or "unknown" for record in group),
-            key=lambda value: _SEVERITY_RANK.get(value, 0),
-        )
+            key=_severity_rank,
+        ))
         for source, group in source_records.items()
     }
     cvss_by_source = {}
@@ -405,9 +441,13 @@ def _merge_group(records: list[dict]) -> dict:
             cvss_by_source[source] = max(scores)
     merged["severity_by_source"] = severity_by_source
     merged["cvss_by_source"] = cvss_by_source
-    merged["severity"] = max(
-        severity_by_source.values(), key=lambda value: _SEVERITY_RANK.get(value, 0)
-    )
+    # severity and cvss_score are each the worst across sources, and are
+    # deliberately independent: a source can state a severity with no score,
+    # or a score with no severity, and a triage queue wants the worst of both
+    # rather than whichever one source happened to supply both. That is why a
+    # row can read "HIGH / 5.8"; severity_by_source and cvss_by_source carry
+    # the attribution for anyone auditing it.
+    merged["severity"] = max(severity_by_source.values(), key=_severity_rank)
     if cvss_by_source:
         merged["cvss_score"] = max(cvss_by_source.values())
 
@@ -731,7 +771,9 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         epss_scores = epss_client.fetch_epss(cve_ids)
         enriched = 0
         for rec in records:
-            score = epss_scores.get(rec.get("cve_id", ""))
+            # Upper-cased to match: fetch_epss normalises its keys, and
+            # _merge_group preserves whatever casing the publisher used.
+            score = epss_scores.get(str(rec.get("cve_id") or "").upper())
             if score:
                 rec["epss_percentage"] = score["epss"]
                 rec["epss_percentile"] = score["percentile"]

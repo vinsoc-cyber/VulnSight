@@ -11,7 +11,7 @@ able to read end to end before pointing it at their credentials.
 app.py                591   Flask routes, request guards, response headers
 modules/
   config.py            69   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py   828   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  search_service.py   870   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py    149   one filter vocabulary, applied after the merge
   records.py           69   per-record normalize guard shared by the clients
   http_retry.py        165   one retry/backoff policy for all four upstreams
@@ -20,7 +20,7 @@ modules/
   ghsa_client.py      314   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       396   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py       460   bulk export download, parse, CWE + keyword filters
-  epss_client.py      108   FIRST EPSS scores, batched
+  epss_client.py      113   FIRST EPSS scores, batched
   cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            483   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             218   submit/poll queue for searches too slow to hold open

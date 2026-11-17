@@ -64,6 +64,11 @@ def _batches(items: list[str], size: int):
 
 def _fetch_batch(cve_ids: list[str], timeout: int = 30) -> dict[str, dict]:
     """Query the FIRST EPSS API for up to 100 CVEs and return parsed scores."""
+    # Upper-cased on the way out and on the way back: _merge_group preserves
+    # whatever casing the publisher used, and FIRST keys its response
+    # case-sensitively, so a lower-cased alias silently returned no score --
+    # indistinguishable in the UI from an advisory that genuinely has none.
+    cve_ids = [c.upper() for c in cve_ids]
     params = urllib.parse.urlencode({"cve": ",".join(cve_ids)})
     url = f"{EPSS_BASE}?{params}"
 

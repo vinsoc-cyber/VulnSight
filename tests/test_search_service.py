@@ -692,6 +692,100 @@ class TestEverySourceFailingIsA502(unittest.TestCase):
         self.assertEqual(out.stats["failed_sources"], [])
 
 
+class TestSeverityVocabulary(unittest.TestCase):
+    """An unrecognised severity word ranked 0 -- below "low".
+
+    So merging a MODERATE advisory (GraphQL's vocabulary, which reaches the
+    merge unnormalised from some paths) with a genuinely low one reported
+    "low". A silent downgrade is the worst direction for a triage tool to
+    fail in, and static/app.js whitelists the word for the badge class, so an
+    un-folded one also rendered as `unknown`.
+    """
+
+    def _merge(self, first, second):
+        return search_service.merge_advisories([
+            {"source": "ghsa", "advisory_id": "G", "cve_id": "C",
+             "aliases": ["C"], "severity": first,
+             "summary": "s", "description": "d"},
+            {"source": "osv", "advisory_id": "O", "cve_id": "C",
+             "aliases": ["C"], "severity": second,
+             "summary": "s", "description": "d"},
+        ])[0]
+
+    def test_known_synonyms_are_folded(self):
+        for raw, expected in (("MODERATE", "medium"), ("moderate", "medium"),
+                              ("Important", "high"), ("severe", "high"),
+                              ("informational", "low"), ("none", "unknown")):
+            with self.subTest(raw=raw):
+                self.assertEqual(search_service.canonical_severity(raw), expected)
+
+    def test_a_synonym_is_not_downgraded_below_low(self):
+        self.assertEqual(self._merge("MODERATE", "low")["severity"], "medium")
+        self.assertEqual(self._merge("Important", "medium")["severity"], "high")
+
+    def test_the_stored_word_is_canonical_not_raw(self):
+        """The badge class is whitelisted from this value."""
+        merged = self._merge("MODERATE", "low")
+        self.assertEqual(merged["severity"], "medium")
+        self.assertEqual(merged["severity_by_source"]["ghsa"], "medium")
+
+    def test_an_unknown_word_is_unknown_not_a_silent_low(self):
+        self.assertEqual(search_service.canonical_severity("wat"), "unknown")
+        self.assertEqual(self._merge("wat", "low")["severity"], "low")
+
+    def test_the_four_real_words_are_untouched(self):
+        for word in ("unknown", "low", "medium", "high", "critical"):
+            with self.subTest(word=word):
+                self.assertEqual(search_service.canonical_severity(word), word)
+
+    def test_severity_and_cvss_are_independently_worst_case(self):
+        """A row can read HIGH / 5.8 when one source states a severity with
+        no score and another a score with a lower severity. That is wanted
+        for triage; severity_by_source and cvss_by_source carry the
+        attribution."""
+        merged = search_service.merge_advisories([
+            {"source": "ghsa", "advisory_id": "G", "cve_id": "C",
+             "aliases": ["C"], "severity": "high",
+             "summary": "s", "description": "d"},
+            {"source": "osv", "advisory_id": "O", "cve_id": "C",
+             "aliases": ["C"], "severity": "medium", "cvss_score": 5.8,
+             "summary": "s", "description": "d"},
+        ])[0]
+        self.assertEqual(merged["severity"], "high")
+        self.assertEqual(merged["cvss_score"], 5.8)
+        self.assertEqual(merged["severity_by_source"],
+                         {"ghsa": "high", "osv": "medium"})
+        self.assertEqual(merged["cvss_by_source"], {"osv": 5.8})
+
+
+class TestEpssIsCaseInsensitive(unittest.TestCase):
+    """_merge_group preserves the publisher's casing and FIRST keys its
+    response case-sensitively, so a lower-cased CVE alias silently returned
+    no score -- which the UI renders as "no data", not as an error."""
+
+    def test_a_lowercased_cve_still_gets_its_score(self):
+        records = [{"source": "ghsa", "advisory_id": "GHSA-a",
+                    "cve_id": "cve-2026-1", "aliases": ["cve-2026-1"],
+                    "severity": "high", "summary": "s", "description": "d",
+                    "cwes": ["639"], "packages": [],
+                    "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"}]
+        captured = {}
+
+        def fake_epss(ids):
+            captured["ids"] = list(ids)
+            return {"CVE-2026-1": {"epss": 0.42, "percentile": 0.9}}
+
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=records), \
+             mock.patch.object(search_service.ghsa, "normalize",
+                               side_effect=lambda a: a), \
+             mock.patch.object(search_service.cache, "upsert_advisories"), \
+             mock.patch.object(search_service.epss_client, "fetch_epss", fake_epss):
+            out = search_service.run_search(search_service.parse_search_query(
+                {"categories": ["bac"], "sources": ["ghsa"]}))
+        self.assertEqual(out.results[0].get("epss_percentage"), 0.42)
+
+
 class TestCveIdsSortAsNumbers(unittest.TestCase):
     """A CVE id is a year and a sequence, not a word.
 
