@@ -15,7 +15,7 @@ modules/
   query_filters.py    149   one filter vocabulary, applied after the merge
   records.py           69   per-record normalize guard shared by the clients
   http_retry.py        165   one retry/backoff policy for all four upstreams
-  cwe_categories.py   715   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_categories.py   749   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py      303   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       393   NVD API v2, 120-day windowing, rate-limit sleeps
@@ -28,7 +28,7 @@ modules/
   openapi.py          483   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
-static/app.js        1651   all UI logic; server data arrives via window.BOOT
+static/app.js        1682   all UI logic; server data arrives via window.BOOT
 static/style.css     1728   design tokens + components, light and dark
 tools/generate_cwe_catalog.py                       226   regenerates modules/cwe_catalog.py from MITRE XML
 tools/sync_module_map.py                        69   rewrites the line counts in this very table

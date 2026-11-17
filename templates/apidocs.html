@@ -179,7 +179,7 @@
           detail.innerHTML = renderOperation(spec, ops[i].path, ops[i].method, ops[i].op);
           Array.from(nav.children).forEach((b, j) =>
             b.classList.toggle('on', i === j));
-          detail.scrollTop = 0;
+          window.scrollTo(0, 0);   // `detail` is not a scroll container, so scrollTop here never did anything
         }
         nav.addEventListener('click', (e) => {
           const btn = e.target.closest('button[data-i]');

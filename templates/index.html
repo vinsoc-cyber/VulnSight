@@ -147,7 +147,7 @@
         </div>
         <fieldset class="field field-last">
           <legend class="sr-only">Choose data sources</legend>
-          <div class="cats source-list">
+          <div class="cats">
             <label class="cat" title="GitHub Advisory Database — server-side CWE filter, any ecosystem">
               <input type="checkbox" name="source" value="ghsa" checked>
               <span class="cat-copy"><span class="source-code">GHSA</span><span class="c-desc">GitHub · CWE filter</span></span>
@@ -302,7 +302,7 @@
             <input type="checkbox" id="only_match" disabled><span>Confirmed only</span>
           </label>
           <details class="export-menu">
-            <summary id="export-btn" aria-disabled="true" tabindex="-1"><span>Export</span><span aria-hidden="true">↓</span></summary>
+            <summary id="export-btn" aria-disabled="true" tabindex="0"><span>Export</span><span aria-hidden="true">↓</span></summary>
             <div class="export-pop">
               <span class="menu-label">Export current queue</span>
               <button type="button" data-fmt="csv"><span>CSV</span><small>All visible records</small></button>

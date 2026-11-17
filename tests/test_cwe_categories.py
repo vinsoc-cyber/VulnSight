@@ -360,5 +360,60 @@ class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
                     self.assertIn(cwe_id, NAMES)
 
 
+
+class TestDerivedPrefilterTermsAreUseful(unittest.TestCase):
+    """KEYWORDS are matched as bare substrings against advisory text.
+
+    _cwe_keywords derived terms from any 3+-character parenthesised fragment
+    of a CWE's name, with no quality filter, so `cwe:616` -- whose name ends
+    "(PHP)" -- prefiltered on "php" and matched essentially every PHP
+    advisory, at one paid AI call each.
+    """
+
+    def test_junk_short_forms_are_dropped(self):
+        for category, junk in (("cwe:616", "php"),
+                               ("cwe:1192", "soc"),
+                               ("cwe:462", "alist")):
+            with self.subTest(category=category):
+                self.assertNotIn(junk, cwe.category_keywords([category]))
+
+    def test_real_acronyms_survive(self):
+        self.assertIn("xss", cwe.category_keywords(["cwe:79"]))
+        self.assertIn("csrf", cwe.category_keywords(["cwe:352"]))
+        self.assertIn("ssrf", cwe.category_keywords(["cwe:918"]))
+
+    def test_an_alias_that_is_a_common_word_is_dropped(self):
+        """MITRE lists CSS as a historical alternate term for cross-site
+        scripting; as a substring it matches every stylesheet advisory."""
+        self.assertNotIn("css", cwe.category_keywords(["cwe:79"]))
+
+    def test_the_full_name_is_always_kept(self):
+        terms = cwe.category_keywords(["cwe:616"])
+        self.assertTrue(any("uploaded file variables" in t for t in terms), terms)
+
+    def test_bac_no_longer_prefilters_on_a_bare_bypass(self):
+        """It was 52% of this class's prefilter passes, matching "bypass the
+        cache", "filter bypass" and every other unrelated use."""
+        keywords = cwe.KEYWORDS["bac"]
+        self.assertNotIn("bypass", keywords)
+        self.assertTrue([k for k in keywords if k.endswith("bypass")],
+                        "the specific bypass phrases must remain")
+
+    def test_the_specific_bypass_phrases_still_match(self):
+        keywords = cwe.KEYWORDS["bac"]
+        for text in ("authorization bypass in the admin api",
+                     "authentication bypass via crafted header",
+                     "access control bypass"):
+            with self.subTest(text=text):
+                self.assertTrue(any(k in text for k in keywords), text)
+
+    def test_an_unrelated_bypass_no_longer_matches(self):
+        keywords = cwe.KEYWORDS["bac"]
+        for text in ("allows an attacker to bypass the cache",
+                     "regex filter bypass leads to redos"):
+            with self.subTest(text=text):
+                self.assertFalse(any(k in text for k in keywords), text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

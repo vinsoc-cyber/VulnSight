@@ -157,4 +157,36 @@ function build(names, preamble = '') {
   assert.match(publishedWindow('1y'), /^>=\d{4}-\d{2}-\d{2}$/);
 }
 
+// --- A curated class outranks its own CWE, whatever its KEYWORDS order ---
+// docs/cwe-catalog.md explains the +60 class bonus: "a curated class is
+// usually the better query target. That is why 'prototype pollution'
+// surfaces the PROTO class above CWE-1321." That only held when the term
+// happened to be in the first four KEYWORDS entries, because classEntries
+// capped the alias list used for *scoring* at four. "xss" is 3rd in
+// KEYWORDS["xss"] and won; "idor" is 6th in KEYWORDS["bac"] and lost to
+// CWE-639 -- the exact weakness commit 0a1e9c7 was about.
+{
+  const CLASSES = [{
+    key: 'bac',
+    code: 'BAC',
+    label: 'Broken Access Control (BAC / BOLA / BFLA / IDOR)',
+    cwes: ['284', '285', '639'],
+    description: 'Authorization and access-control flaws.',
+    // Deliberately long, with the community term late in the list.
+    terms: ['authoriz', 'authorisation', 'access control', 'access-control',
+            'permission', 'idor', 'bola', 'bfla'],
+  }];
+  const {classEntries} = build(['classEntries', 'classHaystack'], `
+    const CLASS_HAY = {};
+    const CLASSES = ${JSON.stringify(CLASSES)};
+  `);
+  const entry = classEntries()[0];
+  assert.ok(entry.aliases.includes('idor'),
+    'the scoring alias list must not be capped: "idor" is 6th in KEYWORDS["bac"]');
+  assert.ok(entry.aliases.includes('bfla'),
+    'the scoring alias list must not be capped: "bfla" is 8th');
+  assert.equal(entry.aliases.length, CLASSES[0].terms.length,
+    'every community term must be searchable');
+}
+
 console.log('frontend finder + history checks passed');

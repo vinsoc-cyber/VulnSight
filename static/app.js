@@ -102,7 +102,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const sel = $('#affects_pick');
       const prev = sel.value;
       sel.innerHTML = '<option value="">— any package —</option>' +
-        list.map(p => `<option value="${p}">${p}</option>`).join('');
+        list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
       if (list.includes(prev)) sel.value = prev;
     }
 
@@ -400,8 +400,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         label: c.label,
         note: (c.cwes || []).length + ' CWEs',
         // The community terms are what people type ("__proto__", "toctou"),
-        // so they must be searchable and worth showing.
-        aliases: (c.terms || []).slice(0, 4),
+        // so they must be searchable and worth showing. NOT capped here:
+        // this list is what scoreEntry matches on, and a cap of four meant
+        // whether a class outranked its own CWE depended on an accident of
+        // KEYWORDS order -- "idor" is 6th in KEYWORDS["bac"], so searching
+        // IDOR surfaced CWE-639 above the Broken Access Control class, while
+        // "xss" is 3rd and the XSS class won. The display has its own cap
+        // further down.
+        aliases: c.terms || [],
         hay: CLASS_HAY[c.key],
       }));
     }
@@ -542,9 +548,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         return;
       }
       comboMatches = searchEntries(query);
+      // Default the highlight to the first match. Enter already committed
+      // match 0, but nothing carried aria-selected and no row was styled, so
+      // there was no way to see what it would add.
+      if (comboMatches.length && comboActive < 0) comboActive = 0;
       if (!comboMatches.length) {
         const why = catalogError ? 'CWE catalog unavailable' : 'No bug class or CWE matches';
-        list.innerHTML = `<li class="combo-empty">${esc(why)} “${esc(query)}”</li>`;
+        list.innerHTML = `<li class="combo-empty" role="presentation">`
+          + `${esc(why)} “${esc(query)}”</li>`;
       } else {
         if (comboActive >= comboMatches.length) comboActive = comboMatches.length - 1;
         const checked = checkedClassKeys();
@@ -802,9 +813,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    function safeAttr(s) {
-      return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    }
+    // Was a second escaper that differed from esc() only by not coercing:
+    // a numeric advisory_id or CWE label threw inside renderCard and blanked
+    // the whole result list, because render() builds every card in one
+    // expression. esc() is correct for text and for a double-quoted
+    // attribute, so there is one of them now.
+    const safeAttr = esc;
 
     function safeUrl(value) {
       try {
@@ -831,7 +845,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           const advice = quota
             ? 'The AI provider is rate-limiting or out of quota — wait a moment, then retry.'
             : esc(v.error);
-          aiHtml = `<div class="ai-verdict error" role="alert">
+          aiHtml = `<div class="ai-verdict error">
             <div class="verdict-head">
               <span class="verdict-state">AI error</span>
               <button type="button" class="verdict-retry" data-retry="${safeAttr(a.advisory_id)}">Retry</button>
@@ -965,6 +979,8 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // Only rows that still need work. A partial verdict that already resolved to
     // a match is done — counting it made "Retry failed" re-bill finished rows.
+    // AI is the single source of verdict truth; `a.ai` is folded into it at
+    // ingestion. See search().
     function failedIds() {
       return LAST.map(a => a.advisory_id).filter(id => {
         const v = AI[id];
@@ -1161,7 +1177,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         LAST.forEach(a => { if (a.ai) AI[a.advisory_id] = a.ai; });
         const cached = LAST.filter(a => a.ai).length;
         SEARCH_META = {
-          count: data.count,
+          // Coerced at the boundary: renderSummary writes these straight into
+          // innerHTML, and the sink has no defence of its own.
+          count: Number(data.count) || 0,
           perSource: data.query.per_source || {},
           cwes: data.query.cwes || [],
           maxResults: state.max_results,
@@ -1425,7 +1443,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // === Event Listeners ===
     $('#auto-btn').addEventListener('click', autoRun);
-    $('#search-btn').addEventListener('click', search);
+    $('#search-btn').addEventListener('click', () => search());
     $('#ai-btn').addEventListener('click', refineAI);
     // "Only AI matches" is a display filter — but if nothing is scored yet it
     // would show an empty list, so auto-run the AI pass first, then filter.
@@ -1627,8 +1645,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       };
 
       function sync() {
-        const dark = effectiveTheme() === 'dark';
-        const label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+        const stored = localStorage.getItem('theme');
+        const label = stored === 'light'
+          ? 'Theme: light. Switch to dark.'
+          : stored === 'dark'
+            ? 'Theme: dark. Follow the system instead.'
+            : 'Theme: following the system. Switch to light.';
         toggle.setAttribute('aria-label', label);
         toggle.title = label;
         const meta = document.querySelector('meta[name="theme-color"]');
@@ -1639,10 +1661,19 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         }
       }
 
+      // Three states, not two: following the system is the default and has
+      // to be reachable again. A two-way toggle meant one click opted the
+      // user out of prefers-color-scheme permanently.
       toggle.addEventListener('click', () => {
-        document.documentElement.dataset.theme =
-          effectiveTheme() === 'dark' ? 'light' : 'dark';
-        localStorage.setItem('theme', document.documentElement.dataset.theme);
+        const stored = localStorage.getItem('theme');
+        const next = stored === 'light' ? 'dark' : stored === 'dark' ? '' : 'light';
+        if (next) {
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem('theme', next);
+        } else {
+          delete document.documentElement.dataset.theme;
+          localStorage.removeItem('theme');
+        }
         sync();
       });
       window.matchMedia('(prefers-color-scheme: light)')

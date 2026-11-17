@@ -440,7 +440,12 @@ SEVERITIES: list[str] = ["low", "medium", "high", "critical"]
 KEYWORDS: dict[str, list[str]] = {
     "bac": [
         "authoriz", "authorisation", "access control", "access-control",
-        "permission", "idor", "bola", "bfla", "privilege", "escalat", "bypass",
+        "permission", "idor", "bola", "bfla", "privilege", "escalat",
+        # Not a bare "bypass": it was responsible for 52% of this class's
+        # prefilter passes, at one paid AI call each, matching every "bypass
+        # the cache", "bypass the proxy", "filter bypass" in the corpus.
+        "authorization bypass", "authorisation bypass", "access control bypass",
+        "permission bypass", "acl bypass",
         "unauthenticated", "unauthorized", "unauthorised", "forbidden",
         "access control list",
         "tenant", "cross-namespace", "cross namespace", "improper access",
@@ -521,6 +526,29 @@ _CWE_KEY_RE = re.compile(rf"^{CWE_KEY_PREFIX}([1-9][0-9]{{0,{MAX_CWE_ID_DIGITS -
 _PARENTHESISED = re.compile(r"\(([^)]{3,})\)")
 
 
+# Short parenthesised fragments that are real search terms rather than
+# noise. Anything else under five characters is rejected, because these are
+# matched as bare substrings against advisory text: CWE-616's name ends in
+# "(PHP)", so `cwe:616` prefiltered on "php" and matched essentially every
+# PHP advisory; CWE-1192 gave "soc", CWE-462 gave "alist", and CWE-79's
+# alternate terms include "css".
+_USEFUL_SHORT_TERMS = frozenset({
+    "xss", "csrf", "ssrf", "xxe", "rce", "idor", "bola", "bfla", "sqli",
+    "ssti", "lfi", "rfi", "xpath", "ldap", "dos", "prng", "toctou", "uaf",
+    "smtp", "crlf", "http", "json", "yaml", "xml", "jwt", "cors", "redos",
+})
+# Matched as a substring of advisory text, so a term also has to be a word
+# that does not live inside unrelated ones.
+_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl")
+
+
+def _is_useful_prefilter_term(term: str) -> bool:
+    lowered = term.lower().strip()
+    if not lowered or lowered in _SUBSTRING_DECOYS:
+        return False
+    return len(lowered) >= 5 or lowered in _USEFUL_SHORT_TERMS
+
+
 def cwe_key(cwe_id: str) -> str:
     """'CWE-639' / '639' -> the pseudo-category key 'cwe:639'."""
     return f"{CWE_KEY_PREFIX}{normalize_cwe_id(str(cwe_id))}"
@@ -595,8 +623,14 @@ def _cwe_keywords(cwe_id: str) -> list[str]:
     puts in many names ("'Cross-site Scripting'") carry most of the signal.
     """
     name = NAMES.get(cwe_id, "")
-    terms = [term.strip(" '\"") for term in _PARENTHESISED.findall(name)]
-    terms += list(ALIASES.get(cwe_id, ()))
+    terms = [
+        term for term in (t.strip(" '\"") for t in _PARENTHESISED.findall(name))
+        if _is_useful_prefilter_term(term)
+    ]
+    # Aliases go through the same filter: MITRE lists "CSS" as a historical
+    # alternate term for cross-site scripting, and as a bare substring that
+    # matches every advisory about a stylesheet.
+    terms += [a for a in ALIASES.get(cwe_id, ()) if _is_useful_prefilter_term(a)]
     if name:
         terms.append(name)
     return terms
