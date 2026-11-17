@@ -56,7 +56,9 @@ pass reports itself unconfigured and the UI header shows `AI OFF`.
 
 ## Rate limiting
 
-Applies to `POST` only, per client address.
+Applies to `POST` only, per client address — and per worker process: the
+counters live in memory, so with gunicorn `--workers N` the effective
+limit is N times the configured one. The shipped image uses one worker.
 
 | Variable | Default | Meaning |
 |---|---|---|

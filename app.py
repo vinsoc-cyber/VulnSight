@@ -144,6 +144,20 @@ def create_app():
     # Request lifecycle hooks
     # -----------------------------------------------------------------------
 
+    # Registered before the guards: before_request hooks run in registration
+    # order, and a request short-circuited by CSRF, auth or the rate limiter
+    # skipped this one -- so its response carried
+    # `script-src 'self' 'nonce-'`, a malformed source expression. Harmless
+    # while those responses are JSON, but it is backwards.
+    @app.before_request
+    def create_csp_nonce():
+        """A fresh nonce per response for the inline scripts in the templates.
+
+        index.html has two (the pre-paint theme read and window.BOOT) and
+        apidocs.html one; the comment here used to claim a single script.
+        """
+        g.csp_nonce = secrets.token_urlsafe(18)
+
     @app.before_request
     def _csrf_check():
         if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
@@ -225,11 +239,6 @@ def create_app():
         response.status_code = 429
         response.headers["Retry-After"] = retry_after
         return response
-
-    @app.before_request
-    def create_csp_nonce():
-        """Give every response a fresh nonce for the one inline bootstrap script."""
-        g.csp_nonce = secrets.token_urlsafe(18)
 
     @app.after_request
     def add_security_headers(response):
@@ -314,7 +323,11 @@ def create_app():
         for category in categories:
             name = category["group"]
             if not groups or groups[-1]["name"] != name:
-                existing = next((g for g in groups if g["name"] == name), None)
+                # Not `g`: that is the imported Flask request global, used
+                # further down this same function. The genexp has its own
+                # scope so it worked, but it reads like a bug.
+                existing = next(
+                    (grp for grp in groups if grp["name"] == name), None)
                 if existing is None:
                     groups.append({"name": name, "items": [category]})
                     continue

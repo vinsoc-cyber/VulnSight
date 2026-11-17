@@ -12,7 +12,7 @@ import secrets
 import sys
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -411,7 +411,11 @@ class RateLimiter:
         self.max_requests = max(1, int(max_requests))
         self.window_seconds = max(1, int(window_seconds))
         self.max_keys = max(1, int(max_keys))
-        self._hits: dict[str, deque[float]] = {}
+        # OrderedDict, so eviction is popitem(last=False) rather than an
+        # O(n) min() over up to max_keys entries while holding the lock --
+        # which an attacker could trigger on every request by varying the
+        # key, whenever VULNSIGHT_TRUST_PROXY lets them choose it.
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
@@ -421,13 +425,12 @@ class RateLimiter:
             bucket = self._hits.get(key)
             if bucket is None:
                 if len(self._hits) >= self.max_keys:
-                    stale = min(
-                        self._hits.items(),
-                        key=lambda item: item[1][0] if item[1] else now,
-                    )[0]
-                    del self._hits[stale]
+                    # Least recently touched, in O(1).
+                    self._hits.popitem(last=False)
                 bucket = deque()
                 self._hits[key] = bucket
+            else:
+                self._hits.move_to_end(key)
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
             if len(bucket) >= self.max_requests:

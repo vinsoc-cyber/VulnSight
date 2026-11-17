@@ -303,7 +303,11 @@ def _job_row_to_dict(row: sqlite3.Row) -> dict:
         "job_id": row["job_id"],
         "kind": row["kind"],
         "status": row["status"],
-        "request": json.loads(row["request"]) if row["request"] else None,
+        # Not parsed. public_view discards it and nothing else reads it, so
+        # for a max_results=500 search this was a multi-megabyte json.loads
+        # on every poll for a field no response has ever contained. The raw
+        # text is still in the row for anyone who needs it.
+        "request": None,
         "result": json.loads(row["result"]) if row["result"] else None,
         "error": row["error"],
         "error_status": row["error_status"],

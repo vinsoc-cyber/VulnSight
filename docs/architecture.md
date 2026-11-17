@@ -8,7 +8,7 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                578   Flask routes, request guards, response headers
+app.py                591   Flask routes, request guards, response headers
 modules/
   config.py            69   minimal .env loader; BASE_DIR / DATA_DIR
   search_service.py   828   the pipeline: parse -> fetch -> merge -> sort -> enrich
@@ -22,11 +22,11 @@ modules/
   osv_client.py       460   bulk export download, parse, CWE + keyword filters
   epss_client.py      108   FIRST EPSS scores, batched
   cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py            479   SQLite: advisories + verdicts, jobs, migrations
+  cache.py            483   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             218   submit/poll queue for searches too slow to hold open
   ai_classifier.py   1051   provider client, prompt, verdict cache, key rotation
   openapi.py          572   the OpenAPI description of /api/v1
-  security.py         436   bind/exposure checks, CSRF origin check, rate limiter
+  security.py         439   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
 static/app.js        1682   all UI logic; server data arrives via window.BOOT
 static/style.css     1728   design tokens + components, light and dark
@@ -43,7 +43,8 @@ Guards run before every request, in this order:
 
 1. **CSRF** — mutating methods must look same-origin (`Origin` / `Referer` /
    `Sec-Fetch-Site`, plus `VULNSIGHT_PUBLIC_HOST` for proxies).
-2. **Rate limit** — per client address, per endpoint class.
+2. **Auth** — before the rate limiter on purpose: the other order let an
+   unauthenticated caller burn the operator's rate-limit bucket.
 3. **Auth** — `VULNSIGHT_API_TOKEN` on mutating `/api/*` when configured,
    compared with a constant-time check.
 4. **CSP nonce** — a fresh nonce per response for the one inline bootstrap script.
