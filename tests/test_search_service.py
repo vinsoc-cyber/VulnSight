@@ -562,5 +562,92 @@ class TestRunSearchNvd(unittest.TestCase):
                 self.assertEqual(merged.results[0]["sources"], ["ghsa", "nvd"])
 
 
+
+class TestTheUserIsToldWhatWasNotHonoured(unittest.TestCase):
+    """Silent data loss is the failure mode this whole tool exists to avoid.
+
+    A result set that is quietly incomplete, or quietly unfiltered, still
+    looks like an answer -- which is worse than an error.
+    """
+
+    NVD_RECORD = {
+        "source": "nvd", "advisory_id": "CVE-2021-44228",
+        "cve_id": "CVE-2021-44228", "aliases": ["CVE-2021-44228"],
+        "severity": "critical", "cvss_score": 10.0, "summary": "Log4Shell",
+        "description": "d", "cwes": ["917"],
+        "packages": [{"ecosystem": "nvd", "name": "log4j"}],
+        "published_at": "2021-12-10T00:00:00Z", "type": "nvd",
+    }
+
+    def _run(self, body, nvd_records=None, nvd_report=None, epss=None):
+        def fake_fetch_nvd(params, report=None):
+            if report is not None and nvd_report:
+                report.update(nvd_report)
+            return list(nvd_records or [])
+
+        with mock.patch.object(search_service.ghsa, "fetch_advisories", return_value=[]), \
+             mock.patch.object(search_service.nvd_client, "fetch_nvd", fake_fetch_nvd), \
+             mock.patch.object(search_service.epss_client, "fetch_epss",
+                               return_value=epss if epss is not None else {}):
+            return search_service.run_search(search_service.parse_search_query(body))
+
+    def test_an_advisory_type_filter_nvd_ignores_is_declared(self):
+        """A `type: malware` search returned Log4Shell with nothing saying the
+        filter had been dropped. The UI offers it as a global scope control."""
+        out = self._run({"categories": ["ssti"], "sources": ["ghsa", "nvd"],
+                         "type": "malware"}, nvd_records=[self.NVD_RECORD])
+        self.assertEqual([r["cve_id"] for r in out.results], ["CVE-2021-44228"])
+        self.assertTrue(any("advisory-type" in w for w in out.warnings),
+                        f"no warning about the ignored type filter: {out.warnings}")
+
+    def test_an_ecosystem_filter_nvd_ignores_is_declared(self):
+        out = self._run({"categories": ["ssti"], "sources": ["ghsa", "nvd"],
+                         "ecosystem": "maven"}, nvd_records=[self.NVD_RECORD])
+        self.assertTrue(any("ecosystem" in w for w in out.warnings), out.warnings)
+
+    def test_the_default_type_does_not_warn(self):
+        out = self._run({"categories": ["ssti"], "sources": ["ghsa", "nvd"]},
+                        nvd_records=[self.NVD_RECORD])
+        self.assertEqual([w for w in out.warnings if "advisory-type" in w], [])
+
+    def test_a_partly_failed_nvd_fetch_says_the_results_are_incomplete(self):
+        """17 of 18 CWEs could fail and the user saw a plausible "NVD: 12",
+        reading it as "NVD has 12 of these"."""
+        out = self._run({"categories": ["bac"], "sources": ["ghsa", "nvd"]},
+                        nvd_records=[self.NVD_RECORD],
+                        nvd_report={"failed_cwes": 17, "total_cwes": 18})
+        self.assertTrue(any("17 of 18" in w and "incomplete" in w
+                            for w in out.warnings), out.warnings)
+
+    def test_a_fully_successful_nvd_fetch_does_not_warn(self):
+        out = self._run({"categories": ["bac"], "sources": ["ghsa", "nvd"]},
+                        nvd_records=[self.NVD_RECORD],
+                        nvd_report={"failed_cwes": 0, "total_cwes": 18})
+        self.assertEqual([w for w in out.warnings if "incomplete" in w], [])
+
+    def test_sorting_by_epss_with_no_epss_data_says_so(self):
+        """fetch_epss swallows everything and returns {}, and the sort key
+        maps a missing score to 0.0 -- so merge order was presented as an
+        exploit-probability ranking."""
+        records = [dict(self.NVD_RECORD, advisory_id=f"CVE-2026-{i}",
+                        cve_id=f"CVE-2026-{i}", aliases=[f"CVE-2026-{i}"])
+                   for i in range(3)]
+        out = self._run({"categories": ["bac"], "sources": ["nvd"],
+                         "sort": "epss_percentage"}, nvd_records=records, epss={})
+        self.assertEqual(len(out.results), 3)
+        self.assertTrue(any("merge order" in w for w in out.warnings), out.warnings)
+
+    def test_a_working_epss_sort_does_not_warn(self):
+        records = [dict(self.NVD_RECORD, advisory_id=f"CVE-2026-{i}",
+                        cve_id=f"CVE-2026-{i}", aliases=[f"CVE-2026-{i}"])
+                   for i in range(2)]
+        scores = {f"CVE-2026-{i}": {"epss": 0.1 * (i + 1), "percentile": 0.5}
+                  for i in range(2)}
+        out = self._run({"categories": ["bac"], "sources": ["nvd"],
+                         "sort": "epss_percentage"},
+                        nvd_records=records, epss=scores)
+        self.assertEqual([w for w in out.warnings if "merge order" in w], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

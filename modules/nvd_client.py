@@ -210,10 +210,19 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     return results[: params.max_results]
 
 
-def fetch_nvd(params: NvdSearchParams) -> list[dict]:
-    """Fetch CVEs for all requested CWEs, deduplicate, and normalize."""
+def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]:
+    """Fetch CVEs for all requested CWEs, deduplicate, and normalize.
+
+    *report*, if given, is filled with ``failed_cwes``/``total_cwes`` so the
+    caller can tell the user the result set is incomplete. Passed in rather
+    than returned so existing callers are unaffected, and held per call rather
+    than on the module so concurrent searches cannot overwrite each other.
+    """
     if not params.cwes:
         return []
+    if report is not None:
+        report["failed_cwes"] = 0
+        report["total_cwes"] = len(params.cwes)
 
     seen_ids: set[str] = set()
     raw_all: list[dict] = []
@@ -249,6 +258,16 @@ def fetch_nvd(params: NvdSearchParams) -> list[dict]:
 
     if errors and not successful_queries:
         raise NvdError(f"all NVD CWE queries failed; last error: {errors[-1]}")
+
+    # Partial failure is the common case here -- one request per CWE per date
+    # window, rate limited hard without a key -- and it used to be invisible:
+    # 17 of 18 CWEs could fail and the caller saw a plausible "NVD: 12" with
+    # no warning, reading it as "NVD has 12 of these".
+    if report is not None:
+        report["failed_cwes"] = len(errors)
+    if errors:
+        logger.warning("NVD: %d of %d CWE queries failed",
+                       len(errors), len(params.cwes))
 
     # Per record: normalize dereferences weaknesses[].description[],
     # cpeMatch[].criteria.split() and float(baseScore), none of which the NVD

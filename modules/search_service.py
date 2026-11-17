@@ -544,10 +544,35 @@ def run_search(q: SearchQuery) -> SearchOutcome:
             published_range=q.published,
             max_results=q.max_results,
         )
+        # The UI offers "Advisory type" and "Ecosystem" as global scope
+        # controls, and docs/usage.md lists them with the rest -- but only
+        # GHSA is given either one, and the post-merge re-filter re-checks
+        # neither. A `type: malware` search therefore returned Log4Shell from
+        # NVD with nothing on screen saying the filter had been ignored.
+        # Honouring them for NVD is not possible as the records stand (its
+        # `type` holds the source name and every package is stamped
+        # ecosystem "nvd"), so say so rather than quietly widening the query.
+        if q.adv_type and q.adv_type != "reviewed":
+            warnings.append(
+                f"NVD does not support the '{q.adv_type}' advisory-type "
+                "filter; its rows are unfiltered by type."
+            )
+        if q.ecosystem and q.ecosystem != "any":
+            warnings.append(
+                f"NVD is not indexed by ecosystem; its rows are not limited "
+                f"to '{q.ecosystem}'."
+            )
+        nvd_report: dict = {}
         try:
-            n = nvd_client.fetch_nvd(nvd_params)
+            n = nvd_client.fetch_nvd(nvd_params, report=nvd_report)
             collected += n
             per_source["nvd"] = len(n)
+            failed = nvd_report.get("failed_cwes", 0)
+            if failed:
+                warnings.append(
+                    f"NVD: {failed} of {nvd_report.get('total_cwes', failed)} "
+                    "CWE queries failed; its results are incomplete."
+                )
         except nvd_client.NvdError as e:
             logger.warning("NVD fetch failed: %s", e)
             if q.sources == ["nvd"]:
@@ -609,24 +634,38 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 return 0.0
         return value or ""
 
-    def _enrich_epss(records: list[dict]) -> None:
+    def _enrich_epss(records: list[dict]) -> int:
+        """Attach EPSS scores. Returns how many records got one."""
         cve_ids = [r["cve_id"] for r in records if r.get("cve_id")]
         if not cve_ids:
-            return
+            return 0
         epss_scores = epss_client.fetch_epss(cve_ids)
+        enriched = 0
         for rec in records:
             score = epss_scores.get(rec.get("cve_id", ""))
             if score:
                 rec["epss_percentage"] = score["epss"]
                 rec["epss_percentile"] = score["percentile"]
+                enriched += 1
+        return enriched
 
     # Sorting by EPSS needs every candidate scored first; every other sort mode
     # can truncate first, which keeps EPSS to one batched request instead of one
     # per 100 merged records (up to 4x max_results before truncation).
     if numeric:
-        _enrich_epss(results)
+        enriched = _enrich_epss(results)
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
         results = results[:q.max_results]
+        # fetch_epss swallows every failure and returns {}, and _sort_key maps
+        # a missing score to 0.0 -- so an EPSS outage silently handed the user
+        # merge order presented as an exploit-probability ranking.
+        # docs/data-sources.md promises a missing score is never rendered as a
+        # measured zero; the ordering has to keep the same promise.
+        if results and not enriched:
+            warnings.append(
+                "EPSS scores are unavailable, so these results are in merge "
+                "order, not EPSS order."
+            )
     else:
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
         results = results[:q.max_results]
