@@ -104,7 +104,11 @@ class TestParseSearchQuery(unittest.TestCase):
         q = search_service.parse_search_query(
             {"categories": ["sqli", "cwe:79", "cwe:639"], "include_extended": False}
         )
-        self.assertEqual(q.cwes, ["89", "79", "639"])
+        # The class's own core set, then each pseudo-category in the order it
+        # was selected. Taken from CATEGORIES rather than copied, so a
+        # taxonomy correction does not fail a test about ordering.
+        from modules.cwe_categories import CATEGORIES
+        self.assertEqual(q.cwes, [*CATEGORIES["sqli"]["core"], "79", "639"])
 
     def test_empty_selection_is_rejected(self):
         with self.assertRaises(search_service.SearchError) as cm:

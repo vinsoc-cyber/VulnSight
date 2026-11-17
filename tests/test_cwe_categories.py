@@ -109,7 +109,14 @@ class TestCwePseudoCategories(unittest.TestCase):
     def test_resolves_to_exactly_that_cwe(self):
         self.assertEqual(cwe.category_cwes("cwe:1321"), ["1321"])
         self.assertEqual(cwe.category_cwes("cwe:1321", include_extended=False), ["1321"])
-        self.assertEqual(cwe.resolve_cwes(["sqli", "cwe:1321"], False), ["89", "1321"])
+        # Composed with a curated class, the pseudo-category contributes its
+        # one CWE and nothing else. Asserted against the class's own core set
+        # rather than a copy of it, so correcting the taxonomy does not fail a
+        # test that is really about `cwe:<id>` resolution.
+        self.assertEqual(
+            cwe.resolve_cwes(["sqli", "cwe:1321"], False),
+            [*cwe.CATEGORIES["sqli"]["core"], "1321"],
+        )
 
     def test_label_and_description_are_ai_ready(self):
         """The AI prompt is built from these, so neither may be empty."""
@@ -247,6 +254,109 @@ class TestDataIntegrity(unittest.TestCase):
                 self.assertNotEqual(
                     cwe.cwe_label(c), f"CWE-{c}",
                     msg=f"category '{key}': CWE-{c} is not in the MITRE catalog")
+
+
+
+class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
+    """Core is the documented precision mode: "an advisory carrying this CWE
+    is almost certainly this class" (docs/bug-classes.md).
+
+    The split had been applied backwards in a systematic way -- the vaguest
+    umbrellas (CWE-284 Pillar, CWE-200 Class) sat in `core` while the most
+    specific tags sat in `extended`, so six classes could not find, in
+    precision mode, the bug their own label names. A false negative is the
+    worst failure mode this tool has, because the result still looks like an
+    answer.
+    """
+
+    #  class            CWE     what it is
+    PROMISED = [
+        ("crlf", "444", "HTTP Request/Response Smuggling"),
+        ("session", "613", "Insufficient Session Expiration"),
+        ("cors", "346", "Origin Validation Error"),
+        ("hardcodedcreds", "1392", "Use of Default Credentials"),
+        ("hardcodedcreds", "259", "Use of Hard-coded Password"),
+        ("queryinj", "652", "XQuery Injection"),
+        ("sqli", "943", "NoSQL / data query logic"),
+        ("pathtraversal", "23", "Relative Path Traversal"),
+        ("pathtraversal", "36", "Absolute Path Traversal"),
+        ("xss", "80", "Basic XSS"),
+        ("ssti", "95", "Eval Injection"),
+        ("searchpath", "428", "Unquoted Search Path"),
+        ("intoverflow", "191", "Integer Underflow"),
+        ("infoleak", "522", "Insufficiently Protected Credentials"),
+    ]
+
+    def test_precision_mode_reaches_the_bug_each_class_is_named_for(self):
+        for key, cwe_id, what in self.PROMISED:
+            with self.subTest(category=key, cwe=cwe_id):
+                core_only = cwe.category_cwes(key, include_extended=False)
+                self.assertIn(cwe_id, core_only,
+                              f"{key} cannot find CWE-{cwe_id} ({what}) without extended")
+
+    def test_the_dynamic_code_family_is_not_filed_under_access_control(self):
+        """CWE-913's children are 502 (deserialization), 915 (prototype
+        pollution) and 470 (unsafe reflection). Nothing under it is
+        authorization, and it sits under CWE-664, not CWE-284."""
+        self.assertNotIn("913", cwe.category_cwes("bac"))
+        self.assertIn("913", cwe.category_cwes("deserialization"))
+
+    def test_request_smuggling_and_its_parent_are_in_the_same_class(self):
+        """CWE-436 Interpretation Conflict is CWE-444's parent. They were in
+        two unrelated classes and the parent was in neither's."""
+        crlf = cwe.category_cwes("crlf")
+        self.assertIn("444", crlf)
+        self.assertIn("436", crlf)
+        self.assertNotIn("436", cwe.category_cwes("upload"))
+
+    def test_the_credential_exposure_cluster_is_reachable(self):
+        """822 tag occurrences were in no class at all, so an analyst ticking
+        the two obvious classes concluded an ecosystem was clean of
+        cleartext-credential bugs."""
+        reachable = set(cwe.category_cwes("infoleak")) | set(
+            cwe.category_cwes("hardcodedcreds"))
+        for cwe_id in ("522", "311", "312", "319", "256", "922"):
+            self.assertIn(cwe_id, reachable, f"CWE-{cwe_id} is unreachable")
+
+    def test_keyword_promises_are_backed_by_a_cwe(self):
+        """A keyword advertises a bug on the OSV-native path; the CWE path
+        has to be able to reach the same bug."""
+        for key, cwe_id in (("pathtraversal", "59"),    # zip slip
+                            ("dos", "835"),             # infinite loop
+                            ("dos", "1325"),            # stack exhaustion
+                            ("race", "833")):           # deadlock
+            with self.subTest(category=key, cwe=cwe_id):
+                self.assertIn(cwe_id, cwe.category_cwes(key))
+
+    def test_no_keyword_is_a_substring_trap(self):
+        """docs/bug-classes.md warns about this by name ('"dos" matches
+        "kudos"'). The matcher is a bare `k in text`, so "acl" matched oracle
+        -- and "padding oracle" is itself a crypto keyword, which quietly sent
+        crypto advisories into the BAC AI queue at one paid call each."""
+        # Words that no bug-class keyword should appear *inside*. A keyword
+        # that IS one of these is a real term, not a trap, so exact matches
+        # are allowed -- it is the accidental substring that misfires.
+        decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
+                  "medieval", "obstacle", "tentacle", "reevaluated")
+        for category, keywords in cwe.KEYWORDS.items():
+            for keyword in keywords:
+                for decoy in decoys:
+                    if keyword != decoy and keyword in decoy:
+                        self.fail(f"KEYWORDS[{category!r}] entry {keyword!r} "
+                                  f"matches inside the unrelated word {decoy!r}")
+
+    def test_core_and_extended_stay_disjoint_after_the_promotions(self):
+        for key, spec in cwe.CATEGORIES.items():
+            with self.subTest(category=key):
+                self.assertEqual(
+                    set(spec["core"]) & set(spec["extended"]), set())
+
+    def test_every_listed_cwe_exists_in_the_catalog(self):
+        from modules.cwe_catalog import NAMES
+        for key, spec in cwe.CATEGORIES.items():
+            for cwe_id in [*spec["core"], *spec["extended"]]:
+                with self.subTest(category=key, cwe=cwe_id):
+                    self.assertIn(cwe_id, NAMES)
 
 
 if __name__ == "__main__":

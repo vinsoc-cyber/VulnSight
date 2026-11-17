@@ -14,7 +14,7 @@ modules/
   search_service.py   687   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py    131   one filter vocabulary, applied after the merge
   records.py           69   per-record normalize guard shared by the clients
-  cwe_categories.py   691   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_categories.py   715   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py      253   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       345   NVD API v2, 120-day windowing, rate-limit sleeps

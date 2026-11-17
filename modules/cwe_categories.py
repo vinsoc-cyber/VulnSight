@@ -69,7 +69,9 @@ CATEGORIES: dict[str, dict] = {
             "1220",  # Insufficient Granularity of Access Control
             "552",  # Files/Directories Accessible to External Parties
             "425",  # Direct Request ('Forced Browsing')
-            "913",  # Improper Control of Dynamically-Managed Code Resources
+            "290",  # Authentication Bypass by Spoofing
+            "288",  # Authentication Bypass Using an Alternate Path or Channel
+            "276",  # Incorrect Default Permissions
         ],
     },
     "sqli": {
@@ -77,24 +79,25 @@ CATEGORIES: dict[str, dict] = {
         "group": "Injection",
         "label": "SQL Injection",
         "description": "Improper neutralization of SQL / NoSQL query elements.",
-        "core": ["89"],
-        "extended": ["564", "943"],  # Hibernate SQLi, improper query neutralization
+        # 943 is the NoSQL half this class advertises; 564 is SQLi by name.
+        "core": ["89", "943", "564"],
+        "extended": [],
     },
     "xss": {
         "code": "XSS",
         "group": "Injection",
         "label": "Cross-Site Scripting (XSS)",
         "description": "Improper neutralization of input during web page generation.",
-        "core": ["79"],
-        "extended": ["80", "83", "87", "116"],
+        "core": ["79", "80", "83", "87"],   # basic / attribute / alternate XSS
+        "extended": ["116"],
     },
     "ssti": {
         "code": "SSTI",
         "group": "Injection",
         "label": "Server-Side Template Injection / Code Injection",
         "description": "Template injection and dynamic code evaluation flaws.",
-        "core": ["1336", "94"],  # SSTI, Improper Control of Code Generation
-        "extended": ["95", "96", "917"],  # eval injection, EL injection
+        "core": ["1336", "94", "95"],  # SSTI, code generation, eval injection
+        "extended": ["96", "917", "470"],  # EL injection, unsafe reflection
     },
     "cmdi": {
         "code": "CMDI",
@@ -110,15 +113,19 @@ CATEGORIES: dict[str, dict] = {
         "label": "Server-Side Request Forgery (SSRF)",
         "description": "Server can be coerced into making unintended requests.",
         "core": ["918"],
-        "extended": [],
+        # "Include extended" was a no-op for SSRF; 441 Confused Deputy is the
+        # obvious occupant.
+        "extended": ["441"],
     },
     "pathtraversal": {
         "code": "PATH",
         "group": "Files & server-side requests",
         "label": "Path Traversal / File Disclosure",
         "description": "Improper limitation of a pathname to a restricted directory.",
-        "core": ["22"],
-        "extended": ["23", "36", "73", "434"],  # incl. unrestricted upload
+        "core": ["22", "23", "36"],   # relative / absolute path traversal
+        # 59 Link Following carries "Zip Slip" as a MITRE alternate term, and
+        # KEYWORDS["pathtraversal"] already advertises zip slip.
+        "extended": ["73", "434", "59"],
     },
     "deserialization": {
         "code": "DESER",
@@ -126,7 +133,8 @@ CATEGORIES: dict[str, dict] = {
         "label": "Insecure Deserialization",
         "description": "Deserialization of untrusted data leading to RCE / DoS.",
         "core": ["502"],
-        "extended": [],
+        # 913 is the parent of the dynamic-code family this class belongs to.
+        "extended": ["913"],
     },
     "xxe": {
         "code": "XXE",
@@ -146,8 +154,8 @@ CATEGORIES: dict[str, dict] = {
             "attacker changes the query's structure: LDAP filters, XPath or "
             "XQuery expressions."
         ),
-        "core": ["643", "90"],
-        "extended": ["91", "652"],
+        "core": ["643", "90", "652"],   # 652 = XQuery Injection
+        "extended": ["91"],
     },
     "crlf": {
         "code": "CRLF",
@@ -158,8 +166,12 @@ CATEGORIES: dict[str, dict] = {
             "headers, split a response, forge log entries, or desynchronise a "
             "proxy from the origin (request smuggling)."
         ),
-        "core": ["93", "113"],
-        "extended": ["117", "444"],
+        # 444 is literally "HTTP Request/Response Smuggling" and this class
+        # is named for it, so precision mode has to be able to find it.
+        "core": ["93", "113", "444"],
+        # 436 Interpretation Conflict is 444's parent (it was filed under
+        # `upload`, where neither it nor its children belong).
+        "extended": ["117", "436"],
     },
     "protopollution": {
         "code": "PROTO",
@@ -196,8 +208,8 @@ CATEGORIES: dict[str, dict] = {
             "validated incorrectly (reflected origins, null origin, sloppy "
             "prefix or suffix matching), letting an untrusted site read responses."
         ),
-        "core": ["942"],
-        "extended": ["346", "1385"],
+        "core": ["942", "346"],   # 346 = Origin Validation Error
+        "extended": ["1385"],
     },
     "session": {
         "code": "SESS",
@@ -208,8 +220,8 @@ CATEGORIES: dict[str, dict] = {
             "when they should not be: session fixation, sessions that never "
             "expire, tokens left valid after logout, sensitive persistent cookies."
         ),
-        "core": ["384"],
-        "extended": ["613", "539", "488"],
+        "core": ["384", "613"],   # 613 = Insufficient Session Expiration
+        "extended": ["539", "488"],
     },
     "hardcodedcreds": {
         "code": "CREDS",
@@ -220,8 +232,10 @@ CATEGORIES: dict[str, dict] = {
             "artifact, or a default credential is active out of the box, so every "
             "deployment shares the same secret."
         ),
-        "core": ["798"],
-        "extended": ["259", "321", "1392"],
+        # All three name the thing this class is called: a hard-coded
+        # password, a hard-coded key, a default credential.
+        "core": ["798", "259", "321", "1392"],
+        "extended": [],
     },
     "clickjacking": {
         "code": "CLICK",
@@ -258,7 +272,7 @@ CATEGORIES: dict[str, dict] = {
             "where the server will run it."
         ),
         "core": ["434"],
-        "extended": ["646", "351", "436"],
+        "extended": ["646", "351"],
     },
     "searchpath": {
         "code": "SPATH",
@@ -269,8 +283,8 @@ CATEGORIES: dict[str, dict] = {
             "attacker can influence (current directory, writable PATH entry, "
             "unquoted path), so their code is loaded instead."
         ),
-        "core": ["426", "427"],
-        "extended": ["428", "114"],
+        "core": ["426", "427", "428"],   # 428 = Unquoted Search Path
+        "extended": ["114"],
     },
 
     # ---- Crypto & secrets ------------------------------------------------
@@ -284,7 +298,9 @@ CATEGORIES: dict[str, dict] = {
             "for passwords, unchecked signatures, unvalidated certificates."
         ),
         "core": ["327", "347", "295"],
-        "extended": ["326", "328", "916", "261", "759", "760", "780", "323", "324"],
+        # 345 is the class above 347; 208 is non-constant-time comparison.
+        "extended": ["326", "328", "916", "261", "759", "760", "780", "323",
+                     "324", "345", "208"],
     },
     "randomness": {
         "code": "RAND",
@@ -308,8 +324,9 @@ CATEGORIES: dict[str, dict] = {
             "or metadata. Umbrella CWE-200 is broad, so confirm the leaked value "
             "is genuinely sensitive."
         ),
-        "core": ["200"],
-        "extended": ["209", "532", "359", "497", "215", "540", "1230"],
+        "core": ["200", "522"],   # 522 = Insufficiently Protected Credentials
+        "extended": ["209", "532", "359", "497", "215", "540", "1230",
+                     "311", "312", "319", "256", "922"],
     },
 
     # ---- Memory & concurrency -------------------------------------------
@@ -334,8 +351,8 @@ CATEGORIES: dict[str, dict] = {
             "loses sign or precision, so a length or index check is computed on "
             "the wrong value."
         ),
-        "core": ["190"],
-        "extended": ["191", "192", "197", "680", "681"],
+        "core": ["190", "191"],   # overflow and underflow are the same class
+        "extended": ["192", "197", "680", "681"],
     },
     "race": {
         "code": "RACE",
@@ -347,7 +364,8 @@ CATEGORIES: dict[str, dict] = {
             "changes between the check and the use."
         ),
         "core": ["362", "367"],
-        "extended": ["366", "421", "1223"],
+        # KEYWORDS["race"] ends with "deadlock" and nothing backed it.
+        "extended": ["366", "421", "1223", "833", "667"],
     },
 
     # ---- Availability ----------------------------------------------------
@@ -373,7 +391,9 @@ CATEGORIES: dict[str, dict] = {
             "Excludes regex-specific cases, which are ReDoS."
         ),
         "core": ["400", "770"],
-        "extended": ["409", "674", "789", "405", "834", "617"],
+        # KEYWORDS["dos"] already advertises "infinite loop" and "stack
+        # exhaustion"; 835 and 1325 are the CWEs that back them.
+        "extended": ["409", "674", "789", "405", "834", "617", "835", "1325"],
     },
 
     # ---- Broad ------------------------------------------------------------
@@ -387,7 +407,9 @@ CATEGORIES: dict[str, dict] = {
             "Expect noise and rely on the AI pass to name the real root cause."
         ),
         "core": ["20"],
-        "extended": ["1284", "129", "704"],
+        # 74 is the generic Injection CWE, parent of 79/89/77/78/90/917 --
+        # 269 occurrences, and the nine-class Injection group reached none.
+        "extended": ["1284", "129", "704", "74"],
     },
 }
 
@@ -419,14 +441,16 @@ KEYWORDS: dict[str, list[str]] = {
     "bac": [
         "authoriz", "authorisation", "access control", "access-control",
         "permission", "idor", "bola", "bfla", "privilege", "escalat", "bypass",
-        "unauthenticated", "unauthorized", "unauthorised", "forbidden", "acl",
+        "unauthenticated", "unauthorized", "unauthorised", "forbidden",
+        "access control list",
         "tenant", "cross-namespace", "cross namespace", "improper access",
         "auth check", "authentication bypass", "insecure direct",
     ],
     "sqli": ["sql injection", "sqli", "sql statement", "query injection", "nosql injection"],
     "xss": ["cross-site scripting", "cross site scripting", "xss", "script injection", "html injection"],
     "ssti": ["template injection", "ssti", "expression language", "el injection",
-             "code injection", "arbitrary code", "remote code execution via", "eval"],
+             "code injection", "arbitrary code", "remote code execution via",
+             "eval(", "eval()"],
     "cmdi": ["command injection", "os command", "shell command", "arbitrary command", "argument injection"],
     "ssrf": ["ssrf", "server-side request forgery", "server side request forgery"],
     "pathtraversal": ["path traversal", "directory traversal", "arbitrary file read",
