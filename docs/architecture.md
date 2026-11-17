@@ -19,7 +19,7 @@ modules/
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py      302   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       385   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py       391   bulk export download, parse, CWE + keyword filters
+  osv_client.py       450   bulk export download, parse, CWE + keyword filters
   epss_client.py      108   FIRST EPSS scores, batched
   cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            446   SQLite: advisories + verdicts, jobs, migrations

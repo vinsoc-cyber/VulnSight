@@ -20,7 +20,6 @@ records (GO-..., RUSTSEC-..., PYSEC-..., etc.).
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
@@ -66,6 +65,10 @@ ECOSYSTEM_MAP: dict[str, str] = {
 _MEM: dict[str, tuple[float, list[dict]]] = {}
 _MEM_TTL = 3600   # seconds – evict cached records older than 1 hour
 _MEM_MAX = 5      # max ecosystems kept in memory at once
+# npm, the largest export, is ~220 MB. 512 MB leaves headroom while keeping
+# the damage from a runaway or hostile response bounded -- the cap is what
+# stops a response that never ends from filling the disk.
+MAX_BULK_BYTES = 512 << 20
 _DOWNLOAD_LOCK = threading.Lock()
 # _MEM is read and mutated from every request thread. It used to be touched
 # unguarded, which gave two real races: a check-then-get that could read an
@@ -74,6 +77,22 @@ _DOWNLOAD_LOCK = threading.Lock()
 # "dictionary changed size during iteration". Neither is an OsvError, so
 # neither was caught, and both surfaced as a 500 for the whole search.
 _MEM_LOCK = threading.Lock()
+
+# One load lock per ecosystem, held across download *and* parse. The memo read
+# was already guarded and the download was serialised, but the parse -- the
+# expensive part -- ran completely unlocked: on a cold cache N concurrent
+# requests for the same ecosystem each inflated and normalised the entire
+# archive, the last writer won, and the rest was garbage. npm's export is
+# 226,880 members and ~372 MB uncompressed, against a shipped config of
+# --workers 1 --threads 8, so eight simultaneous npm searches is a realistic
+# way to run the container out of memory.
+_LOAD_LOCKS: dict[str, threading.Lock] = {}
+_LOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _load_lock(ecosystem: str) -> threading.Lock:
+    with _LOAD_LOCKS_GUARD:
+        return _LOAD_LOCKS.setdefault(ecosystem, threading.Lock())
 
 
 class OsvError(RuntimeError):
@@ -112,14 +131,34 @@ def download_ecosystem(osv_eco: str, force: bool = False,
         url = f"{OSV_BASE}/{urllib.parse.quote(osv_eco)}/all.zip"
         req = urllib.request.Request(url, headers={"user-agent": USER_AGENT})
 
-        def _once() -> bytes:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
+        tmp = path + ".tmp"
+
+        def _once() -> None:
+            # Streamed to disk in chunks, not read() into memory. npm's export
+            # is ~220 MB, and buffering it whole and then copying it into a
+            # BytesIO for the zip probe cost ~440 MB peak for a file that is
+            # only ever used from disk afterwards. The running cap also stops
+            # a hostile or broken upstream streaming until the process dies,
+            # which no Content-Length check would have caught.
+            written = 0
+            with urllib.request.urlopen(req, timeout=timeout) as resp, \
+                    open(tmp, "wb") as handle:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_BULK_BYTES:
+                        raise OsvError(
+                            f"OSV bulk for {osv_eco} exceeded "
+                            f"{MAX_BULK_BYTES // (1 << 20)} MB; refusing it")
+                    handle.write(chunk)
 
         try:
-            data = http_retry.with_retries(
+            http_retry.with_retries(
                 _once, what=f"OSV bulk {osv_eco}", attempts=2)
         except Exception as e:  # noqa: BLE001 - surface a clean message to the UI
+            _unlink_quietly(tmp)
             # A stale export beats no export. The freshness check above only
             # short-circuits on success, so once the zip was a day old a
             # transient download failure dropped OSV from the search entirely
@@ -132,17 +171,24 @@ def download_ecosystem(osv_eco: str, force: bool = False,
                 return path
             raise OsvError(f"could not download OSV bulk for {osv_eco}: {e}") from e
 
-        if not zipfile.is_zipfile(io.BytesIO(data)):
+        # Validate the temp file, then publish it atomically: a half-written
+        # or non-zip download must never replace a cache that still works.
+        if not zipfile.is_zipfile(tmp):
+            _unlink_quietly(tmp)
             raise OsvError(f"OSV bulk response for {osv_eco} is not a valid zip archive")
-
-        tmp = path + ".tmp"
         try:
-            with open(tmp, "wb") as f:
-                f.write(data)
             os.replace(tmp, path)
         except OSError as e:
+            _unlink_quietly(tmp)
             raise OsvError(f"could not cache OSV bulk for {osv_eco}: {e}") from e
         return path
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 _QUAL_MAP = {"LOW": "low", "MODERATE": "medium", "MEDIUM": "medium",
@@ -269,6 +315,19 @@ def _load_records(ghsa_ecosystem: str, force: bool = False) -> list[dict]:
         if entry is not None and (time.time() - entry[0]) < _MEM_TTL:
             return entry[1]
 
+    with _load_lock(ghsa_ecosystem):
+        # Re-check under the lock: while we waited, the thread that held it
+        # may have finished the very load we were about to repeat.
+        if not force:
+            with _MEM_LOCK:
+                entry = _MEM.get(ghsa_ecosystem)
+            if entry is not None and (time.time() - entry[0]) < _MEM_TTL:
+                return entry[1]
+        return _load_records_locked(ghsa_ecosystem, osv_eco, force)
+
+
+def _load_records_locked(ghsa_ecosystem: str, osv_eco: str, force: bool) -> list[dict]:
+    """Download and parse one ecosystem. Caller holds that ecosystem's lock."""
     path = download_ecosystem(osv_eco, force=force)
     records: list[dict] = []
     skipped = 0

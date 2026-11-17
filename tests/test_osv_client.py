@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from unittest import mock
@@ -56,8 +58,12 @@ class TestFetchOsv(unittest.TestCase):
             good = make_osv_zip([OSV_NATIVE])
             with open(path, "wb") as handle:
                 handle.write(good)
+            # A real response is a stream: read(n) returns b"" at EOF. A
+            # MagicMock whose read() always returns the same bytes never ends,
+            # which is not how any HTTP response behaves.
             response = mock.MagicMock()
-            response.read.return_value = b"not-a-zip"
+            body = io.BytesIO(b"not-a-zip")
+            response.read.side_effect = body.read
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             urlopen.return_value = response
@@ -65,6 +71,37 @@ class TestFetchOsv(unittest.TestCase):
                 osv_client.download_ecosystem("Go", force=True)
             with open(path, "rb") as handle:
                 self.assertEqual(handle.read(), good)
+
+    def test_an_endless_response_is_cut_off_at_the_cap(self):
+        """The cap is what stops a response that never ends from filling the
+        disk. Writing this test is how the streaming loop was found to run
+        away against a mock whose read() never returns b"" -- it wrote 119 MB
+        before it was killed."""
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client, "MAX_BULK_BYTES", 1 << 20), \
+             mock.patch("modules.osv_client.urllib.request.urlopen") as urlopen:
+            response = mock.MagicMock()
+            response.read.return_value = b"x" * 65536      # never ends
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            urlopen.return_value = response
+            with self.assertRaises(osv_client.OsvError) as caught:
+                osv_client.download_ecosystem("Go", force=True)
+            self.assertIn("exceeded", str(caught.exception))
+            # The partial file must not be left behind.
+            self.assertFalse(
+                os.path.exists(osv_client._zip_path("Go") + ".tmp"))
+
+    def test_a_failed_download_leaves_no_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go", force=True)
+            self.assertFalse(
+                os.path.exists(osv_client._zip_path("Go") + ".tmp"))
 
     def test_zip_records_and_cwe_filter(self):
         # Build an in-memory bulk zip (samples.make_osv_zip replaces the removed
@@ -222,6 +259,77 @@ class TestOneBadRecordDoesNotKillTheSearch(unittest.TestCase):
             })
         self.assertTrue(any("Skipped 1 unusable" in line for line in logs.output),
                         logs.output)
+
+
+
+class TestConcurrentLoadsParseOnce(unittest.TestCase):
+    """The memo read was guarded and the download serialised, but the parse
+    -- the expensive part -- ran unlocked.
+
+    On a cold cache N concurrent requests for the same ecosystem each
+    inflated and normalised the whole archive, the last writer won, and the
+    rest was garbage. npm's export is 226,880 members and ~372 MB
+    uncompressed, against a shipped config of --workers 1 --threads 8.
+    """
+
+    def setUp(self):
+        osv_client._MEM.clear()
+
+    def tearDown(self):
+        osv_client._MEM.clear()
+
+    def test_eight_concurrent_cold_loads_parse_once(self):
+        parses = []
+        barrier = threading.Barrier(8)
+
+        def fake_load(ghsa_ecosystem, osv_eco, force):
+            parses.append(ghsa_ecosystem)
+            time.sleep(0.05)
+            records = [{"advisory_id": "OSV-1"}]
+            with osv_client._MEM_LOCK:
+                osv_client._MEM[ghsa_ecosystem] = (time.time(), records)
+            return records
+
+        def worker():
+            barrier.wait()
+            osv_client._load_records("maven")
+
+        with mock.patch.object(osv_client, "_load_records_locked", fake_load):
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(parses), 1, f"archive parsed {len(parses)} times")
+
+    def test_different_ecosystems_do_not_block_each_other(self):
+        order = []
+
+        def fake_load(ghsa_ecosystem, osv_eco, force):
+            order.append(("start", ghsa_ecosystem))
+            time.sleep(0.05)
+            with osv_client._MEM_LOCK:
+                osv_client._MEM[ghsa_ecosystem] = (time.time(), [])
+            order.append(("end", ghsa_ecosystem))
+            return []
+
+        with mock.patch.object(osv_client, "_load_records_locked", fake_load):
+            threads = [threading.Thread(target=osv_client._load_records, args=(eco,))
+                       for eco in ("maven", "npm", "go")]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        starts = [e for e in order[:3] if e[0] == "start"]
+        self.assertEqual(len(starts), 3, "ecosystems serialised against each other")
+
+    def test_a_warm_memo_skips_the_loader_entirely(self):
+        with osv_client._MEM_LOCK:
+            osv_client._MEM["maven"] = (time.time(), [{"advisory_id": "cached"}])
+        with mock.patch.object(osv_client, "_load_records_locked") as loader:
+            records = osv_client._load_records("maven")
+        loader.assert_not_called()
+        self.assertEqual(records[0]["advisory_id"], "cached")
 
 
 if __name__ == "__main__":
