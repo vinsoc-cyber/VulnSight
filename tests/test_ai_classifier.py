@@ -146,12 +146,23 @@ class TestHttpErrorPolicy(unittest.TestCase):
                 self.assertEqual(skip, 0)
 
     def test_a_parsed_quota_reset_still_beats_retry_after(self):
-        """The body's reset time is specific; Retry-After is often a generic window."""
-        retryable, exhausted, skip = ai_classifier._classify_http_error(
-            429, "your quota has been exhausted, reset at 2026-08-26 10:00:00", "60")
+        """The body's reset time is specific; Retry-After is often a generic window.
+
+        The reset instant has to be computed relative to now.  A hard-coded one
+        silently stops testing this the day it goes past: _parse_reset_at then
+        reports "already reset", _quota_skip_seconds applies its documented 60s
+        floor, and the assertion collides with the Retry-After sentinel.
+        """
+        reset = datetime.now() + timedelta(minutes=30)
+        detail = ("your quota has been exhausted, "
+                  f"will reset at {reset:%Y-%m-%d %H:%M:%S}")
+        retryable, exhausted, skip = ai_classifier._classify_http_error(429, detail, "60")
         self.assertFalse(retryable)
         self.assertTrue(exhausted)
-        self.assertNotEqual(skip, 60)
+        # ~30 min: under the 6h heuristic ceiling and over the 60s floor, so
+        # this value can only have come from the parsed timestamp -- not from
+        # the heuristic, and not from the Retry-After header.
+        self.assertAlmostEqual(skip, 1800, delta=120)
 
 
 class TestRequestHeaders(unittest.TestCase):
