@@ -42,7 +42,7 @@ from modules import cache
 class _QuietHandler(WSGIRequestHandler):
     """The default handler prints every request to stderr."""
 
-    def log_message(self, format, *args):  # noqa: A002 - signature is fixed
+    def log_message(self, format, *args):
         pass
 
 
@@ -133,7 +133,7 @@ class UITestCase(unittest.TestCase):
             cls.playwright.stop()
             cls.server.shutdown()
             cache.DB_PATH = cls._orig_db
-            raise unittest.SkipTest(f"no usable browser: {exc}")
+            raise unittest.SkipTest(f"no usable browser: {exc}") from exc
         cls.base = f"http://127.0.0.1:{cls.port}/"
 
     @classmethod

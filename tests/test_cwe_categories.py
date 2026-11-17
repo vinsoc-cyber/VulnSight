@@ -58,7 +58,8 @@ class TestCweCategories(unittest.TestCase):
             "1336": ("SSTI", "template injection"),
         }
         for cwe_id, terms in searches.items():
-            haystack = " ".join((cwe.cwe_label(cwe_id),) + cwe.cwe_aliases(cwe_id)).lower()
+            haystack = " ".join(
+                (cwe.cwe_label(cwe_id), *cwe.cwe_aliases(cwe_id))).lower()
             for term in terms:
                 with self.subTest(cwe=cwe_id, term=term):
                     self.assertIn(term.lower(), haystack)

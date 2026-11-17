@@ -137,7 +137,7 @@ def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
             try:
                 detail = (e.read() or b"")[:200].decode("utf-8", "replace").strip()
             except Exception:
-                pass
+                logger.debug("NVD 403 body could not be read", exc_info=True)
             logger.warning("NVD 403: %s", detail or "(no body)")
             raise NvdError(
                 "NVD refused the request (HTTP 403): rate limited, or "

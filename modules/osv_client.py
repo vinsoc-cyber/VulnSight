@@ -20,6 +20,7 @@ records (GO-..., RUSTSEC-..., PYSEC-..., etc.).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -185,10 +186,8 @@ def download_ecosystem(osv_eco: str, force: bool = False,
 
 
 def _unlink_quietly(path: str) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(path)
-    except OSError:
-        pass
 
 
 _QUAL_MAP = {"LOW": "low", "MODERATE": "medium", "MEDIUM": "medium",
@@ -247,11 +246,12 @@ def normalize_osv(rec: dict) -> dict:
         if not name:
             continue
         ranges = aff.get("ranges") or []
-        fixed_versions = []
-        for rng in ranges:
-            for ev in rng.get("events") or []:
-                if ev.get("fixed"):
-                    fixed_versions.append(ev["fixed"])
+        fixed_versions = [
+            ev["fixed"]
+            for rng in ranges
+            for ev in rng.get("events") or []
+            if ev.get("fixed")
+        ]
         eco = pkg.get("ecosystem")
         if eco:
             ecos.add(eco)

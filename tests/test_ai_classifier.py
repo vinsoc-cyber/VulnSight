@@ -593,7 +593,7 @@ class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
             provider="glm", base_url="https://x", tokens=list(tokens), model="m")
 
     def test_a_rate_limit_is_retryable_and_bounded(self):
-        retryable, exhausted, skip = ai_classifier._classify_http_error(
+        retryable, _, skip = ai_classifier._classify_http_error(
             429, "Rate limit reached for requests", None)
         self.assertTrue(retryable)
         self.assertLessEqual(skip, ai_classifier._MAX_RATE_PAUSE)
@@ -621,10 +621,10 @@ class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
                 cfg = self._cfg()
                 cfg.mark_skip_token("k1", 12 * 3600, persist=True)
                 with open(path, encoding="utf-8") as fh:
-                    long_deadline = list(json.load(fh).values())[0]
+                    long_deadline = next(iter(json.load(fh).values()))
                 cfg.mark_skip_token("k1", 30, persist=True)
                 with open(path, encoding="utf-8") as fh:
-                    after = list(json.load(fh).values())[0]
+                    after = next(iter(json.load(fh).values()))
                 self.assertAlmostEqual(after, long_deadline, delta=1)
 
     def test_seconds_until_any_live_reports_the_soonest_key(self):

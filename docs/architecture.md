@@ -12,25 +12,25 @@ app.py                569   Flask routes, request guards, response headers
 modules/
   config.py            50   minimal .env loader; BASE_DIR / DATA_DIR
   search_service.py   765   the pipeline: parse -> fetch -> merge -> sort -> enrich
-  query_filters.py    147   one filter vocabulary, applied after the merge
+  query_filters.py    149   one filter vocabulary, applied after the merge
   records.py           69   per-record normalize guard shared by the clients
   http_retry.py        165   one retry/backoff policy for all four upstreams
   cwe_categories.py   715   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py      302   `gh api /advisories`, cursor pagination, normalize()
+  ghsa_client.py      303   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py       385   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py       450   bulk export download, parse, CWE + keyword filters
   epss_client.py      108   FIRST EPSS scores, batched
-  cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
+  cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            479   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             218   submit/poll queue for searches too slow to hold open
-  ai_classifier.py   1056   provider client, prompt, verdict cache, key rotation
+  ai_classifier.py   1060   provider client, prompt, verdict cache, key rotation
   openapi.py          473   the OpenAPI description of /api/v1
-  security.py         437   bind/exposure checks, CSRF origin check, rate limiter
+  security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
 static/app.js        1651   all UI logic; server data arrives via window.BOOT
 static/style.css     1728   design tokens + components, light and dark
-tools/generate_cwe_catalog.py                       227   regenerates modules/cwe_catalog.py from MITRE XML
+tools/generate_cwe_catalog.py                       226   regenerates modules/cwe_catalog.py from MITRE XML
 tools/sync_module_map.py                        69   rewrites the line counts in this very table
 ```
 

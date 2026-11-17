@@ -91,11 +91,15 @@ cannot hide inside a passing run.
 ## Verifying a change
 
 Type checking is not configured in this repo, so "it imports" is not evidence.
+Linting is: `ruff.toml` selects the bug-finding rules (pyflakes, bugbear,
+bandit, naive-datetime, dead code) rather than ruff's default four, and every
+ignore in it states why. The tree is clean under it, so a new finding is a
+real one.
 For anything touching behaviour:
 
 ```bash
 python -m pytest tests/ -q                  # everything
-python -m ruff check .                      # lint
+python -m ruff check .                      # lint (config in ruff.toml)
 node --check static/app.js                  # JS parses
 python -c "import app; app.create_app()"    # the app actually builds
 ```

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hmac
 import ipaddress
@@ -224,10 +225,8 @@ def _load_or_create_token(path: str) -> str:
         with open(path, encoding="utf-8") as fh:
             existing = fh.read().strip()
         if existing:
-            try:
+            with contextlib.suppress(OSError):
                 os.chmod(path, 0o600)
-            except OSError:
-                pass
             logger.info("Using API token from %s", path)
             return existing
     token = secrets.token_urlsafe(32)

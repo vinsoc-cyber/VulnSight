@@ -176,13 +176,17 @@ def _parse_reset_at(detail: str) -> float | None:
     stamp = f"{match.group(1)} {match.group(2)}"
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
         try:
-            parsed = datetime.strptime(stamp, fmt)
+            # Deliberately naive: the provider does not say which zone its
+            # reset time is in, so the stamp is compared against both UTC and
+            # local and the nearer future reading wins. Attaching a zone here
+            # would be inventing information we do not have.
+            parsed = datetime.strptime(stamp, fmt)  # noqa: DTZ007
         except ValueError:
             continue
         naive_utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
         candidates = [
             (parsed - naive_utc_now).total_seconds(),
-            (parsed - datetime.now()).total_seconds(),
+            (parsed - datetime.now()).total_seconds(),  # noqa: DTZ005
         ]
         future = [seconds for seconds in candidates if seconds > 0]
         return min(future) if future else 0.0

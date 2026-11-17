@@ -60,9 +60,10 @@ def _gh_auth_uncached() -> bool:
             text=True,
             timeout=15,
         )
-        return r.returncode == 0
     except Exception:
         return False
+    else:
+        return r.returncode == 0
 
 
 def gh_auth_ok(*, force: bool = False) -> bool:

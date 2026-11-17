@@ -69,7 +69,9 @@ def published_bounds(value: str | None) -> tuple[datetime | None, datetime | Non
     # unhashable argument before the function could reject it as invalid, and
     # rejecting non-strings with ValueError is part of this contract.
     if not isinstance(value, str):
-        raise ValueError(f"invalid published filter: {value}")
+        # ValueError, not TypeError: every rejection from this function is a
+        # ValueError, callers catch exactly that, and a test pins it.
+        raise ValueError(f"invalid published filter: {value}")  # noqa: TRY004
     return _published_bounds_cached(value)
 
 
@@ -96,13 +98,13 @@ def _published_bounds_cached(value: str) -> tuple[datetime | None, datetime | No
     if op == ">=":
         return first_dt, None
     if op == ">":
-        if first_dt.date() == datetime.max.date():
+        if first_dt.date() == datetime.max.date():  # noqa: DTZ901 - calendar bound
             raise ValueError(f"published filter is outside the supported range: {value}")
         return first_end + timedelta(microseconds=1), None
     if op == "<=":
         return None, first_end
     if op == "<":
-        if first_dt.date() == datetime.min.date():
+        if first_dt.date() == datetime.min.date():  # noqa: DTZ901 - calendar bound
             raise ValueError(f"published filter is outside the supported range: {value}")
         return None, first_dt - timedelta(microseconds=1)
     return first_dt, first_end

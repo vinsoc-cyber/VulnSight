@@ -283,9 +283,8 @@ class TestMigrationsFailLoudly(unittest.TestCase):
         self.assertEqual(sorted(self._versions()), before)
 
     def test_a_real_failure_is_raised_and_the_version_is_not_stamped(self):
-        broken = list(cache._MIGRATIONS) + [
-            (99, "UPDATE advisories SET data = no_such_function(data)")
-        ]
+        broken = [*cache._MIGRATIONS,
+                  (99, "UPDATE advisories SET data = no_such_function(data)")]
         with mock.patch.object(cache, "_MIGRATIONS", broken):
             with self.assertRaises(sqlite3.OperationalError):
                 cache.init_db(self.db)
@@ -294,15 +293,13 @@ class TestMigrationsFailLoudly(unittest.TestCase):
     def test_a_failed_migration_is_retried_on_the_next_start(self):
         """The whole point: the version must stay un-stamped so a fixed
         environment re-runs it."""
-        broken = list(cache._MIGRATIONS) + [
-            (99, "UPDATE advisories SET data = no_such_function(data)")
-        ]
+        broken = [*cache._MIGRATIONS,
+                  (99, "UPDATE advisories SET data = no_such_function(data)")]
         with mock.patch.object(cache, "_MIGRATIONS", broken):
             with self.assertRaises(sqlite3.OperationalError):
                 cache.init_db(self.db)
-        repaired = list(cache._MIGRATIONS) + [
-            (99, "ALTER TABLE advisories ADD COLUMN repaired INTEGER")
-        ]
+        repaired = [*cache._MIGRATIONS,
+                    (99, "ALTER TABLE advisories ADD COLUMN repaired INTEGER")]
         with mock.patch.object(cache, "_MIGRATIONS", repaired):
             cache.init_db(self.db)
         self.assertIn(99, self._versions())

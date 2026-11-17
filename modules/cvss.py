@@ -58,7 +58,9 @@ def base_score(vector: str) -> float | None:
     except KeyError:
         return None
     iss = 1 - (1 - c) * (1 - i) * (1 - a)
-    if scope == "U":
+    # Two named cases from CVSS v3.1 section 8.1, kept as a branch rather than
+    # a ternary so each line still matches the formula it implements.
+    if scope == "U":  # noqa: SIM108
         impact = 6.42 * iss
     else:
         impact = 7.52 * (iss - 0.029) - 3.25 * ((iss - 0.02) ** 15)

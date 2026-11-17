@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 
-import generate_cwe_catalog as gen  # noqa: E402
+import generate_cwe_catalog as gen
 
 NS = "http://cwe.mitre.org/cwe-7"
 
@@ -49,7 +49,7 @@ def _module_from(root):
     text = gen.render(root)
     compile(text, "<generated>", "exec")          # must be valid Python
     namespace: dict = {}
-    exec(compile(text, "<generated>", "exec"), namespace)  # noqa: S102
+    exec(compile(text, "<generated>", "exec"), namespace)
     return text, namespace
 
 

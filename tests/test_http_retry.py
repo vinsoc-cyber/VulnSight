@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from modules import http_retry  # noqa: E402
+from modules import http_retry
 
 
 def _http_error(code, retry_after=None):

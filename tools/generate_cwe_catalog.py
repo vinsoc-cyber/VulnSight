@@ -177,13 +177,13 @@ def render(root: ET.Element) -> str:
         "",
         "NAMES: dict[str, str] = {",
     ]
-    for cwe_id in sorted(names, key=key):
-        lines.append(f"    {cwe_id!r}: {names[cwe_id]!r},")
+    lines.extend(f"    {cwe_id!r}: {names[cwe_id]!r},"
+                 for cwe_id in sorted(names, key=key))
     lines.append("}")
     lines.append("")
     lines.append("ALIASES: dict[str, tuple[str, ...]] = {")
-    for cwe_id in sorted(aliases, key=key):
-        lines.append(f"    {cwe_id!r}: {tuple(aliases[cwe_id])!r},")
+    lines.extend(f"    {cwe_id!r}: {tuple(aliases[cwe_id])!r},"
+                 for cwe_id in sorted(aliases, key=key))
     lines.append("}")
     lines.append("")
     lines.append("# Abstraction level, shown in the picker so an umbrella CWE is obvious.")
@@ -198,8 +198,7 @@ def render(root: ET.Element) -> str:
     lines.append("}")
     lines.append("")
     lines.append("DEPRECATED: frozenset[str] = frozenset({")
-    for cwe_id in sorted(deprecated, key=key):
-        lines.append(f"    {cwe_id!r},")
+    lines.extend(f"    {cwe_id!r}," for cwe_id in sorted(deprecated, key=key))
     lines.append("})")
     lines.append("")
     return "\n".join(lines)
