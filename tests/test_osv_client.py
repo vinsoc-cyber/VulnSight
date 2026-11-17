@@ -262,6 +262,85 @@ class TestOneBadRecordDoesNotKillTheSearch(unittest.TestCase):
 
 
 
+class TestNormalisedPackagesCarryOnlyWhatIsRead(unittest.TestCase):
+    """purl, ranges and versions were written into every package and read
+    nowhere -- not by the UI, not by app.py, not by search_service -- while
+    being ~49% of the package payload and persisted verbatim into SQLite.
+    The one thing a reader wants out of `ranges` is the version window, which
+    sat hard-coded None right beside the raw copy."""
+
+    def _normalise(self, ranges=None, versions=None):
+        record = {
+            "id": "GHSA-x", "summary": "s", "details": "d",
+            "affected": [{
+                "package": {"ecosystem": "Go", "name": "example.com/p",
+                            "purl": "pkg:golang/example.com/p"},
+                "ranges": ranges if ranges is not None else [],
+                "versions": versions if versions is not None else [],
+            }],
+        }
+        return osv_client.normalize_osv(record)["packages"][0]
+
+    def test_the_unread_fields_are_gone(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}],
+            versions=["1.0.0", "1.1.0"])
+        for dropped in ("purl", "ranges", "versions"):
+            self.assertNotIn(dropped, pkg, dropped)
+
+    def test_what_is_read_is_still_there(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}])
+        self.assertEqual(pkg["ecosystem"], "Go")
+        self.assertEqual(pkg["name"], "example.com/p")
+        self.assertEqual(pkg["first_patched_version"], "1.2.3")
+        self.assertEqual(pkg["fixed_versions"], ["1.2.3"])
+
+    def test_the_version_range_is_populated_not_hard_coded_none(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}])
+        self.assertEqual(pkg["vulnerable_version_range"], ">= 1.0.0, < 1.2.3")
+
+    def test_range_shapes(self):
+        for ranges, expected in (
+            ([{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}],
+             ">= 1.0.0, < 1.2.3"),
+            # OSV writes "0" for "since the beginning"; not a bound worth showing.
+            ([{"events": [{"introduced": "0"}, {"fixed": "2.0.0"}]}], "< 2.0.0"),
+            ([{"events": [{"introduced": "1.5"}]}], ">= 1.5"),
+            ([{"events": [{"introduced": "0"}]}], None),
+            ([], None),
+        ):
+            with self.subTest(ranges=ranges):
+                self.assertEqual(osv_client._introduced_range(ranges), expected)
+
+
+class TestCachePathCannotEscapeTheCacheDir(unittest.TestCase):
+    """download_ecosystem is a public entry point taking an arbitrary string.
+    Every caller routes through ECOSYSTEM_MAP today, so this is hardening --
+    but "replace / and space" left ".." intact and the result is joined onto
+    CACHE_DIR."""
+
+    def test_traversal_attempts_stay_inside_the_cache_dir(self):
+        for hostile in ("../../etc/passwd", "../outside", "a/../../b"):
+            with self.subTest(name=hostile):
+                path = osv_client._zip_path(hostile)
+                self.assertEqual(
+                    os.path.dirname(os.path.abspath(path)),
+                    os.path.abspath(osv_client.CACHE_DIR))
+
+    def test_a_name_that_reduces_to_nothing_is_refused(self):
+        for hostile in ("..", "", "...", "."):
+            with self.subTest(name=hostile):
+                with self.assertRaises(osv_client.OsvError):
+                    osv_client._zip_path(hostile)
+
+    def test_a_real_ecosystem_name_still_works(self):
+        self.assertTrue(
+            osv_client._zip_path("GitHub Actions").endswith("GitHub_Actions.zip"))
+        self.assertTrue(osv_client._zip_path("Go").endswith("Go.zip"))
+
+
 class TestConcurrentLoadsParseOnce(unittest.TestCase):
     """The memo read was guarded and the download serialised, but the parse
     -- the expensive part -- ran unlocked.

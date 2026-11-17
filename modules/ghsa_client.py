@@ -16,6 +16,7 @@ until we hit `max_results` so the caller can bound cost.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -39,8 +40,19 @@ class GhCliError(RuntimeError):
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+@functools.lru_cache(maxsize=1)
+def gh_executable() -> str | None:
+    """Absolute path to `gh`, resolved once.
+
+    Invoking it by bare name resolved through the inherited PATH on every
+    call. gh_available() already did the lookup, so this reuses it and the
+    subprocess calls below get an absolute path.
+    """
+    return shutil.which("gh")
+
+
 def gh_available() -> bool:
-    return shutil.which("gh") is not None
+    return gh_executable() is not None
 
 
 #: How long a `gh auth status` result is reused. Logging in or out is rare;
@@ -55,7 +67,7 @@ def _gh_auth_uncached() -> bool:
         return False
     try:
         r = subprocess.run(
-            ["gh", "auth", "status"],
+            [gh_executable() or "gh", "auth", "status"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -145,7 +157,7 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
     on an empty body. `-i` includes response headers so we can read the Link
     header for the pagination cursor.
     """
-    cmd = ["gh", "api", "-i", "-X", "GET", path_with_query,
+    cmd = [gh_executable() or "gh", "api", "-i", "-X", "GET", path_with_query,
            "-H", "Accept: application/vnd.github+json"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
