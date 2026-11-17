@@ -87,10 +87,9 @@ CLASSIFY_TIMEOUT = int(os.environ.get(
 CLASSIFY_MAX_TOKENS = int(os.environ.get(
     "AI_CLASSIFY_MAX_TOKENS", "4096" if THINKING_ENABLED else "512"
 ))
-# Bumped to 3: the prompt now fences untrusted advisory fields and states
-# the task before the evidence, so verdicts cached under the old prompt
-# must not be reused.
-CLASSIFIER_VERSION = "3"
+# Bumped to 4: the fingerprint now covers base_url, max_tokens and the
+# thinking flag, so verdicts cached under the narrower key are retired.
+CLASSIFIER_VERSION = "4"
 
 
 class AIError(RuntimeError):
@@ -703,7 +702,14 @@ def classification_fingerprint(cfg: AIConfig, adv: dict, category: str) -> str:
     payload = {
         "version": CLASSIFIER_VERSION,
         "provider": cfg.provider,
+        # The endpoint, not just the provider name: a proxy and the real API
+        # answer to the same provider+model string and shared a cache.
+        "base_url": cfg.base_url,
         "model": cfg.model,
+        # Both can change the answer: max_tokens can truncate the reply, and
+        # thinking changes the reasoning that produces it.
+        "max_tokens": CLASSIFY_MAX_TOKENS,
+        "thinking": THINKING_ENABLED,
         "system": _SYSTEM_PROMPT,
         "user": _build_user_prompt(adv, category),
     }
@@ -758,6 +764,15 @@ def aggregate_category_verdicts(category_verdicts: dict[str, dict]) -> dict:
         aggregate["is_match"] = False
         aggregate["matched_category"] = chosen_category or None
 
+    # One shape from every branch. The error path omitted matched_category,
+    # and with no successes it omitted confidence/vuln_type/reason too, so
+    # the three branches returned three different dicts. The UI tolerated it
+    # because JS reads a missing key as undefined; a Python consumer, or the
+    # OpenAPI schema this should have, would not.
+    aggregate.setdefault("matched_category", None)
+    aggregate.setdefault("confidence", None)
+    aggregate.setdefault("vuln_type", None)
+    aggregate.setdefault("reason", None)
     aggregate["by_category"] = category_verdicts
     aggregate["scored_categories"] = sorted(successes)
     aggregate["has_errors"] = bool(errors)

@@ -682,6 +682,84 @@ class TestConfigDoesNotLeakKeys(unittest.TestCase):
         self.assertIn("keys=2", text)
 
 
+class TestVerdictShapeAndFingerprint(unittest.TestCase):
+    """Every branch of aggregate_category_verdicts must answer with the same
+    keys, and the fingerprint must cover everything that can change a
+    verdict."""
+
+    BRANCHES = {
+        "match": {"bac": {"is_match": True, "confidence": 0.9,
+                          "vuln_type": "t", "reason": "r"}},
+        "no match": {"bac": {"is_match": False, "confidence": 0.2,
+                             "vuln_type": "x", "reason": "y"}},
+        "error": {"bac": {"error": "boom", "has_errors": True}},
+        "mixed": {"bac": {"is_match": True, "confidence": 0.8,
+                          "vuln_type": "t", "reason": "r"},
+                  "xss": {"error": "boom", "has_errors": True}},
+    }
+
+    def test_every_branch_returns_the_same_keys(self):
+        """The error path omitted matched_category, and with no successes it
+        omitted confidence/vuln_type/reason too -- three branches, three
+        different dicts. static/app.js survived only because JS reads a
+        missing key as undefined."""
+        required = {"is_match", "matched_category", "confidence", "vuln_type",
+                    "reason", "by_category", "scored_categories",
+                    "has_errors", "errors", "cached"}
+        for label, verdicts in self.BRANCHES.items():
+            with self.subTest(branch=label):
+                out = ai_classifier.aggregate_category_verdicts(verdicts)
+                self.assertEqual(required - set(out), set(),
+                                 f"{label} is missing keys")
+
+    def test_an_error_branch_still_says_which_categories_scored(self):
+        out = ai_classifier.aggregate_category_verdicts(self.BRANCHES["mixed"])
+        self.assertEqual(out["scored_categories"], ["bac"])
+        self.assertTrue(out["has_errors"])
+        self.assertIn("xss", out["errors"])
+
+    def _cfg(self, **over):
+        kwargs = {"provider": "glm", "base_url": "https://a",
+                  "tokens": ["k"], "model": "m"}
+        kwargs.update(over)
+        return ai_classifier.AIConfig(**kwargs)
+
+    ADVISORY = {"advisory_id": "G", "ghsa_id": "G", "cve_id": "C",
+                "summary": "s", "description": "d", "cwes": [], "packages": []}
+
+    def _fp(self, cfg, category="bac"):
+        return ai_classifier.classification_fingerprint(cfg, self.ADVISORY, category)
+
+    def test_two_endpoints_do_not_share_a_verdict_cache(self):
+        """A proxy and the real API answer to the same provider+model string,
+        and shared a cache key."""
+        self.assertNotEqual(self._fp(self._cfg(base_url="https://a")),
+                            self._fp(self._cfg(base_url="https://b")))
+
+    def test_the_model_and_provider_still_separate_verdicts(self):
+        self.assertNotEqual(self._fp(self._cfg(model="m1")),
+                            self._fp(self._cfg(model="m2")))
+        self.assertNotEqual(self._fp(self._cfg(provider="glm")),
+                            self._fp(self._cfg(provider="anthropic")))
+
+    def test_max_tokens_and_thinking_are_part_of_the_key(self):
+        """max_tokens can truncate the reply; thinking changes the reasoning
+        that produces it."""
+        base = self._fp(self._cfg())
+        with mock.patch.object(ai_classifier, "CLASSIFY_MAX_TOKENS", 99):
+            self.assertNotEqual(self._fp(self._cfg()), base)
+        with mock.patch.object(ai_classifier, "THINKING_ENABLED",
+                               not ai_classifier.THINKING_ENABLED):
+            self.assertNotEqual(self._fp(self._cfg()), base)
+
+    def test_the_same_inputs_give_the_same_key(self):
+        self.assertEqual(self._fp(self._cfg()), self._fp(self._cfg()))
+
+    def test_a_different_category_gives_a_different_key(self):
+        self.assertNotEqual(self._fp(self._cfg(), "bac"),
+                            self._fp(self._cfg(), "sqli"))
+
+
 class TestPromptInjection(unittest.TestCase):
     """Advisory text is attacker-influenceable.
 
@@ -752,8 +830,21 @@ class TestPromptInjection(unittest.TestCase):
         self.assertLess(len(prompt), 6000)
 
     def test_the_fingerprint_changes_when_the_prompt_does(self):
-        """Verdicts cached under the pre-fence prompt must not be reused."""
-        self.assertEqual(ai_classifier.CLASSIFIER_VERSION, "3")
+        """Verdicts cached under the pre-fence prompt must not be reused.
+
+        Asserted as the property rather than a pinned version literal, which
+        only restated the constant and had to be edited every time it moved.
+        """
+        cfg = ai_classifier.AIConfig("glm", "https://x", ["k"], "m")
+        adv = {"advisory_id": "G", "ghsa_id": "G", "cve_id": "C",
+               "summary": "s", "description": "d", "cwes": [], "packages": []}
+        before = ai_classifier.classification_fingerprint(cfg, adv, "bac")
+        with mock.patch.object(ai_classifier, "CLASSIFIER_VERSION", "test"):
+            self.assertNotEqual(
+                ai_classifier.classification_fingerprint(cfg, adv, "bac"), before)
+        with mock.patch.object(ai_classifier, "_SYSTEM_PROMPT", "different"):
+            self.assertNotEqual(
+                ai_classifier.classification_fingerprint(cfg, adv, "bac"), before)
 
 
 class TestVerdictKeying(unittest.TestCase):
