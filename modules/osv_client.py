@@ -31,6 +31,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+from . import http_retry
 from .config import DATA_DIR
 from .cvss import base_score, is_v4_vector, severity_from_score
 from .cwe_categories import category_keywords, normalize_cwe_id
@@ -110,10 +111,25 @@ def download_ecosystem(osv_eco: str, force: bool = False,
         # then reported it as a generic "OSV fetch failed".
         url = f"{OSV_BASE}/{urllib.parse.quote(osv_eco)}/all.zip"
         req = urllib.request.Request(url, headers={"user-agent": USER_AGENT})
-        try:
+
+        def _once() -> bytes:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = resp.read()
+                return resp.read()
+
+        try:
+            data = http_retry.with_retries(
+                _once, what=f"OSV bulk {osv_eco}", attempts=2)
         except Exception as e:  # noqa: BLE001 - surface a clean message to the UI
+            # A stale export beats no export. The freshness check above only
+            # short-circuits on success, so once the zip was a day old a
+            # transient download failure dropped OSV from the search entirely
+            # -- while a perfectly usable copy sat on disk.
+            if not force and os.path.exists(path) and os.path.getsize(path) > 0:
+                age_hours = (time.time() - os.path.getmtime(path)) / 3600
+                logger.warning(
+                    "OSV refresh for %s failed (%s); using the cached copy, "
+                    "which is %.1f hours old", osv_eco, e, age_hours)
+                return path
             raise OsvError(f"could not download OSV bulk for {osv_eco}: {e}") from e
 
         if not zipfile.is_zipfile(io.BytesIO(data)):

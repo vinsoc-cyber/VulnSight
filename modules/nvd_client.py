@@ -27,7 +27,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from . import records
+from . import http_retry, records
 
 from .cwe_categories import normalize_cwe_id
 from .query_filters import published_bounds
@@ -105,7 +105,13 @@ def _build_date_windows(
 
 
 def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
-    """Make a single NVD API GET request and return parsed JSON."""
+    """Make a single NVD API GET request and return parsed JSON.
+
+    Transient failures are retried with backoff. NVD is the most
+    failure-prone source here -- one request per CWE per date window, rate
+    limited hard without an API key -- and it was the only client with no
+    retry at all, so a single 503 dropped that CWE from the results entirely.
+    """
     qs = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}"
                   for k, v in params.items())
     url = f"{NVD_BASE}?{qs}"
@@ -116,12 +122,27 @@ def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
         headers["apiKey"] = key
 
     req = urllib.request.Request(url, headers=headers)
-    try:
+
+    def _once() -> bytes:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+            return resp.read()
+
+    try:
+        data = http_retry.with_retries(_once, what="NVD request", attempts=3)
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            raise NvdError("NVD rate limit hit (HTTP 403). Try again in 30s or set NVD_API_KEY.") from e
+            # NVD returns 403 both for throttling and for a rejected key, and
+            # reporting only the former sent operators to the wrong fix.
+            detail = ""
+            try:
+                detail = (e.read() or b"")[:200].decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+            logger.warning("NVD 403: %s", detail or "(no body)")
+            raise NvdError(
+                "NVD refused the request (HTTP 403): rate limited, or "
+                "NVD_API_KEY is invalid. Try again in 30s, or check the key."
+            ) from e
         raise NvdError(f"NVD API HTTP {e.code}: {e.reason}") from e
     except Exception as e:
         raise NvdError(f"NVD API request failed: {e}") from e

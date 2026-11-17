@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import config
+from . import http_retry
 from .cwe_categories import category_cwes, category_description, category_label, cwe_label
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,11 @@ RETRY_BASE_DELAY = 1.5          # seconds; grows exponentially with jitter
 # unknown provider answering "Retry-After: 3600" must not park the only key
 # for an hour inside a request the user is holding open.
 _MAX_RATE_PAUSE = 120.0
-# 529 is Anthropic's `overloaded_error`, and its canonical retryable status.
-# Leaving it out turned a transient overload into a permanent per-advisory
-# failure: paid for, then recorded as "could not classify".
-RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529}
+# Shared with the GHSA/NVD/OSV/EPSS clients. 529 is Anthropic's
+# `overloaded_error` and its canonical retryable status; leaving it out turned
+# a transient overload into a permanent per-advisory failure -- paid for, then
+# recorded as "could not classify".
+RETRYABLE_STATUS = set(http_retry.RETRYABLE_STATUS)
 
 # glm-5.3 and similar models "think" for tens of seconds per advisory unless
 # thinking is turned off. Classification is a short JSON verdict — thinking is
@@ -214,27 +216,9 @@ def _parse_retry_after(value: str | None) -> float | None:
 
     The provider says exactly how long to wait; the code below used to guess
     30 or 60 seconds instead. Guessing short wastes a call; guessing long
-    parks a key that already works.
+    parks a key that already works. Shared with the other clients.
     """
-    if not value:
-        return None
-    text = str(value).strip()
-    try:
-        return max(0.0, float(text))          # delta-seconds form
-    except ValueError:
-        pass
-    try:                                       # HTTP-date form
-        from email.utils import parsedate_to_datetime
-
-        when = parsedate_to_datetime(text)
-        if when is None:
-            return None
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        delta = (when - datetime.now(timezone.utc)).total_seconds()
-        return max(0.0, delta)
-    except (TypeError, ValueError, OverflowError):
-        return None
+    return http_retry.parse_retry_after(value)
 
 
 def _classify_http_error(

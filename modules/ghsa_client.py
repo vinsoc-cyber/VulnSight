@@ -17,6 +17,7 @@ until we hit `max_results` so the caller can bound cost.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -25,7 +26,10 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlsplit
 
+from . import http_retry
 from .cwe_categories import normalize_cwe_id
+
+logger = logging.getLogger(__name__)
 
 
 class GhCliError(RuntimeError):
@@ -183,10 +187,40 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
     return data, next_url
 
 
+# GitHub answers through the `gh` CLI, so a transient failure arrives as a
+# subprocess result rather than an HTTPError. These are the ones worth another
+# attempt; anything else (a bad query, no credentials) will fail identically.
+_TRANSIENT_GH_MARKERS = (
+    "timed out", "502", "503", "504", "bad gateway", "service unavailable",
+    "gateway timeout", "connection reset", "connection refused",
+    "temporary failure", "eof", "tls handshake", "rate limit",
+)
+
+
+def _is_transient_gh_error(exc: BaseException) -> bool:
+    if not isinstance(exc, GhCliError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_GH_MARKERS)
+
+
+# A whole fetch, pagination included, may not outlast this. The 50-page guard
+# times a 60s per-call timeout was otherwise a 50-minute worst case inside one
+# request, against the 180s the shipped gunicorn config allows.
+FETCH_DEADLINE_SECONDS = 150.0
+
+
 def fetch_advisories(params: SearchParams) -> list[dict]:
-    """Fetch advisories following pagination up to params.max_results."""
+    """Fetch advisories following pagination up to params.max_results.
+
+    A page that fails transiently is retried. If it keeps failing, whatever
+    has already been collected is returned rather than discarded: losing 200
+    advisories because page 3 of 5 hit a 502 made a flaky page look like a
+    dead source.
+    """
     q = params.to_query()
     path = "/advisories?" + urlencode(q)
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
 
     results: list[dict] = []
     guard = 0
@@ -194,7 +228,22 @@ def fetch_advisories(params: SearchParams) -> list[dict]:
         guard += 1
         if guard > 50:  # safety: never loop forever
             break
-        batch, next_url = _run_gh_api(path)
+        if time.monotonic() >= deadline:
+            logger.warning("GHSA: stopping after %d page(s); fetch deadline reached", guard - 1)
+            break
+        try:
+            batch, next_url = http_retry.with_retries(
+                lambda p=path: _run_gh_api(p),
+                what=f"GHSA page {guard}",
+                deadline=deadline,
+                retryable=_is_transient_gh_error,
+            )
+        except GhCliError:
+            if not results:
+                raise          # nothing collected: the source really did fail
+            logger.warning("GHSA: keeping %d advisory(ies) from the pages that "
+                           "succeeded; a later page kept failing", len(results))
+            break
         if not isinstance(batch, list):
             raise GhCliError("unexpected GHSA response shape (expected a list)")
         results.extend(batch)

@@ -21,6 +21,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import http_retry
+
 logger = logging.getLogger(__name__)
 
 EPSS_BASE = "https://api.first.org/data/v1/epss"
@@ -68,9 +70,15 @@ def _fetch_batch(cve_ids: list[str], timeout: int = 30) -> dict[str, dict]:
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     req = urllib.request.Request(url, headers=headers)
 
-    try:
+    def _once() -> bytes:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+            return resp.read()
+
+    try:
+        # Retried like every other upstream. This client used to swallow
+        # everything and return {} on the first failure, which is how an EPSS
+        # outage became a silently unranked result set.
+        data = http_retry.with_retries(_once, what="EPSS request", attempts=2)
     except urllib.error.HTTPError as exc:
         logger.warning("EPSS API HTTP %d: %s", exc.code, exc.reason)
         return {}
