@@ -1,9 +1,8 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 543: 517 offline + 26 browser
+.venv/bin/python -m unittest discover -s tests        # 604 tests: 578 offline + 26 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
-.venv/bin/python -m pytest tests/ -q                  # if you prefer pytest
 .venv/bin/python tests/test_app.py                    # a single file
 ```
 
@@ -14,22 +13,27 @@ OSV and the AI provider are all mocked.
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_app.py` | 66 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract, AI cost cap |
-| `test_ai_classifier.py` | 37 | prompt, verdict aggregation, key rotation, cooldowns |
-| `test_search_service.py` | 36 | query parsing, merge/dedupe, sort, filters |
-| `test_security.py` | 33 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
-| `test_cwe_categories.py` | 30 | taxonomy invariants, `cwe:<id>`, picker catalog |
-| `test_nvd_client.py` | 21 | date windowing, normalisation, rate-limit handling |
-| `test_ui_e2e.py` | 21 | the real UI in a browser — *optional*, see below |
-| `test_cvss.py` | 13 | v3.0/3.1 base scores against spec vectors |
+| `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
+| `test_ai_classifier.py` | 73 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_app.py` | 70 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
+| `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
+| `test_security.py` | 40 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
+| `test_nvd_client.py` | 31 | date windowing, normalisation, rate-limit and 403 handling |
+| `test_http_retry.py` | 27 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
+| `test_osv_client.py` | 26 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
+| `test_ui_e2e.py` | 26 | the real UI in a browser — *optional*, see below |
+| `test_cache.py` | 20 | SQLite lifecycle, migrations, the v4 id backfill |
+| `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
+| `test_jobs.py` | 19 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
+| `test_ghsa_client.py` | 18 | `gh` invocation, cursor pagination, `Link` parsing |
+| `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
+| `test_docs.py` | 17 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
+| `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
+| `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 12 | batching, malformed responses |
-| `test_docs.py` | 11 | doc/code agreement: quoted numbers, routes, env vars, links |
-| `test_osv_client.py` | 11 | zip parsing, CWE and keyword filters |
-| `test_cache.py` | 9 | SQLite lifecycle, migrations, the v4 id backfill |
-| `test_ghsa_client.py` | 9 | `gh` invocation, cursor pagination |
-| `test_jobs.py` | 9 | job lifecycle, orphan recovery, error redaction, pruning |
-| `test_openapi.py` | 9 | spec/route agreement, and real responses against the schemas |
-| `test_query_filters.py` | 4 | shared published/affects/severity predicates |
+| `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
+| `test_config.py` | 8 | `.env` parsing, `DATA_DIR`, numeric knobs |
+| `test_query_filters.py` | 5 | shared published/affects/severity predicates |
 | `test_frontend_js.py` | 1 | runs every `tests/*.js` under node |
 
 ## Frontend helper tests (node)
@@ -54,11 +58,11 @@ a third-party dependency and it **skips itself** unless both pieces are present:
 ```bash
 pip install -r requirements-dev.txt
 playwright install chromium          # or rely on a system Chrome
-.venv/bin/python -m unittest discover -s tests    # the 21 e2e tests join in
+.venv/bin/python -m unittest discover -s tests    # the 26 e2e tests join in
 ```
 
-Verified: with Playwright absent the suite reports `270 passed, 21 skipped`, and
-`unittest discover` reports `OK (skipped=21)`.
+Verified by hiding the import: `unittest discover` reports
+`Ran 602 tests` / `OK (skipped=26)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -90,25 +94,68 @@ cannot hide inside a passing run.
 
 ## Verifying a change
 
-Type checking is not configured in this repo, so "it imports" is not evidence.
-Linting is: `ruff.toml` selects the bug-finding rules (pyflakes, bugbear,
-bandit, naive-datetime, dead code) rather than ruff's default four, and every
-ignore in it states why. The tree is clean under it, so a new finding is a
-real one.
-For anything touching behaviour:
-
 ```bash
-python -m pytest tests/ -q                  # everything
-python -m ruff check .                      # lint (config in ruff.toml)
-node --check static/app.js                  # JS parses
-python -c "import app; app.create_app()"    # the app actually builds
+.venv/bin/python -m unittest discover -s tests   # everything
+ruff check .                                     # lint (config in ruff.toml)
+pyright                                          # types (config in pyrightconfig.json)
+node tests/test_frontend_security.js             # JS helpers, lifted from app.js
+node tests/test_frontend_finder.js
 ```
 
-Then **exercise the thing you changed**. If it has a UI surface, add or extend a
-case in `test_ui_e2e.py` rather than reasoning about it: several defects in this
-codebase looked correct in the source and were only visible in a rendered page.
+**Lint.** `ruff.toml` selects the bug-finding rules (pyflakes, bugbear, bandit,
+naive-datetime, dead code) rather than ruff's default four, and every ignore in
+it states why. The tree is clean under it, so a new finding is a real one.
 
-If you fix a bug, first write the assertion that fails, then fix it, then confirm
-that removing the fix makes it fail again. Two findings in this repo's history
-were measurement artifacts that would have been committed as facts without that
-last step.
+One caution learned here: a narrowed `--select` makes `RUF100` lie. Under a
+restricted rule set it reported a live `# noqa: E402` as unused, because the
+rule it suppressed was not enabled in that run. Removing the `noqa` broke the
+default `ruff check` immediately. Trust `ruff check .`, not a narrowed run.
+
+**Types.** `pyrightconfig.json` runs pyright in standard mode over `app.py`,
+`modules/`, `tools/` and `tests/`. Strict mode would mean annotating every
+JSON-shaped dict that crosses an API boundary for little gain. Where a test
+deliberately passes a type the signature forbids — that *is* the test — the
+call site uses an explicit `cast(Any, ...)` with a comment, never a blanket
+`# type: ignore`.
+
+**Coverage.** `.coveragerc` measures `app.py`, `modules/` and `tools/` with
+branch coverage:
+
+```bash
+.venv/bin/python -m coverage run -m unittest discover -s tests
+.venv/bin/python -m coverage report
+```
+
+Pass coverage the *module* name `app`, not the path `app.py` — a path there is
+accepted silently, measures nothing, and in this repo it also perturbed nine
+unrelated tests into failing. `.coveragerc` has it right; the warning is for
+anyone running coverage by hand.
+
+## Proving a fix is actually locked
+
+A green suite says nothing about *which* fixes it defends. This suite was green
+before the fixes in [review dispositions](review-dispositions.md) too — it did
+not test the broken behaviour.
+
+```bash
+.venv/bin/python tools/revert_checks.py            # all checks
+.venv/bin/python tools/revert_checks.py cooldown   # one, by label
+```
+
+For each of 24 named bugs it re-introduces the bug in the working tree, runs the
+test module that should notice, and requires the suite to go **red**, then
+restores the file. A revert that leaves the suite green means that fix is not
+covered, whatever any summary claims. It writes to tracked files — it restores
+them in a `finally` and verifies the tree is clean on exit, but do not run it on
+a dirty tree you care about.
+
+It earns its keep. Its first run found three uncovered fixes. Two were real
+gaps: GHSA record degradation was never driven through `run_search`, and the
+`Link`-header test had reimplemented the parser instead of calling it, so it
+stayed green while the shipped parser was broken. The third was the harness's
+own limitation — the cooldown fix takes a `max()` in two places, so reverting
+either alone leaves the behaviour correct. It reverts whole fixes now, not
+single edits.
+
+If you fix a bug: write the failing assertion first, then fix it, then add a
+`CHECKS` entry so the next person cannot quietly unfix it.

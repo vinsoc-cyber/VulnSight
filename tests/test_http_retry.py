@@ -14,19 +14,13 @@ import sys
 import time
 import unittest
 import urllib.error
-from email.message import Message
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules import http_retry
-
-
-def _http_error(code, retry_after=None):
-    headers = Message()
-    if retry_after is not None:
-        headers["Retry-After"] = retry_after
-    return urllib.error.HTTPError("u", code, "err", headers, io.BytesIO(b"{}"))
+from samples import http_error
 
 
 class TestRetryAfterParsing(unittest.TestCase):
@@ -47,16 +41,32 @@ class TestRetryAfterParsing(unittest.TestCase):
         for value in (None, "", "   ", "soon", "NaN-ish"):
             self.assertIsNone(http_retry.parse_retry_after(value), repr(value))
 
+    def test_a_date_with_no_timezone_is_read_as_utc(self):
+        """RFC 9110 requires GMT, and real servers still omit it. Treating a
+        naive datetime as UTC keeps the wait finite; subtracting it from an
+        aware `now` would raise TypeError and lose the header entirely."""
+        value = http_retry.parse_retry_after("Wed, 21 Oct 2099 07:28:00")
+        self.assertIsNotNone(value)
+        assert value is not None
+        self.assertGreater(value, 0)
+
+    def test_a_date_parser_returning_none_is_not_a_crash(self):
+        """parsedate_to_datetime raises on bad input in 3.12 but returned
+        None in older versions, and this runs against whatever is installed."""
+        with mock.patch("email.utils.parsedate_to_datetime", return_value=None):
+            self.assertIsNone(
+                http_retry.parse_retry_after("Wed, 21 Oct 2099 07:28:00 GMT"))
+
 
 class TestWhatCountsAsRetryable(unittest.TestCase):
     def test_gateway_and_throttle_statuses_retry(self):
         for code in (408, 429, 500, 502, 503, 504, 529):
-            self.assertTrue(http_retry.is_retryable(_http_error(code)), code)
+            self.assertTrue(http_retry.is_retryable(http_error(code)), code)
 
     def test_client_errors_do_not_retry(self):
         """Retrying a bad request only spends quota to fail identically."""
         for code in (400, 401, 403, 404, 422):
-            self.assertFalse(http_retry.is_retryable(_http_error(code)), code)
+            self.assertFalse(http_retry.is_retryable(http_error(code)), code)
 
     def test_network_level_failures_retry(self):
         self.assertTrue(http_retry.is_retryable(urllib.error.URLError("reset")))
@@ -65,8 +75,25 @@ class TestWhatCountsAsRetryable(unittest.TestCase):
     def test_retry_after_is_honoured_for_429_only(self):
         """A 503 with a generous Retry-After would otherwise stall a request
         far longer than plain backoff, and is usually gone next attempt."""
-        self.assertEqual(http_retry.retry_after_of(_http_error(429, "12")), 12.0)
-        self.assertIsNone(http_retry.retry_after_of(_http_error(503, "600")))
+        self.assertEqual(http_retry.retry_after_of(http_error(429, retry_after="12")), 12.0)
+        self.assertIsNone(http_retry.retry_after_of(http_error(503, retry_after="600")))
+
+    def test_a_429_carrying_no_headers_at_all_is_none_not_a_crash(self):
+        """urllib builds the HTTPError, but a mocked or wrapped opener can
+        hand back one with hdrs=None, and this runs on the failure path."""
+        error = http_error(429, headers=None)
+        self.assertIsNone(http_retry.retry_after_of(error))
+
+    def test_a_header_lookup_that_raises_is_none_not_a_crash(self):
+        error = http_error(429, retry_after="12")
+        broken = mock.Mock()
+        broken.get.side_effect = RuntimeError("header store is gone")
+        with mock.patch.object(type(error), "headers",
+                               mock.PropertyMock(return_value=broken)):
+            self.assertIsNone(http_retry.retry_after_of(error))
+
+    def test_a_non_http_exception_has_no_advice(self):
+        self.assertIsNone(http_retry.retry_after_of(OSError("connection reset")))
 
 
 class TestWithRetries(unittest.TestCase):
@@ -82,7 +109,7 @@ class TestWithRetries(unittest.TestCase):
         def flaky():
             calls["n"] += 1
             if calls["n"] < 3:
-                raise _http_error(503)
+                raise http_error(503)
             return "ok"
 
         result = http_retry.with_retries(
@@ -96,7 +123,7 @@ class TestWithRetries(unittest.TestCase):
 
         def bad():
             calls["n"] += 1
-            raise _http_error(400)
+            raise http_error(400)
 
         with self.assertRaises(urllib.error.HTTPError):
             http_retry.with_retries(bad, what="t", attempts=3, sleep=self._sleep)
@@ -105,7 +132,7 @@ class TestWithRetries(unittest.TestCase):
 
     def test_the_last_failure_is_raised_when_the_budget_runs_out(self):
         def always():
-            raise _http_error(502)
+            raise http_error(502)
 
         with self.assertRaises(urllib.error.HTTPError) as caught:
             http_retry.with_retries(always, what="t", attempts=2, sleep=self._sleep)
@@ -117,7 +144,7 @@ class TestWithRetries(unittest.TestCase):
         def throttled():
             calls["n"] += 1
             if calls["n"] == 1:
-                raise _http_error(429, "7")
+                raise http_error(429, retry_after="7")
             return "ok"
 
         http_retry.with_retries(throttled, what="t", attempts=2, sleep=self._sleep)
@@ -131,7 +158,7 @@ class TestWithRetries(unittest.TestCase):
         def throttled():
             calls["n"] += 1
             if calls["n"] == 1:
-                raise _http_error(429, "3600")
+                raise http_error(429, retry_after="3600")
             return "ok"
 
         http_retry.with_retries(throttled, what="t", attempts=2, sleep=self._sleep)
@@ -142,7 +169,7 @@ class TestWithRetries(unittest.TestCase):
 
         def always():
             calls["n"] += 1
-            raise _http_error(503)
+            raise http_error(503)
 
         with self.assertRaises(urllib.error.HTTPError):
             http_retry.with_retries(
@@ -152,13 +179,39 @@ class TestWithRetries(unittest.TestCase):
 
     def test_a_retry_that_would_overrun_the_deadline_is_not_slept(self):
         def always():
-            raise _http_error(503)
+            raise http_error(503)
 
         with self.assertRaises(urllib.error.HTTPError):
             http_retry.with_retries(
                 always, what="t", attempts=5,
                 deadline=time.monotonic() + 0.01, sleep=self._sleep)
         self.assertEqual(self.slept, [])
+
+    def test_a_deadline_that_passes_during_a_sleep_stops_the_loop(self):
+        """The other deadline test never reaches the top-of-loop guard: it
+        refuses the sleep first. Here the first retry is affordable and the
+        budget is gone by the time it wakes, which is the path that breaks
+        out of the loop and re-raises the exception it was holding."""
+        calls = {"n": 0}
+
+        def always():
+            calls["n"] += 1
+            raise http_error(503)
+
+        # Call 1 is the "can I afford this sleep?" check; call 2 is the
+        # top-of-loop guard on the second attempt, by which time time is up.
+        clock = iter([0.0, 1000.0])
+        with mock.patch.object(http_retry.time, "monotonic",
+                               side_effect=lambda: next(clock)), \
+                self.assertLogs(http_retry.logger, "WARNING") as logs, \
+                self.assertRaises(urllib.error.HTTPError):
+            http_retry.with_retries(always, what="t", attempts=5,
+                                    base_delay=0.1, deadline=100.0,
+                                    sleep=self._sleep)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(len(self.slept), 1, "the affordable retry must sleep")
+        self.assertTrue(any("out of time after 1 attempt(s)" in line
+                            for line in logs.output), logs.output)
 
     def test_a_custom_predicate_overrides_the_status_rule(self):
         """The GHSA client talks to GitHub through the `gh` CLI, so it never
@@ -211,7 +264,7 @@ class TestNvdRetries(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             calls["n"] += 1
             if calls["n"] == 1:
-                raise _http_error(503)
+                raise http_error(503)
             return mock.MagicMock(
                 __enter__=lambda s: io.BytesIO(b'{"vulnerabilities": []}'),
                 __exit__=lambda *a: None)
@@ -228,7 +281,7 @@ class TestNvdRetries(unittest.TestCase):
         from modules import nvd_client
 
         def fake_urlopen(req, timeout=None):
-            raise _http_error(403)
+            raise http_error(403)
 
         with mock.patch.object(nvd_client.urllib.request, "urlopen", fake_urlopen):
             with self.assertRaises(nvd_client.NvdError) as caught:

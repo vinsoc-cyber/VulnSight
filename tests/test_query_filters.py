@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -70,9 +71,11 @@ class TestCommonFilters(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     query_filters.published_bounds(value)
 
-        self.assertFalse(query_filters.valid_published_filter([]))
+        # A repeated query parameter arrives as a list, not a str: the wrong
+        # type here is the case under test.
+        self.assertFalse(query_filters.valid_published_filter(cast(Any, [])))
         with self.assertRaises(ValueError):
-            query_filters.published_bounds([])
+            query_filters.published_bounds(cast(Any, []))
 
 
 if __name__ == "__main__":

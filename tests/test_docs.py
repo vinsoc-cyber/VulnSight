@@ -6,6 +6,8 @@ figures from the code and fail when a doc drifts, and they check that every
 internal link resolves.
 """
 
+import contextlib
+import io
 import os
 import re
 import sys
@@ -17,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import app as app_module
 from modules import cwe_catalog
+from tools import (revert_checks, sync_bug_classes_doc, sync_module_map,
+                   sync_testing_doc)
 from modules.cwe_categories import CATEGORIES, picker_catalog, resolve_cwes
 from modules.search_service import MAX_CATEGORY_INPUTS
 
@@ -170,28 +174,122 @@ class TestDocsMatchTheCode(unittest.TestCase):
 
         listed = {}
         for name, claimed in rows:
-            path = name if os.sep in name or "/" in name else None
-            for candidate in (name, f"modules/{name}", f"static/{name}",
-                              f"templates/{name}"):
-                full = os.path.join(ROOT, candidate)
-                if os.path.isfile(full):
-                    path = candidate
-                    break
+            # sync_module_map.resolve, not a second copy of it: this test used
+            # to carry its own candidate-directory list, and when the map grew
+            # a tools/ section the two disagreed about where to look.
+            path = sync_module_map.resolve(name)
             self.assertIsNotNone(path, f"module map lists {name}, which does not exist")
             assert path is not None
-            listed[path] = int(claimed)
-            actual = len(_read(os.path.join(ROOT, path)).splitlines())
+            rel = path.relative_to(ROOT).as_posix()
+            listed[rel] = int(claimed)
+            actual = len(_read(str(path)).splitlines())
             self.assertEqual(
                 actual, int(claimed),
-                f"docs/architecture.md says {path} is {claimed} lines; it is {actual}")
+                f"docs/architecture.md says {rel} is {claimed} lines; it is {actual}")
 
         # And the map has to stay complete, or a new module hides from it.
         on_disk = {
-            f"modules/{f}" for f in os.listdir(os.path.join(ROOT, "modules"))
+            f"{d}/{f}" for d in ("modules", "tools")
+            for f in os.listdir(os.path.join(ROOT, d))
             if f.endswith(".py") and f != "__init__.py"
         }
         self.assertEqual(on_disk - set(listed), set(),
                          "modules missing from the docs/architecture.md map")
+
+    def test_the_sync_tools_agree_that_the_docs_are_current(self):
+        """Both generators have a --check mode, and nothing ran it. A doc the
+        tool would rewrite is a doc that has drifted, whatever the targeted
+        assertions above happen to cover."""
+        for tool in (sync_module_map, sync_bug_classes_doc, sync_testing_doc):
+            with self.subTest(tool=tool.__name__), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    tool.main(["--check"]), 0,
+                    f"python {tool.__name__.replace('.', '/')}.py would rewrite "
+                    "a doc; run it and commit the result")
+
+    def test_the_testing_doc_counts_match_the_suite(self):
+        """docs/testing.md tallies tests per file and states a suite total.
+        Both were hand-typed and both had drifted. A count in a doc is either
+        derived or wrong, so derive it: a test method is a `def test_` at
+        class-method indentation, which matches what the loader collects."""
+        text = self.text["docs/testing.md"]
+        actual = {}
+        for path in sorted(os.listdir(os.path.join(ROOT, "tests"))):
+            if not (path.startswith("test_") and path.endswith(".py")):
+                continue
+            body = _read(os.path.join(ROOT, "tests", path))
+            actual[path] = len(re.findall(r"^    def test_", body, re.M))
+
+        rows = dict(re.findall(r"^\| `(test_\w+\.py)` \| (\d+) \|", text, re.M))
+        self.assertEqual(
+            set(rows), set(actual),
+            "docs/testing.md lists a different set of test files than tests/")
+        for name, claimed in rows.items():
+            self.assertEqual(
+                int(claimed), actual[name],
+                f"docs/testing.md says {name} has {claimed} tests; it has "
+                f"{actual[name]}")
+
+        stated = re.search(r"# (\d+) tests", text)
+        self.assertIsNotNone(stated, "docs/testing.md states no suite total")
+        assert stated is not None
+        self.assertEqual(int(stated.group(1)), sum(actual.values()))
+
+    def test_no_doc_tells_the_reader_to_run_a_tool_we_do_not_ship(self):
+        """Four pages told the reader to run `pytest`, which is in neither
+        requirements file and is not installed -- one of them quoting a pass
+        count nobody could reproduce. A documented command that cannot run is
+        worse than no command: it makes the rest of the page look checked."""
+        declared = ""
+        for name in ("requirements.txt", "requirements-dev.txt"):
+            path = os.path.join(ROOT, name)
+            if os.path.isfile(path):
+                declared += _read(path).lower()
+
+        for tool in ("pytest", "tox", "nox", "mypy"):
+            if tool in declared:
+                continue
+            for path in _markdown_files():
+                with self.subTest(tool=tool, doc=os.path.basename(path)):
+                    self.assertNotIn(
+                        f"-m {tool}", _read(path),
+                        f"{os.path.basename(path)} tells the reader to run "
+                        f"{tool}, which no requirements file declares")
+
+    def test_the_revert_check_count_in_the_docs_is_derived(self):
+        """Two pages state how many bugs `tools/revert_checks.py` guards, and
+        one of them states the pass tally. Adding a check used to leave both
+        behind, which makes the strongest evidence in these docs the least
+        trustworthy number in them."""
+        total = len(revert_checks.CHECKS)
+        for name, text in self.text.items():
+            if "revert_checks.py" not in text:
+                continue
+            for claimed in re.findall(r"(\d+) named bugs", text):
+                with self.subTest(doc=name):
+                    self.assertEqual(
+                        int(claimed), total,
+                        f"{name} says {claimed} named bugs; CHECKS has {total}")
+            for a, b in re.findall(r"\*\*(\d+)/(\d+) caught\*\*", text):
+                with self.subTest(doc=name):
+                    self.assertEqual(
+                        (int(a), int(b)), (total, total),
+                        f"{name} claims {a}/{b}; CHECKS has {total}")
+
+    def test_the_stated_suite_size_matches_the_suite(self):
+        """`docs/review-dispositions.md` quotes a pass count as evidence. A
+        stale number there undercuts the whole page."""
+        actual = 0
+        for path in sorted(os.listdir(os.path.join(ROOT, "tests"))):
+            if path.startswith("test_") and path.endswith(".py"):
+                actual += len(re.findall(
+                    r"^    def test_", _read(os.path.join(ROOT, "tests", path)), re.M))
+        text = self.text["docs/review-dispositions.md"]
+        claimed = re.search(r"\| (\d+) pass \|", text)
+        self.assertIsNotNone(claimed, "no pass count stated")
+        assert claimed is not None
+        self.assertEqual(int(claimed.group(1)), actual)
 
     def test_every_route_is_documented(self):
         # Only the URL map is wanted here. Without an declared bind, create_app()

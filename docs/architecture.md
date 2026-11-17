@@ -8,30 +8,34 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                591   Flask routes, request guards, response headers
+app.py                     591   Flask routes, request guards, response headers
 modules/
-  config.py            69   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py   870   the pipeline: parse -> fetch -> merge -> sort -> enrich
-  query_filters.py    149   one filter vocabulary, applied after the merge
-  records.py           69   per-record normalize guard shared by the clients
-  http_retry.py        165   one retry/backoff policy for all four upstreams
-  cwe_categories.py   754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
-  cwe_catalog.py     1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py      326   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py       396   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py       500   bulk export download, parse, CWE + keyword filters
-  epss_client.py      113   FIRST EPSS scores, batched
-  cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py            483   SQLite: advisories + verdicts, jobs, migrations
-  jobs.py             218   submit/poll queue for searches too slow to hold open
-  ai_classifier.py   1051   provider client, prompt, verdict cache, key rotation
-  openapi.py          572   the OpenAPI description of /api/v1
-  security.py         439   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html  368   page shell -- HTML and Jinja only
-static/app.js        1703   all UI logic; server data arrives via window.BOOT
-static/style.css     1732   design tokens + components, light and dark
-tools/generate_cwe_catalog.py                       226   regenerates modules/cwe_catalog.py from MITRE XML
-tools/sync_module_map.py                        69   rewrites the line counts in this very table
+  config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
+  search_service.py        879   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  query_filters.py         149   one filter vocabulary, applied after the merge
+  records.py                69   per-record normalize guard shared by the clients
+  http_retry.py            165   one retry/backoff policy for all four upstreams
+  cwe_categories.py        754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
+  ghsa_client.py           326   `gh api /advisories`, cursor pagination, normalize()
+  nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
+  osv_client.py            500   bulk export download, parse, CWE + keyword filters
+  epss_client.py           113   FIRST EPSS scores, batched
+  cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
+  cache.py                 483   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py                  218   submit/poll queue for searches too slow to hold open
+  ai_classifier.py        1051   provider client, prompt, verdict cache, key rotation
+  openapi.py               572   the OpenAPI description of /api/v1
+  security.py              439   bind/exposure checks, CSRF origin check, rate limiter
+templates/index.html       368   page shell -- HTML and Jinja only
+static/app.js             1703   all UI logic; server data arrives via window.BOOT
+static/style.css          1732   design tokens + components, light and dark
+tools/
+  generate_cwe_catalog.py  226   regenerates modules/cwe_catalog.py from MITRE XML
+  revert_checks.py         276   reverts each fix, asserts the suite goes red
+  sync_bug_classes_doc.py   93   rewrites the class tables in bug-classes.md
+  sync_module_map.py       124   rewrites the line counts in this very table
+  sync_testing_doc.py      104   rewrites the per-file test counts in testing.md
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

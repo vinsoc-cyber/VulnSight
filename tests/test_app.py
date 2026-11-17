@@ -7,11 +7,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import io
 import tempfile
 import time
 import unittest
-import urllib.error
 from unittest import mock
 
 from modules import ai_classifier
@@ -19,7 +17,10 @@ from modules import cache
 from modules import ghsa_client as ghsa
 from modules import nvd_client
 from modules import osv_client
-from samples import NVD_VULN, OSV_GHSA, SAMPLE, SORT_A, SORT_B, SORT_C, make_sortable_raw
+from samples import (
+    NVD_VULN, OSV_GHSA, SAMPLE, SORT_A, SORT_B, SORT_C, http_error,
+    make_sortable_raw,
+)
 
 import app as app_module
 
@@ -560,12 +561,12 @@ class TestFlaskApp(unittest.TestCase):
 
     def test_ai_test_hides_provider_error_body(self):
         cfg = ai_classifier.AIConfig("glm", "https://x", ["tok"], "m")
-        err = urllib.error.HTTPError(
+        err = http_error(
+            401,
             url="https://x/chat/completions",
-            code=401,
-            msg="Unauthorized",
-            hdrs=None,
-            fp=io.BytesIO(b'{"error":"invalid api_key sk-secret-abc"}'),
+            reason="Unauthorized",
+            headers=None,
+            body=b'{"error":"invalid api_key sk-secret-abc"}',
         )
         with mock.patch("modules.ai_classifier.load_config", return_value=cfg), \
              mock.patch("urllib.request.urlopen", side_effect=err):
@@ -580,12 +581,12 @@ class TestFlaskApp(unittest.TestCase):
     def test_ai_classify_hides_provider_error_body(self):
         cache.upsert_advisories([ghsa.normalize(SAMPLE)], cache.DB_PATH)
         cfg = ai_classifier.AIConfig("glm", "https://x", ["tok"], "m")
-        err = urllib.error.HTTPError(
+        err = http_error(
+            403,
             url="https://x/chat/completions",
-            code=403,
-            msg="Forbidden",
-            hdrs=None,
-            fp=io.BytesIO(b'{"error":"token ghp_LEAKED rejected"}'),
+            reason="Forbidden",
+            headers=None,
+            body=b'{"error":"token ghp_LEAKED rejected"}',
         )
         with mock.patch("modules.ai_classifier.load_config", return_value=cfg), \
              mock.patch("urllib.request.urlopen", side_effect=err):

@@ -1,0 +1,23 @@
+# Coverage is measured over the shipped code, not the tests that drive it.
+#
+# `source` names the packages and the one top-level module rather than ".",
+# so a stray script in the repo root cannot quietly drag the total down --
+# and so an omitted file still shows as 0% instead of vanishing.
+[run]
+source =
+    app
+    modules
+    tools
+branch = True
+omit =
+    # The revert-check harness edits tracked source files and runs unittest
+    # in a subprocess. It is verification *of* the suite, so it cannot be
+    # measured *by* the suite; run it directly: python tools/revert_checks.py
+    tools/revert_checks.py
+
+[report]
+skip_covered = False
+exclude_also =
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:

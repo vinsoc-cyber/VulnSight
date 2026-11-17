@@ -14,3 +14,8 @@ advisories.db-shm
 osv_cache/
 .vulnsight_api_token
 .ai_key_cooldown.json
+
+# Coverage data (regenerate with: python -m coverage run -m unittest discover -s tests)
+.coverage
+.coverage.*
+htmlcov/

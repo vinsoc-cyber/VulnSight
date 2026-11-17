@@ -131,16 +131,25 @@ class UITestCase(unittest.TestCase):
             cls.browser = _launch(cls.playwright)
         except Exception as exc:  # pragma: no cover - no browser available
             cls.playwright.stop()
-            cls.server.shutdown()
+            cls._stop_server()
             cache.DB_PATH = cls._orig_db
             raise unittest.SkipTest(f"no usable browser: {exc}") from exc
         cls.base = f"http://127.0.0.1:{cls.port}/"
 
     @classmethod
+    def _stop_server(cls):
+        """shutdown() only stops serve_forever; the listening socket stays
+        open until server_close(). Without it each test class leaked a
+        descriptor and held its port for the rest of the run."""
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    @classmethod
     def tearDownClass(cls):
         cls.browser.close()
         cls.playwright.stop()
-        cls.server.shutdown()
+        cls._stop_server()
         cache.DB_PATH = cls._orig_db
         if cls._orig_bind is None:
             os.environ.pop("VULNSIGHT_BIND", None)

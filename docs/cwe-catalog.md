@@ -109,7 +109,7 @@ When MITRE publishes a new release:
 ```bash
 python tools/generate_cwe_catalog.py                 # downloads the latest
 python tools/generate_cwe_catalog.py path/to.xml     # or use a local copy
-python -m pytest tests/test_cwe_categories.py        # verifies the invariants
+python -m unittest discover -s tests -p test_cwe_categories.py   # the invariants
 ```
 
 The generator is deterministic — the same input produces a byte-identical module.

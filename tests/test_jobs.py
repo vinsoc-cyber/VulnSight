@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sqlite3
 import tempfile
 import unittest
+from typing import Any, cast
 from unittest import mock
 
 from modules import cache, jobs
@@ -27,6 +28,14 @@ def _wait_for(job_id, path, statuses=("done", "failed"), timeout=10.0):
             return job
         time.sleep(0.01)
     raise AssertionError(f"job {job_id} never reached {statuses}")
+
+
+def _job(job_id, path):
+    """cache.get_job() is Optional; every call routed through here expects
+    a row that exists, so a missing one is a test failure, not a None."""
+    row = cache.get_job(job_id, path=path)
+    assert row is not None, f"no job row for {job_id}"
+    return row
 
 
 class TestJobLifecycle(unittest.TestCase):
@@ -112,7 +121,7 @@ class TestJobLifecycle(unittest.TestCase):
         failed = jobs.startup(path=self.tmp.name)
         self.assertEqual(failed, 2)
         for job_id in ("a" * 24, "b" * 24):
-            job = cache.get_job(job_id, path=self.tmp.name)
+            job = _job(job_id, self.tmp.name)
             self.assertEqual(job["status"], "failed")
             self.assertEqual(job["error_status"], 503)
             self.assertIn("restart", job["error"].lower())
@@ -130,7 +139,7 @@ class TestJobLifecycle(unittest.TestCase):
         failed = jobs.startup(path=self.tmp.name)
         self.assertEqual(failed, 0)
         self.assertEqual(
-            cache.get_job("c" * 24, path=self.tmp.name)["status"], "running")
+            _job("c" * 24, self.tmp.name)["status"], "running")
 
     def test_a_job_with_no_owner_is_still_reconciled(self):
         """Rows written before the owner column existed."""
@@ -153,7 +162,7 @@ class TestJobLifecycle(unittest.TestCase):
         job_id = jobs.submit("search", {}, lambda _r: {"ok": 1})
         _wait_for(job_id, self.tmp.name)
         jobs.startup(path=self.tmp.name)
-        self.assertEqual(cache.get_job(job_id, path=self.tmp.name)["status"], "done")
+        self.assertEqual(_job(job_id, self.tmp.name)["status"], "done")
 
     def test_prune_drops_finished_jobs_only(self):
         done = jobs.submit("search", {}, lambda _r: {"ok": 1})
@@ -168,7 +177,9 @@ class TestJobLifecycle(unittest.TestCase):
     def test_malformed_job_id_is_not_found_without_a_query(self):
         for bad in ("", "nothex", "../../etc/passwd", "a" * 23, "A" * 24, 42):
             with self.subTest(job_id=bad):
-                self.assertIsNone(jobs.get(bad, path=self.tmp.name))
+                # The int in that list is the wrong type on purpose: an id that
+                # is not a str must be rejected like any other malformed one.
+                self.assertIsNone(jobs.get(cast(Any, bad), path=self.tmp.name))
 
     def test_job_ids_are_unguessable(self):
         ids = {jobs.new_job_id() for _ in range(200)}
@@ -197,7 +208,7 @@ class TestAJobAlwaysReachesATerminalState(unittest.TestCase):
 
     def _run_sync(self, job_id, request, runner):
         jobs._run(job_id, request, runner, self.db)
-        return cache.get_job(job_id, path=self.db)
+        return _job(job_id, self.db)
 
     def test_a_job_that_cannot_be_marked_running_is_failed_not_abandoned(self):
         """This branch used to log and return, leaving the row in `queued`
@@ -219,7 +230,7 @@ class TestAJobAlwaysReachesATerminalState(unittest.TestCase):
                                side_effect=sqlite3.OperationalError("disk I/O error")):
             # Must not raise out of the worker; the Future holds nobody.
             jobs._run(job_id, {}, lambda req: {"ok": True}, self.db)
-        self.assertEqual(cache.get_job(job_id, path=self.db)["status"], "running")
+        self.assertEqual(_job(job_id, self.db)["status"], "running")
 
     def test_a_normal_job_still_completes(self):
         job_id = jobs.new_job_id()

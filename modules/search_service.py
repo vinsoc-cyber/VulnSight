@@ -325,7 +325,8 @@ def _unique_dicts(items: list[dict]) -> list[dict]:
 
 
 def _merge_group(records: list[dict]) -> dict:
-    base = min(records, key=lambda item: _SOURCE_PRIORITY.get(item.get("source"), 99))
+    base = min(records,
+               key=lambda item: _SOURCE_PRIORITY.get(item.get("source") or "", 99))
     merged = copy.deepcopy(base)
     sources = sorted({record.get("source", "?") for record in records})
     merged["sources"] = sources
@@ -451,9 +452,12 @@ def _merge_group(records: list[dict]) -> dict:
     if cvss_by_source:
         merged["cvss_score"] = max(cvss_by_source.values())
 
-    published = [record.get("published_at") for record in records if record.get("published_at")]
-    updated = [record.get("updated_at") for record in records if record.get("updated_at")]
-    withdrawn = [record.get("withdrawn_at") for record in records if record.get("withdrawn_at")]
+    published = [value for record in records
+                 if (value := record.get("published_at"))]
+    updated = [value for record in records
+               if (value := record.get("updated_at"))]
+    withdrawn = [value for record in records
+                 if (value := record.get("withdrawn_at"))]
     # Keep the base advisory's own publication date.  min() across sources
     # backdates a 2025 GHSA advisory to its 2019 CVE, which then sorts and
     # displays under a year in which that advisory did not yet exist.  Every
@@ -751,9 +755,14 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     def _sort_key(record: dict):
         value = record.get(sort_field)
         if numeric:
+            # JSON gives str/int/float/bool here, or None, or -- from a
+            # malformed upstream record -- a list or dict. Only the first
+            # group converts; everything else sorts as 0.0.
+            if not isinstance(value, (int, float, str)):
+                return 0.0
             try:
                 return float(value)
-            except (TypeError, ValueError):
+            except ValueError:
                 return 0.0
         if sort_field == "cve_id":
             # A CVE id is a year and a sequence number, not a word. Sorted as

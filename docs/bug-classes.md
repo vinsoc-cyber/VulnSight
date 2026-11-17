@@ -123,7 +123,8 @@ but it does cost one extra AI pass per advisory.
    during development precisely because its anchor, `CWE-16`, turned out to be a
    MITRE *Category* rather than a Weakness — it does not exist in the weakness
    catalog and would have silently matched nothing.
-3. Run `python -m pytest tests/test_cwe_categories.py`. The suite enforces:
+3. Run `python -m unittest discover -s tests -p test_cwe_categories.py`.
+   The suite enforces:
    - a code that is unique, uppercase and ≤ 5 characters;
    - a non-empty group, label and `core` set;
    - a description of at least 40 characters, because it *is* the AI's definition;

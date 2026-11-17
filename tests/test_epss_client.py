@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from modules import epss_client
+from samples import http_error
 
 
 def _mock_urlopen(response_body: dict):
@@ -159,12 +160,11 @@ class TestErrorHandling(unittest.TestCase):
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
     def test_http_error_returns_empty(self, mock_open):
-        import urllib.error
-        mock_open.side_effect = urllib.error.HTTPError(
+        mock_open.side_effect = http_error(
+            500,
             url="https://api.first.org/data/v1/epss",
-            code=500,
-            msg="Internal Server Error",
-            hdrs=None,  # type: ignore[arg-type]
+            reason="Internal Server Error",
+            headers=None,
             fp=None,
         )
         result = epss_client.fetch_epss(["CVE-2024-9999"])

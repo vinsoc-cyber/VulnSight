@@ -170,27 +170,45 @@ class TestAuthStatusIsCached(unittest.TestCase):
 class TestPaginationCursorHandling(unittest.TestCase):
     """HTTP permits repeated Link headers."""
 
+    def _gh_response(self, headers, body="[]"):
+        """Drive the real _run_gh_api with a canned `gh api -i` stdout."""
+        completed = mock.Mock(returncode=0, stdout=headers + "\r\n" + body, stderr="")
+        with mock.patch.object(ghsa.subprocess, "run", return_value=completed):
+            return ghsa._run_gh_api("/advisories?per_page=100")
+
     def test_a_prev_link_before_next_does_not_stop_pagination(self):
         """The loop broke on the first header starting with "link:" whether
         or not it held rel="next", so a response that sent rel="prev" first
         stopped at page 1 -- 100 results for a max_results=500 query, with no
-        error."""
-        blob = (
+        error.
+
+        Driven through _run_gh_api, not a copy of its loop: the earlier
+        version of this test reimplemented the parsing and so stayed green
+        when the shipped parser was broken.
+        """
+        _, next_url = self._gh_response(
             'HTTP/2.0 200\r\n'
             'link: <https://api.github.com/advisories?page=1>; rel="prev"\r\n'
-            'link: <https://api.github.com/advisories?page=3>; rel="next"\r\n'
+            'link: <https://api.github.com/advisories?page=3>; rel="next"'
         )
-        found = None
-        for line in blob.splitlines():
-            if not line.lower().startswith("link:"):
-                continue
-            m = ghsa._LINK_NEXT_RE.search(line)
-            if m:
-                found = m.group(1)
-                break
-        self.assertIsNotNone(found)
-        assert found is not None
-        self.assertIn("page=3", found)
+        self.assertIsNotNone(next_url)
+        assert next_url is not None
+        self.assertIn("page=3", next_url)
+
+    def test_a_single_next_link_is_found(self):
+        _, next_url = self._gh_response(
+            'HTTP/2.0 200\r\n'
+            'link: <https://api.github.com/advisories?page=2>; rel="next"'
+        )
+        assert next_url is not None
+        self.assertIn("page=2", next_url)
+
+    def test_no_next_link_ends_pagination(self):
+        _, next_url = self._gh_response(
+            'HTTP/2.0 200\r\n'
+            'link: <https://api.github.com/advisories?page=1>; rel="prev"'
+        )
+        self.assertIsNone(next_url)
 
     def test_a_cursor_outside_advisories_is_refused(self):
         """The cursor comes from a response header and becomes an argv

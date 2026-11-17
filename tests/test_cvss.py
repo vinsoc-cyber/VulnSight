@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unittest
+from typing import Any, cast
 
 from modules import cvss, osv_client
 
@@ -21,7 +22,9 @@ class TestBaseScore(unittest.TestCase):
         self.assertIsNone(cvss.base_score(""))
 
     def test_invalid_vectors_return_none(self):
-        self.assertIsNone(cvss.base_score(None))
+        # None is the wrong type on purpose: a missing vector reaches this
+        # from stored advisory JSON and must score as None, not raise.
+        self.assertIsNone(cvss.base_score(cast(Any, None)))
         self.assertIsNone(cvss.base_score("complete garbage"))
         # Missing base metrics (no S/C/I/A) must not raise.
         self.assertIsNone(cvss.base_score("CVSS:3.1/AV:N/AC:L/PR:N"))

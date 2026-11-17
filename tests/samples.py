@@ -7,7 +7,15 @@ sets up sys.path itself (so every file also runs standalone) and then does
 
 import io
 import json
+import urllib.error
 import zipfile
+from email.message import Message
+from typing import Any, cast
+
+# Sentinels: `headers=None` means "no header store", which is different from
+# "build the default one", and `fp=None` is a real urllib case too.
+_AUTO = object()
+_MISSING = object()
 
 # --- sample raw advisory as returned by GHSA -------------------------------
 SAMPLE = {
@@ -155,3 +163,28 @@ def make_sortable_raw():
         _rec(SORT_B, "CVE-2026-0003", "2026-01-01T00:00:00Z", "2026-02-03T00:00:00Z"),
         _rec(SORT_C, "CVE-2026-0001", "2026-01-02T00:00:00Z", "2026-02-02T00:00:00Z"),
     ]
+
+
+# --- HTTP failure fixtures -------------------------------------------------
+# Five test files each built their own urllib HTTPError, three of them with a
+# local `_http_error` helper that differed in argument order and defaults.
+# One helper, one place to carry the typeshed note below.
+
+def http_error(code, *, retry_after=None, body=b"{}", reason="err",
+               url="https://example.test/api", headers=_AUTO, fp=_MISSING):
+    """An HTTPError as urllib raises one, for the failure paths.
+
+    Pass ``headers=None`` to build one with no header store at all: typeshed
+    types ``hdrs`` as ``Message``, but urllib itself passes ``None`` and the
+    retry/backoff code has to survive reading ``Retry-After`` off it.
+    """
+    if headers is _AUTO:
+        headers = Message()
+        if retry_after is not None:
+            headers["Retry-After"] = retry_after
+    body_fp = io.BytesIO(body) if fp is _MISSING else fp
+    return urllib.error.HTTPError(
+        url, code, reason,
+        cast(Any, headers),          # typeshed is stricter than urllib here
+        cast(Any, body_fp),
+    )

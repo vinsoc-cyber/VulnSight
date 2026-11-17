@@ -10,6 +10,40 @@ than asserted.
 finding was real and the behaviour is unchanged on purpose. `doc` means the
 code was right and the documentation was wrong.
 
+## Checking this table instead of believing it
+
+A table like this is the author's own account of their own work, so none of
+it should be taken on trust. Everything below is reproducible from a clean
+checkout; the numbers are from the last run.
+
+| What | Command | Result |
+|---|---|---|
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 604 pass |
+| Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
+| Lint | `ruff check .` | clean |
+| Types | `pyright` | 0 errors |
+| Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **24/24 caught** |
+
+The last row is the one that matters. A green suite says nothing about
+*which* fixes it defends: the suite was green before these fixes too, because
+it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
+each of 24 named bugs in the working tree, runs the test module that is
+supposed to notice, and requires it to go **red**. A fix whose revert leaves
+the suite green is not covered, whatever this table says — that check found
+three such gaps on its first run, and they were closed rather than argued
+away. Two were genuine (GHSA record degradation had no test through
+`run_search`; the `Link`-header test had reimplemented the parser instead of
+calling it). The third was the harness's own fault: the cooldown fix is
+maxed in two places, so reverting either one alone leaves the behaviour
+correct, and the harness could only revert one edit at a time. It now
+reverts whole fixes.
+
+Two numbers in this document were themselves wrong until measured. The
+module map's line counts drifted on every row; `tools/sync_module_map.py`
+derives them now and `tests/test_docs.py` fails if they drift again. The same
+is true of the class tables in [bug classes](bug-classes.md).
+
 ## HTTP layer, jobs, security
 
 | Finding | Disposition |

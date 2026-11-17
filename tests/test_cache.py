@@ -96,6 +96,7 @@ class TestCache(unittest.TestCase):
         cache.upsert_advisories([n], self.db)
         self.assertEqual(cache.count_advisories(self.db), 1)
         got = cache.get_advisory(n["advisory_id"], self.db)
+        assert got is not None, "the advisory just upserted must read back"
         self.assertEqual(got["cve_id"], "CVE-2026-57168")
         # upsert again -> still 1
         cache.upsert_advisories([n], self.db)

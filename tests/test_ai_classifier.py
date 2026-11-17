@@ -15,14 +15,13 @@ import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-import email.message
 import io
 import urllib.error
 
 from modules import ai_classifier
 from modules import cache
 from modules import ghsa_client as ghsa
-from samples import SAMPLE
+from samples import SAMPLE, http_error
 
 
 class TestAIParsing(unittest.TestCase):
@@ -387,12 +386,12 @@ class TestClassify(unittest.TestCase):
 
     def test_ping_strips_provider_error_body(self):
         cfg = self._cfg()
-        err = urllib.error.HTTPError(
+        err = http_error(
+            401,
             url="https://x/v1/messages",
-            code=401,
-            msg="Unauthorized",
-            hdrs=None,
-            fp=io.BytesIO(b'{"error":"invalid api_key sk-secret-abc"}'),
+            reason="Unauthorized",
+            headers=None,
+            body=b'{"error":"invalid api_key sk-secret-abc"}',
         )
         with mock.patch("urllib.request.urlopen", side_effect=err):
             result = ai_classifier.ping(cfg)
@@ -404,12 +403,12 @@ class TestClassify(unittest.TestCase):
     def test_classify_many_strips_provider_error_body(self):
         cfg = self._cfg()
         advs = [ghsa.normalize(dict(SAMPLE, ghsa_id="A"))]
-        err = urllib.error.HTTPError(
+        err = http_error(
+            403,
             url="https://x/v1/messages",
-            code=403,
-            msg="Forbidden",
-            hdrs=None,
-            fp=io.BytesIO(b'{"error":"token ghp_LEAKED rejected"}'),
+            reason="Forbidden",
+            headers=None,
+            body=b'{"error":"token ghp_LEAKED rejected"}',
         )
         with mock.patch("urllib.request.urlopen", side_effect=err):
             res = ai_classifier.classify_many(cfg, advs, "bac")
@@ -440,12 +439,12 @@ class TestClassify(unittest.TestCase):
             token = (auth or "").split()[-1]
             calls.append(token)
             if token == "dead":
-                raise urllib.error.HTTPError(
+                raise http_error(
+                    429,
                     url="https://x/chat/completions",
-                    code=429,
-                    msg="Too Many Requests",
-                    hdrs=None,
-                    fp=io.BytesIO(
+                    reason="Too Many Requests",
+                    headers=None,
+                    body=(
                         b'{"error":{"code":"1310","message":'
                         b'"Weekly/Monthly Limit Exhausted"}}'
                     ),
@@ -463,14 +462,12 @@ class TestClassify(unittest.TestCase):
     def test_all_keys_quota_returns_generic_message(self):
         cfg = self._cfg()
         advs = [ghsa.normalize(dict(SAMPLE, ghsa_id="A"))]
-        err = urllib.error.HTTPError(
+        err = http_error(
+            429,
             url="https://x/chat/completions",
-            code=429,
-            msg="Too Many Requests",
-            hdrs=None,
-            fp=io.BytesIO(
-                b'{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted"}}'
-            ),
+            reason="Too Many Requests",
+            headers=None,
+            body=b'{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted"}}',
         )
         with mock.patch("urllib.request.urlopen", side_effect=err), \
              mock.patch("modules.ai_classifier.time.sleep", lambda *_: None):
@@ -645,16 +642,14 @@ class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
 
     def test_a_transient_rate_limit_does_not_end_a_single_key_batch(self):
         cfg = self._cfg()
-        hdrs = email.message.Message()
-        hdrs["Retry-After"] = "1"
         calls = {"n": 0}
 
         def fake_urlopen(req, timeout=None):
             calls["n"] += 1
             if calls["n"] == 1:
-                raise urllib.error.HTTPError(
-                    "u", 429, "Too Many Requests", hdrs,
-                    io.BytesIO(b'{"error":"Rate limit reached for requests"}'))
+                raise http_error(
+                    429, retry_after="1", reason="Too Many Requests",
+                    body=b'{"error":"Rate limit reached for requests"}')
             body = json.dumps({"choices": [{"message": {"content": json.dumps(
                 {"is_match": True, "confidence": 0.9,
                  "vuln_type": "t", "reason": "r"})}}]})

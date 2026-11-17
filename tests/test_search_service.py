@@ -692,6 +692,57 @@ class TestEverySourceFailingIsA502(unittest.TestCase):
         self.assertEqual(out.stats["failed_sources"], [])
 
 
+class TestOneBadGhsaRecordDoesNotSinkTheSearch(unittest.TestCase):
+    """ghsa.normalize dereferences identifiers[].value, cwes[].cwe_id and
+    severity.lower(), none of which the API guarantees. Normalizing a page
+    with a list comprehension made any one of them fatal: the resulting
+    AttributeError is not a GhCliError, so it bypassed the per-source
+    degradation and 500'd the whole search, discarding what the other
+    sources had already returned."""
+
+    GOOD = {"ghsa_id": "GHSA-good", "identifiers": [{"type": "CVE", "value": "CVE-2026-1"}],
+            "severity": "HIGH", "cwes": [{"cwe_id": "CWE-639"}],
+            "summary": "s", "description": "d", "vulnerabilities": [],
+            "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"}
+
+    def _run(self, raw):
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=raw), \
+             mock.patch.object(search_service.cache, "upsert_advisories"), \
+             mock.patch.object(search_service.epss_client, "fetch_epss",
+                               return_value={}):
+            return search_service.run_search(search_service.parse_search_query(
+                {"categories": ["bac"], "sources": ["ghsa"]}))
+
+    def test_a_null_identifier_does_not_kill_the_page(self):
+        out = self._run([dict(self.GOOD), {**self.GOOD, "ghsa_id": "GHSA-bad",
+                                           "identifiers": [None]}])
+        self.assertEqual(len(out.results), 1)
+        self.assertTrue(any("skipped 1" in w for w in out.warnings), out.warnings)
+
+    def test_a_string_where_a_cwe_object_belongs_does_not_kill_the_page(self):
+        out = self._run([dict(self.GOOD), {**self.GOOD, "ghsa_id": "GHSA-bad",
+                                           "cwes": ["CWE-79"]}])
+        self.assertEqual(len(out.results), 1)
+
+    def test_a_numeric_severity_does_not_kill_the_page(self):
+        out = self._run([dict(self.GOOD), {**self.GOOD, "ghsa_id": "GHSA-bad",
+                                           "severity": 7}])
+        self.assertEqual(len(out.results), 1)
+
+    def test_the_user_is_told_how_many_were_dropped(self):
+        bad = [{**self.GOOD, "ghsa_id": f"GHSA-bad{i}", "identifiers": [None]}
+               for i in range(3)]
+        out = self._run([dict(self.GOOD), *bad])
+        self.assertEqual(len(out.results), 1)
+        self.assertTrue(any("skipped 3" in w for w in out.warnings), out.warnings)
+
+    def test_a_clean_page_warns_about_nothing(self):
+        out = self._run([dict(self.GOOD)])
+        self.assertEqual(len(out.results), 1)
+        self.assertEqual([w for w in out.warnings if "skipped" in w], [])
+
+
 class TestSeverityVocabulary(unittest.TestCase):
     """An unrecognised severity word ranked 0 -- below "low".
 

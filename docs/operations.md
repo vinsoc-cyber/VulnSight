@@ -110,6 +110,6 @@ always free.
 3. Migrations run automatically at startup (`cache.init_db()`), are idempotent,
    and are safe to re-run.
 4. If MITRE published a new CWE release, refresh the catalog:
-   `python tools/generate_cwe_catalog.py && python -m pytest tests/test_cwe_categories.py`
+   `python tools/generate_cwe_catalog.py && python -m unittest discover -s tests`
 
 Nothing in the upgrade path deletes your caches.
