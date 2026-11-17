@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -157,10 +158,14 @@ class TestDocsMatchTheCode(unittest.TestCase):
         self._assert_claim("docs/api.md", rf"max {batch}")
 
     def test_every_route_is_documented(self):
-        routes = {
-            str(rule) for rule in app_module.create_app().url_map.iter_rules()
-            if not str(rule).startswith("/static")
-        }
+        # Only the URL map is wanted here. Without an declared bind, create_app()
+        # sees an unknown (therefore exposed) listener and mints an API token
+        # into the working tree on any machine that has credentials loaded.
+        with mock.patch.dict(os.environ, {"VULNSIGHT_BIND": "127.0.0.1"}, clear=False):
+            routes = {
+                str(rule) for rule in app_module.create_app().url_map.iter_rules()
+                if not str(rule).startswith("/static")
+            }
         api_doc = self.text["docs/api.md"]
         for route in routes:
             self.assertIn(route, api_doc, f"{route} is not in docs/api.md")

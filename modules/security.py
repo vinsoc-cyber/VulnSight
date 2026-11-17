@@ -92,6 +92,43 @@ def is_loopback_bind(host: str) -> bool:
         return False
 
 
+_declared_bind: str | None = None
+
+
+def declare_self_bind(host: str) -> None:
+    """Record the interface this process is about to bind itself.
+
+    Only ``python app.py`` can say this truthfully, because only it passes the
+    address to ``app.run()``.
+    """
+    global _declared_bind
+    _declared_bind = (host or "").strip() or "127.0.0.1"
+
+
+def resolved_bind_host() -> str:
+    """The interface the server actually listens on, as far as we can know it.
+
+    ``HOST`` is authoritative only when this process binds the socket itself.
+    Gunicorn -- the server this project ships in its own Dockerfile -- takes
+    the interface from its own ``--bind`` instead, which we cannot read. Under
+    any WSGI server ``HOST`` therefore describes nothing, yet operators do set
+    it, reasonably believing it restricts the listener. Reading it there meant
+    ``HOST`` unset, or set to a loopback value, switched the API-token
+    requirement off on a process actually listening on ``0.0.0.0`` -- handing
+    anyone who reached the port the operator's ``gh``, AI and NVD credentials.
+
+    So: trust a bind this process declared, else an explicit ``VULNSIGHT_BIND``,
+    else assume exposed. Failing closed costs a loopback deployment one pasted
+    token; failing open costs the operator their GitHub account.
+    """
+    if _declared_bind is not None:
+        return _declared_bind
+    stated = os.environ.get("VULNSIGHT_BIND", "").strip()
+    if stated:
+        return stated
+    return "0.0.0.0"
+
+
 _SECRET_ENV_NAMES = (
     "GLM_TOKEN",
     "AI_TOKEN",
@@ -197,16 +234,34 @@ def _load_or_create_token(path: str) -> str:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        # O_EXCL, not O_TRUNC: two workers starting together both saw no file
+        # and both wrote, so the file held one token while each worker
+        # authenticated against its own. A client using the file then got 401
+        # from one worker and 200 from the next, with no diagnosable pattern.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        with open(path, encoding="utf-8") as fh:  # another worker won the race
+            existing = fh.read().strip()
+        if existing:
+            logger.info("Using API token from %s", path)
+            return existing
+        raise
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token + "\n")
-    print(
-        f"!! Bind is {os.environ.get('HOST', 'non-loopback')} with credentials "
-        f"and no VULNSIGHT_API_TOKEN.\n"
-        f"!! Generated a token and saved it to {path} (mode 0600).\n"
-        f"!! Enter this token in the UI: {token}",
-        file=sys.stderr,
+    # The token is a credential, so it is shown only on a terminal a human is
+    # watching. The shipped Dockerfile pipes stderr to --error-logfile -, which
+    # would otherwise put it in `docker logs` and every shipper behind it.
+    banner = (
+        f"!! Bind is {resolved_bind_host()} with credentials and no "
+        f"VULNSIGHT_API_TOKEN.\n"
+        f"!! Generated a token and saved it to {path} (mode 0600)."
     )
+    if sys.stderr.isatty():
+        banner += f"\n!! Enter this token in the UI: {token}"
+    else:
+        banner += "\n!! Read it from that file; it is not logged."
+    print(banner, file=sys.stderr)
     return token
 
 

@@ -111,6 +111,12 @@ class UITestCase(unittest.TestCase):
         for name in ("VULNSIGHT_API_TOKEN", "VULNSIGHT_RATE_LIMIT"):
             os.environ.pop(name, None)
         os.environ["VULNSIGHT_RATE_LIMIT"] = "off"
+        # This harness binds 127.0.0.1 below, but it reaches create_app()
+        # through the WSGI path, where the bind is not discoverable and so
+        # counts as exposed -- which on a developer box with `gh` credentials
+        # would mint an API token and 401 every request. Declare the real bind.
+        cls._orig_bind = os.environ.get("VULNSIGHT_BIND")
+        os.environ["VULNSIGHT_BIND"] = "127.0.0.1"
 
         cls.port = _free_port()
         cls.server = wsgiref.simple_server.make_server(
@@ -136,6 +142,10 @@ class UITestCase(unittest.TestCase):
         cls.playwright.stop()
         cls.server.shutdown()
         cache.DB_PATH = cls._orig_db
+        if cls._orig_bind is None:
+            os.environ.pop("VULNSIGHT_BIND", None)
+        else:
+            os.environ["VULNSIGHT_BIND"] = cls._orig_bind
         for suffix in ("", "-wal", "-shm"):
             path = cls._db + suffix
             if os.path.exists(path):

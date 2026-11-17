@@ -57,6 +57,7 @@ class TestFlaskApp(unittest.TestCase):
             "VULNSIGHT_RATE_LIMIT": "off",
             "VULNSIGHT_PUBLIC_HOST": "",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }, clear=False)
         self._sec_env.start()
         from app import create_app
@@ -618,6 +619,7 @@ class TestApiVersioning(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {
             "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }, clear=False)
         self._env.start()
         from app import create_app
@@ -674,6 +676,7 @@ class TestApiVersioning(unittest.TestCase):
             "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "on",
             "VULNSIGHT_SEARCH_RATE": "1", "VULNSIGHT_RATE_WINDOW": "60",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }, clear=False)
         self._env.start()
         from app import create_app
@@ -724,6 +727,7 @@ class TestJobEndpoints(unittest.TestCase):
         merged = {
             "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }
         merged.update(env or {})
         self._env = mock.patch.dict(os.environ, merged, clear=False)
@@ -886,6 +890,7 @@ class TestAppAuthAndLimits(unittest.TestCase):
             "VULNSIGHT_AI_RATE": "20",
             "VULNSIGHT_RATE_WINDOW": "60",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }
         merged.update(env)
         self._env = mock.patch.dict(os.environ, merged, clear=False)
@@ -1031,6 +1036,7 @@ class TestAppAuthAndLimits(unittest.TestCase):
         data_dir = tempfile.mkdtemp()
         self._make({
             "HOST": "0.0.0.0",
+            "VULNSIGHT_BIND": "0.0.0.0",
             "GLM_TOKEN": "live-key",
             "VULNSIGHT_API_TOKEN": "",
             "VULNSIGHT_DATA_DIR": data_dir,

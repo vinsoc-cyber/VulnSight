@@ -1,9 +1,11 @@
 """Unit tests for CSRF origin parsing, bind guards, tokens, and rate limits."""
 
 import inspect
+import io
 import os
 import re
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -188,6 +190,73 @@ class TestBindGuard(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False), \
              mock.patch.object(security, "gh_credentials_available", return_value=False):
             self.assertTrue(security.has_loaded_secrets())
+
+
+class TestResolvedBindHost(unittest.TestCase):
+    """HOST is authoritative only when this process binds the socket itself.
+
+    Gunicorn -- which this project ships in its own Dockerfile -- binds from
+    its own --bind and never reads HOST, so trusting HOST there served the
+    operator's credentials unauthenticated on 0.0.0.0.
+    """
+
+    def setUp(self):
+        self._saved = security._declared_bind
+        security._declared_bind = None
+
+    def tearDown(self):
+        security._declared_bind = self._saved
+
+    def test_unknown_bind_is_treated_as_exposed(self):
+        with mock.patch.dict(os.environ, {"HOST": "", "VULNSIGHT_BIND": ""}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "0.0.0.0")
+
+    def test_a_loopback_host_env_does_not_vouch_for_a_wsgi_bind(self):
+        """`docker run -e HOST=127.0.0.1 -p 0.0.0.0:5000:5000` must still require a token."""
+        with mock.patch.dict(os.environ, {"HOST": "127.0.0.1", "VULNSIGHT_BIND": ""}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "0.0.0.0")
+            self.assertFalse(security.is_loopback_bind(security.resolved_bind_host()))
+
+    def test_a_self_declared_bind_wins(self):
+        security.declare_self_bind("127.0.0.1")
+        with mock.patch.dict(os.environ, {"HOST": "0.0.0.0"}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "127.0.0.1")
+
+    def test_operator_can_declare_a_loopback_wsgi_bind_explicitly(self):
+        with mock.patch.dict(os.environ, {"HOST": "", "VULNSIGHT_BIND": "127.0.0.1"}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "127.0.0.1")
+
+    def test_credentials_on_an_unknown_bind_mint_a_token(self):
+        env = {"HOST": "", "VULNSIGHT_BIND": "", "VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            token = security.ensure_api_token_for_bind(security.resolved_bind_host())
+            self.assertTrue(token)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, security.TOKEN_FILENAME)))
+
+    def test_a_second_worker_reuses_the_first_workers_token(self):
+        """Both workers used to write; the file kept one token and each worker
+        authenticated against its own, so a client got 401 from one and 200
+        from the next."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            path = os.path.join(tmp, security.TOKEN_FILENAME)
+            first = security._load_or_create_token(path)
+            second = security._load_or_create_token(path)
+            self.assertEqual(first, second)
+
+    def test_the_generated_token_is_not_printed_when_stderr_is_not_a_tty(self):
+        """The shipped Dockerfile pipes stderr to --error-logfile -."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            buf = io.StringIO()  # a StringIO is not a tty
+            with mock.patch.object(sys, "stderr", buf):
+                token = security._load_or_create_token(
+                    os.path.join(tmp, security.TOKEN_FILENAME))
+            self.assertNotIn(token, buf.getvalue())
+            self.assertIn("not logged", buf.getvalue())
 
 
 class TestClientKey(unittest.TestCase):

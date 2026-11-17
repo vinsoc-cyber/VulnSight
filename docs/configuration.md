@@ -43,7 +43,8 @@ pass reports itself unconfigured and the UI header shows `AI OFF`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HOST` | `127.0.0.1` | Bind address. A non-loopback bind is refused while credentials are loaded unless you also set `VULNSIGHT_EXPOSE=1` **and** `VULNSIGHT_API_TOKEN` |
+| `HOST` | `127.0.0.1` | Bind address, **for `python app.py` only**. A non-loopback bind is refused while credentials are loaded unless you also set `VULNSIGHT_EXPOSE=1` **and** `VULNSIGHT_API_TOKEN`. Gunicorn ignores it and binds from `--bind` |
+| `VULNSIGHT_BIND` | — | The interface a WSGI server really listens on. Unset under gunicorn means "unknown", which is treated as exposed and requires an API token. Set it to `127.0.0.1` to declare a loopback bind |
 | `PORT` | `5000` | |
 | `VULNSIGHT_EXPOSE` | `0` | Acknowledge that you mean to listen off loopback |
 | `VULNSIGHT_API_TOKEN` | — | When set, every mutating `/api/*` call must present it via `X-VulnSight-Token` or `Authorization`. The UI prompts for it and keeps it in `sessionStorage` |

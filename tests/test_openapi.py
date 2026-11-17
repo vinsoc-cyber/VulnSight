@@ -106,6 +106,7 @@ class _AppCase(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {
             "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }, clear=False)
         self._env.start()
         from app import create_app

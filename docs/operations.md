@@ -6,13 +6,24 @@ Default: loopback only. The tool is built for one operator on `localhost`, and i
 holds live credentials (`gh` token, AI keys), so the defaults refuse to be
 casually widened.
 
+`HOST` is only consulted on the `python app.py` path, because that is the only
+one that binds the socket itself. Gunicorn takes its interface from its own
+`--bind`, which the app cannot read — so under any WSGI server the bind counts
+as **unknown and therefore exposed**, whatever `HOST` says. Declare it with
+`VULNSIGHT_BIND=127.0.0.1` if you really are on loopback there.
+
 | Situation | Behaviour |
 |---|---|
-| `HOST=127.0.0.1` (default) | runs normally |
-| Non-loopback `HOST`, credentials loaded, no `VULNSIGHT_EXPOSE=1` | **refuses to start** |
-| Non-loopback `HOST`, `VULNSIGHT_EXPOSE=1`, no `VULNSIGHT_API_TOKEN` | **refuses to start** |
+| `python app.py`, `HOST=127.0.0.1` (default) | runs normally, no token needed |
+| `python app.py`, non-loopback `HOST`, credentials loaded, no `VULNSIGHT_EXPOSE=1` | **refuses to start** |
+| `python app.py`, non-loopback `HOST`, `VULNSIGHT_EXPOSE=1`, no `VULNSIGHT_API_TOKEN` | **refuses to start** |
 | `--debug` off loopback | **refuses** — Werkzeug's debugger is remote code execution |
-| Docker / gunicorn binding `0.0.0.0` with credentials | requires a token; generates `.vulnsight_api_token` if you did not set one |
+| Any WSGI server (gunicorn, Docker) with credentials | requires a token; generates `.vulnsight_api_token` if you did not set one |
+| Any WSGI server with `VULNSIGHT_BIND=127.0.0.1` | treated as loopback; token optional |
+
+Setting `HOST=127.0.0.1` does **not** restrict a gunicorn listener and no
+longer waives the token. The generated token is written to the file and
+printed only when stderr is a terminal, so it does not land in `docker logs`.
 
 Set `VULNSIGHT_API_TOKEN` yourself if you want to choose the value. The UI
 prompts for it and keeps it in `sessionStorage` (per tab, not persisted).
