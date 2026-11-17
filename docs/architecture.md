@@ -8,7 +8,7 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                605   Flask routes, request guards, response headers
+app.py                614   Flask routes, request guards, response headers
 modules/
   config.py            50   minimal .env loader; BASE_DIR / DATA_DIR
   search_service.py   687   the pipeline: parse -> fetch -> merge -> sort -> enrich
@@ -23,7 +23,7 @@ modules/
   cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            357   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             159   submit/poll queue for searches too slow to hold open
-  ai_classifier.py    930   provider client, prompt, verdict cache, key rotation
+  ai_classifier.py    992   provider client, prompt, verdict cache, key rotation
   openapi.py          449   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only

@@ -1038,6 +1038,19 @@ class TestAppAuthAndLimits(unittest.TestCase):
         self.assertEqual(other_client.status_code, 200)  # separate bucket
         self.assertEqual(same_client.status_code, 429)   # same bucket, exhausted
 
+    def test_classify_without_a_category_is_rejected_not_billed(self):
+        """parse_text defaulted a missing category to "bac", so a request with
+        no category at all ran a paid pass against Broken Access Control and
+        returned verdicts the caller never asked for. /api/v1/search rejects
+        the same omission and openapi.py declares categories required."""
+        self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_RATE_LIMIT": "off"})
+        with mock.patch("modules.ai_classifier.classify_many") as spend:
+            response = self.client.post("/api/v1/ai/classify",
+                                        json={"advisory_ids": ["GHSA-aaaa"]})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("bug class", (response.get_json() or {}).get("error", ""))
+        spend.assert_not_called()
+
     def test_non_loopback_autogens_token(self):
         data_dir = tempfile.mkdtemp()
         self._make({

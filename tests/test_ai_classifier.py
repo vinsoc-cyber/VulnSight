@@ -15,6 +15,7 @@ import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
+import email.message
 import io
 import urllib.error
 
@@ -489,6 +490,103 @@ class TestClassify(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
+    """A rate limit means "slow down". A quota means "this key is finished".
+
+    Both used to mark the key exhausted and persist a cooldown to disk, so on
+    a single-key setup ONE transient 429 ended the whole remaining batch after
+    a single HTTP call -- up to MAX_AI_BATCH advisories returned as "AI quota
+    exhausted" -- and left a cooldown that survived the restart which would
+    have cleared it.
+    """
+
+    def _cfg(self, tokens=("k1",)):
+        return ai_classifier.AIConfig(
+            provider="glm", base_url="https://x", tokens=list(tokens), model="m")
+
+    def test_a_rate_limit_is_retryable_and_bounded(self):
+        retryable, exhausted, skip = ai_classifier._classify_http_error(
+            429, "Rate limit reached for requests", None)
+        self.assertTrue(retryable)
+        self.assertLessEqual(skip, ai_classifier._MAX_RATE_PAUSE)
+
+    def test_an_unknown_429_cannot_park_a_key_for_an_hour(self):
+        """Retry-After was honoured unbounded, so "3600" parked the only key
+        for an hour inside a request the user is holding open."""
+        _, _, skip = ai_classifier._classify_http_error(429, "something odd", "3600")
+        self.assertLessEqual(skip, ai_classifier._MAX_RATE_PAUSE)
+
+    def test_a_throttle_is_not_written_to_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".ai_key_cooldown.json")
+            with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path):
+                self._cfg().mark_skip_token("k1", 30, persist=False)
+                self.assertFalse(os.path.exists(path))
+
+    def test_a_short_cooldown_cannot_erase_a_long_one_on_disk(self):
+        """_persist_cooldown wrote time.time()+seconds unconditionally, so a
+        30s rate limit overwrote a 12h quota cooldown and a restart inside
+        that window spent a real request on a key known to be out."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".ai_key_cooldown.json")
+            with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path):
+                cfg = self._cfg()
+                cfg.mark_skip_token("k1", 12 * 3600, persist=True)
+                with open(path, encoding="utf-8") as fh:
+                    long_deadline = list(json.load(fh).values())[0]
+                cfg.mark_skip_token("k1", 30, persist=True)
+                with open(path, encoding="utf-8") as fh:
+                    after = list(json.load(fh).values())[0]
+                self.assertAlmostEqual(after, long_deadline, delta=1)
+
+    def test_seconds_until_any_live_reports_the_soonest_key(self):
+        cfg = self._cfg(("k1", "k2"))
+        with mock.patch.object(ai_classifier, "COOLDOWN_PATH",
+                               os.path.join(tempfile.gettempdir(), "nonexistent-dir", "x")):
+            cfg.mark_skip_token("k1", 100, persist=False)
+            cfg.mark_skip_token("k2", 10, persist=False)
+        self.assertEqual(cfg.live_indices(), [])
+        self.assertTrue(5 < cfg.seconds_until_any_live() <= 10)
+
+    def test_a_transient_rate_limit_does_not_end_a_single_key_batch(self):
+        cfg = self._cfg()
+        hdrs = email.message.Message()
+        hdrs["Retry-After"] = "1"
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise urllib.error.HTTPError(
+                    "u", 429, "Too Many Requests", hdrs,
+                    io.BytesIO(b'{"error":"Rate limit reached for requests"}'))
+            body = json.dumps({"choices": [{"message": {"content": json.dumps(
+                {"is_match": True, "confidence": 0.9,
+                 "vuln_type": "t", "reason": "r"})}}]})
+            return mock.MagicMock(__enter__=lambda s: io.BytesIO(body.encode()),
+                                  __exit__=lambda *a: None)
+
+        adv = {"advisory_id": "GHSA-1", "ghsa_id": "GHSA-1", "cve_id": "CVE-1",
+               "summary": "s", "description": "d", "cwes": ["639"], "packages": []}
+        with mock.patch.object(ai_classifier.urllib.request, "urlopen", fake_urlopen):
+            verdict = ai_classifier.classify_one(cfg, adv, "bac")
+        self.assertTrue(verdict["is_match"])
+        self.assertEqual(calls["n"], 2, "should have retried after the throttle")
+
+
+class TestConfigDoesNotLeakKeys(unittest.TestCase):
+    def test_repr_reports_fingerprints_not_credentials(self):
+        """cfg is a live local in app.py's classify view, so anything that
+        renders frame locals rendered every key."""
+        cfg = ai_classifier.AIConfig(
+            provider="glm", base_url="https://x",
+            tokens=["sk-super-secret-1", "sk-super-secret-2"], model="m")
+        text = repr(cfg)
+        self.assertNotIn("sk-super-secret-1", text)
+        self.assertNotIn("sk-super-secret-2", text)
+        self.assertIn("keys=2", text)
 
 
 class TestPromptInjection(unittest.TestCase):

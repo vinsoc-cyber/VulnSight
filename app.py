@@ -485,9 +485,18 @@ def create_app():
                 max_item_length=64,
             )
             if not categories:
-                categories = [search_service.parse_text(
-                    body.get("category"), "bac", "category"
-                )]
+                # No default. parse_text would have returned "bac" for a
+                # missing value, so a request with no category at all ran a
+                # paid pass against Broken Access Control and returned
+                # verdicts the caller never asked for -- up to MAX_AI_BATCH
+                # model calls, silently. /api/v1/search rejects the same
+                # omission, and openapi.py declares `categories` required.
+                single = body.get("category")
+                if not isinstance(single, str) or not single.strip():
+                    return jsonify(
+                        {"error": "Select at least one bug class or CWE."}
+                    ), 400
+                categories = [single.strip()]
             # Fold 'CWE:639' / 'cwe:639' into one key so the verdict cache and
             # the search path agree on the category name.
             categories = list(dict.fromkeys(canonical_category(c) for c in categories))

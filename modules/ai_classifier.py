@@ -59,6 +59,10 @@ USER_AGENT = (
 # throttling, network blips). Client errors like a bad API key are NOT retried.
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.5          # seconds; grows exponentially with jitter
+# A rate-limit pause is a throttle, not a spent key, so it is bounded: an
+# unknown provider answering "Retry-After: 3600" must not park the only key
+# for an hour inside a request the user is holding open.
+_MAX_RATE_PAUSE = 120.0
 # 529 is Anthropic's `overloaded_error`, and its canonical retryable status.
 # Leaving it out turned a transient overload into a permanent per-advisory
 # failure: paid for, then recorded as "could not classify".
@@ -247,9 +251,11 @@ def _classify_http_error(
             # Retry-After, which some providers set to a generic window.
             return False, True, _quota_skip_seconds(text)
         if any(marker in text for marker in _RATE_MARKERS):
-            return True, True, advised if advised is not None else 30
-        # Unknown 429: try the next key, then back off.
-        return True, True, advised if advised is not None else 60
+            return True, True, min(advised if advised is not None else 30, _MAX_RATE_PAUSE)
+        # Unknown 429: try the next key, then back off. Clamped, because an
+        # unknown provider's Retry-After is not a reason to park a key for an
+        # hour -- _quota_skip_seconds applies the same kind of ceiling.
+        return True, True, min(advised if advised is not None else 60, _MAX_RATE_PAUSE)
     # Retry-After is honoured for 429 only, and deliberately not for the other
     # retryable statuses. skip_seconds is spent by marking the key exhausted,
     # which persists a cooldown to disk and survives a restart — turning a
@@ -262,13 +268,24 @@ def _classify_http_error(
 class AIConfig:
     provider: str
     base_url: str
-    tokens: list[str]
+    # repr=False: the three private fields below already carry it, so leaving
+    # the credentials themselves in the default repr was an oversight. cfg is
+    # a live local in app.py's classify view, so any handler that renders
+    # frame locals -- the Werkzeug debugger on a loopback dev run, a future
+    # error reporter -- would have rendered every key. __repr__ below reports
+    # the count and fingerprints instead.
+    tokens: list[str] = field(repr=False)
     model: str
     _current_idx: int = field(default=0, init=False, repr=False, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False,
                                   repr=False, compare=False)
     _skip_until: dict[int, float] = field(default_factory=dict, init=False,
                                           repr=False, compare=False)
+
+    def __repr__(self) -> str:
+        keys = ", ".join(self._token_fingerprint(tok)[:8] for tok in self.tokens)
+        return (f"AIConfig(provider={self.provider!r}, base_url={self.base_url!r}, "
+                f"model={self.model!r}, keys={len(self.tokens)}[{keys}])")
 
     @property
     def configured(self) -> bool:
@@ -316,17 +333,42 @@ class AIConfig:
                     return True
             return False
 
-    def mark_skip_token(self, token: str, seconds: float) -> None:
+    def mark_skip_token(self, token: str, seconds: float, *,
+                        persist: bool = True) -> None:
+        """Pause a key. *persist* records it for the next process too.
+
+        Only a key that is genuinely spent -- quota exhausted, or refused with
+        401/403 -- is worth persisting. A rate limit is a "slow down" that the
+        next process has no reason to inherit, and writing it to disk meant a
+        30-second throttle outlived the restart that would have cleared it.
+        """
         if not token or seconds <= 0:
             return
         with self._lock:
             now = time.monotonic()
             for i, value in enumerate(self.tokens):
                 if value == token:
-                    self._skip_until[i] = max(self._skip_until.get(i, 0), now + seconds)
+                    deadline = max(self._skip_until.get(i, 0), now + seconds)
+                    self._skip_until[i] = deadline
                     logger.info("Skipping API key #%d for %.0fs", i + 1, seconds)
-                    self._persist_cooldown(value, seconds)
+                    if persist:
+                        # Pass the already-maxed deadline, not the increment:
+                        # _persist_cooldown used to write time.time()+seconds
+                        # unconditionally, so a 30s rate limit overwrote a 12h
+                        # quota cooldown on disk and a restart inside that
+                        # window spent a real request on a key known to be out.
+                        self._persist_cooldown(value, deadline - now)
                     return
+
+    def seconds_until_any_live(self) -> float:
+        """How long until at least one key is usable again (0 if one is now)."""
+        now = time.monotonic()
+        with self._lock:
+            if not self.tokens:
+                return 0.0
+            waits = [max(0.0, self._skip_until.get(i, 0) - now)
+                     for i in range(len(self.tokens))]
+        return min(waits) if waits else 0.0
 
     # -- cooldown persistence -------------------------------------------------
     # A restart would otherwise re-learn which keys are exhausted by spending a
@@ -339,7 +381,11 @@ class AIConfig:
     def _persist_cooldown(self, token: str, seconds: float) -> None:
         try:
             state = _read_cooldown_file()
-            state[self._token_fingerprint(token)] = time.time() + seconds
+            fingerprint = self._token_fingerprint(token)
+            # max(), to match what mark_skip_token keeps in memory. Writing the
+            # new value unconditionally let a short cooldown erase a long one.
+            state[fingerprint] = max(state.get(fingerprint, 0.0),
+                                     time.time() + seconds)
             _write_cooldown_file(state)
         except OSError:
             pass          # a cache we cannot write is not a reason to fail a scan
@@ -485,7 +531,9 @@ def _call_messages(cfg: AIConfig, system: str, user: str,
             e.code, detail, retry_after
         )
         if exhausted and auth:
-            cfg.mark_skip_token(auth, skip_for)
+            # retryable means the provider asked us to wait, not that the key
+            # is finished, so that pause stays in memory for this process.
+            cfg.mark_skip_token(auth, skip_for, persist=not retryable)
         if e.code == 429 and exhausted and not retryable:
             public = "AI quota exhausted. Try again later."
         else:
@@ -818,13 +866,27 @@ def classify_one(cfg: AIConfig, adv: dict, category: str,
     for attempt in range(max_attempts):
         live = cfg.live_indices() if cfg.tokens else []
         if cfg.tokens and not live:
-            raise AIError(
-                "all API keys exhausted",
-                status=429,
-                retryable=False,
-                public_message="AI quota exhausted. Try again later.",
-                key_exhausted=True,
-            )
+            # Every key is cooling. If the last failure was a throttle rather
+            # than a spent quota, waiting is the correct answer: on a
+            # single-key setup this used to raise immediately, so ONE
+            # transient 429 turned the whole remaining batch into "AI quota
+            # exhausted" after a single HTTP call -- up to MAX_AI_BATCH
+            # advisories lost to a throttle that cleared in 30 seconds.
+            wait = cfg.seconds_until_any_live()
+            if (last is not None and last.retryable
+                    and attempt < max_attempts - 1
+                    and 0 < wait <= _MAX_RATE_PAUSE):
+                logger.info("All API keys cooling; waiting %.0fs", wait)
+                time.sleep(wait)
+                live = cfg.live_indices()
+            if not live:
+                raise AIError(
+                    "all API keys exhausted",
+                    status=429,
+                    retryable=False,
+                    public_message="AI quota exhausted. Try again later.",
+                    key_exhausted=True,
+                )
         if live:
             idx = live[(token_offset + attempt) % len(live)]
             token = cfg.tokens[idx]
