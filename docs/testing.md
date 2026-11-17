@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 373: 352 offline + 21 browser
+.venv/bin/python -m unittest discover -s tests        # 543: 517 offline + 26 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python -m pytest tests/ -q                  # if you prefer pytest
 .venv/bin/python tests/test_app.py                    # a single file

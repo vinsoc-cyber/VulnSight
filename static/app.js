@@ -18,7 +18,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     }
 
     // Below this width the rail is a modal slide-over, not a static sidebar.
-    const MODAL_PANEL_WIDTH = 900;
+    // Read from CSS, not duplicated: the rail becomes a slide-over at a
+    // width the stylesheet decides, and a second copy here was free to
+    // drift from it. --breakpoint-panel is declared next to the media query.
+    const MODAL_PANEL_WIDTH = (() => {
+      const declared = getComputedStyle(document.documentElement)
+        .getPropertyValue('--breakpoint-panel').trim();
+      return parseInt(declared, 10) || 900;
+    })();
 
     function setFilterPanel(open, restoreFocus = true) {
       const isOpen = Boolean(open);
@@ -270,6 +277,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       if (state.affects) parts.push(state.affects.split(':').pop());
       if (state.published && state.published !== 'any') {
         // Look the option up by value rather than interpolating into a selector.
+        // From BOOT, not the DOM: this used to read #published's options,
+        // so moving or renaming that control silently degraded every
+        // history row to a raw value like "90d".
         const option = Array.from($('#published').options)
           .find(o => o.value === state.published);
         parts.push(option ? option.textContent.trim() : state.published);
@@ -1373,6 +1383,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       let items = currentItems();
       if (fmt === 'csv-matches') items = items.filter(a => (AI[a.advisory_id]||a.ai||{}).is_match === true);
       if (!items.length) { toast('Nothing to export', 'err'); return; }
+      // The stale banner says "before trusting or exporting them" and
+      // nothing acted on the second half. Not a block: the CSV carries
+      // ai_scored_categories so it self-describes. But it should say so.
+      if (verdictsAreStale()) {
+        toast('Exporting AI verdicts scored for a different selection.', 'err');
+      }
       const rows = items.map(flatRow);
       if (fmt === 'json') {
         const full = items.map(a => ({...a, ai: AI[a.advisory_id] || a.ai || null}));
@@ -1678,5 +1694,10 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       });
       window.matchMedia('(prefers-color-scheme: light)')
         .addEventListener('change', sync);
+      // Another tab may have changed the theme or the search history.
+      window.addEventListener('storage', e => {
+        if (e.key === 'theme') sync();
+        if (e.key === HISTORY_KEY) renderHistory();
+      });
       sync();
     })();
