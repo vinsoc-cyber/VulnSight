@@ -330,15 +330,28 @@ def _merge_group(records: list[dict]) -> dict:
         if ecosystem
     })
 
+    # Derive these from source_records, not from `records` keyed by source
+    # name. One source can contribute several advisories to a group -- two
+    # GHSA records sharing a CVE is the case merge_advisories exists for -- and
+    # a comprehension keyed by source silently kept only the last of them, so
+    # the max() below ran over one value per source instead of all of them.
+    # A medium+low GHSA pair therefore merged to "low", and reversing the page
+    # order merged the same advisory to "medium".
     severity_by_source = {
-        record.get("source", "?"): record.get("severity", "unknown")
-        for record in records
+        source: max(
+            (record.get("severity") or "unknown" for record in group),
+            key=lambda value: _SEVERITY_RANK.get(value, 0),
+        )
+        for source, group in source_records.items()
     }
-    cvss_by_source = {
-        record.get("source", "?"): record.get("cvss_score")
-        for record in records
-        if record.get("cvss_score") is not None
-    }
+    cvss_by_source = {}
+    for source, group in source_records.items():
+        scores = [
+            record["cvss_score"] for record in group
+            if isinstance(record.get("cvss_score"), (int, float))
+        ]
+        if scores:
+            cvss_by_source[source] = max(scores)
     merged["severity_by_source"] = severity_by_source
     merged["cvss_by_source"] = cvss_by_source
     merged["severity"] = max(
@@ -359,10 +372,10 @@ def _merge_group(records: list[dict]) -> dict:
     merged["withdrawn_at"] = max(withdrawn) if withdrawn else None
     merged["kev"] = any(bool(record.get("kev")) for record in records)
     merged["native"] = any(bool(record.get("native")) for record in records)
-    for field in ("nvd_status", "osv_id"):
-        value = next((record.get(field) for record in records if record.get(field)), None)
+    for key in ("nvd_status", "osv_id"):
+        value = next((record.get(key) for record in records if record.get(key)), None)
         if value is not None:
-            merged[field] = value
+            merged[key] = value
     # cvss_vector is set unconditionally, not through the loop above: only OSV
     # produces it, and GHSA always wins as the base record, so a merged
     # GHSA+OSV row inherited a base that has no such key and silently dropped

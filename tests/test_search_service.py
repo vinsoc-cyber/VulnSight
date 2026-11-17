@@ -277,6 +277,43 @@ class TestMergeAdvisories(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["advisory_id"], "GHSA-5vjc-qx43-r747")
 
+    def test_same_source_records_promote_the_worst_severity(self):
+        """severity_by_source used to be keyed by source name, so when one
+        source contributed several records to a group only the last survived
+        and max() ran over a single value. A medium+low GHSA pair merged to
+        "low", and reversing the page order merged it to "medium" -- the same
+        advisory triaged two different ways depending on fetch order.
+        """
+        worse = {"advisory_id": "GHSA-aaaa", "cve_id": "CVE-2026-1",
+                 "aliases": ["CVE-2026-1"], "source": "ghsa",
+                 "severity": "medium", "cvss_score": 5.3}
+        milder = {"advisory_id": "GHSA-bbbb", "cve_id": "CVE-2026-1",
+                  "aliases": ["CVE-2026-1"], "source": "ghsa",
+                  "severity": "low", "cvss_score": 3.3}
+        for order in ([worse, milder], [milder, worse]):
+            merged = search_service.merge_advisories(order)
+            self.assertEqual(len(merged), 1)
+            row = merged[0]
+            self.assertEqual(row["severity"], "medium")
+            self.assertEqual(row["cvss_score"], 5.3)
+            self.assertEqual(row["severity_by_source"], {"ghsa": "medium"})
+            self.assertEqual(row["cvss_by_source"], {"ghsa": 5.3})
+            # Both records stay visible under source_records either way.
+            self.assertEqual(len(row["source_records"]["ghsa"]), 2)
+
+    def test_a_non_numeric_cvss_score_does_not_crash_the_merge(self):
+        """max() over mixed str/float raises TypeError, which is not a
+        SearchError, so it escaped run_search and 500'd the whole request."""
+        good = {"advisory_id": "GHSA-aaaa", "cve_id": "CVE-2026-2",
+                "aliases": ["CVE-2026-2"], "source": "ghsa",
+                "severity": "high", "cvss_score": 7.5}
+        bad = {"advisory_id": "OSV-1", "cve_id": "CVE-2026-2",
+               "aliases": ["CVE-2026-2"], "source": "osv",
+               "severity": "high", "cvss_score": "N/A"}
+        row = search_service.merge_advisories([good, bad])[0]
+        self.assertEqual(row["cvss_score"], 7.5)
+        self.assertNotIn("osv", row["cvss_by_source"])
+
     def test_cvss_vector_survives_the_merge(self):
         """Only OSV produces it, and GHSA always wins as the base record.
 
