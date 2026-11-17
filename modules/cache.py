@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 
 from .config import DATA_DIR
@@ -85,6 +86,13 @@ _MIGRATIONS = [
                finished_at REAL
            );
            CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)"""),
+    # v6: owner. jobs rows are shared process-wide; the worker pool is not.
+    # startup() issued an unqualified UPDATE over every queued/running row, so
+    # a second gunicorn worker booting ~200ms after the first marked the
+    # first's live job "failed -- server restarted", the poller resubmitted,
+    # and then the original worker's own finish_job flipped the same row to
+    # "done": one job reporting two terminal states. Same on every respawn.
+    (6, "ALTER TABLE jobs ADD COLUMN owner TEXT"),
 ]
 
 
@@ -272,12 +280,56 @@ def _job_row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+# Identifies this process for its lifetime. Jobs execute in the worker that
+# accepted them, so a job is orphaned exactly when its owner is gone.
+PROCESS_ID = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+# A job whose owner still looks alive but which has been in flight far longer
+# than any search can take is reconciled anyway. This is the backstop for a
+# recycled PID -- in a container the next boot starts from low PIDs, so a dead
+# worker's id can be worn by a live process.
+STALE_JOB_SECONDS = 3 * 3600
+
+
+def _owner_is_alive(owner: str | None, created_at: float, now: float) -> bool:
+    """Is the process that accepted this job still running?
+
+    Unqualified reconciliation was the bug: startup() failed *every*
+    queued/running row, so a second gunicorn worker booting 200ms after the
+    first marked the first's live job "failed -- server restarted". The
+    poller resubmitted, then the original worker's own finish_job flipped the
+    same row to "done" -- one job, two terminal states, on every respawn.
+
+    Unsure counts as alive, because wrongly failing a running job is worse
+    than leaving a dead one for the staleness backstop to catch.
+    """
+    if now - (created_at or 0) > STALE_JOB_SECONDS:
+        return False
+    if not owner:
+        return False                      # written before v6: nobody owns it
+    if owner == PROCESS_ID:
+        return True                       # our own, from before this call
+    pid_text = owner.split("-", 1)[0]
+    if not pid_text.isdigit():
+        return False
+    try:
+        os.kill(int(pid_text), 0)         # signal 0: liveness probe only
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                       # exists, owned by someone else
+    except OSError:
+        return True
+    return True
+
+
 def create_job(job_id: str, kind: str, request: dict, path: str | None = None) -> None:
     with _db(path) as conn:
         conn.execute(
-            """INSERT INTO jobs (job_id, kind, status, request, created_at)
-               VALUES (?,?,'queued',?,?)""",
-            (job_id, kind, json.dumps(request, ensure_ascii=False), time.time()),
+            """INSERT INTO jobs (job_id, kind, status, request, created_at, owner)
+               VALUES (?,?,'queued',?,?,?)""",
+            (job_id, kind, json.dumps(request, ensure_ascii=False), time.time(),
+             PROCESS_ID),
         )
 
 
@@ -329,12 +381,24 @@ def fail_orphaned_jobs(message: str, path: str | None = None) -> int:
     that died — so leaving them `queued`/`running` would strand every poller
     forever on a job that can never finish.
     """
+    now = time.time()
     with _db(path) as conn:
+        rows = conn.execute(
+            "SELECT job_id, owner, created_at FROM jobs "
+            "WHERE status IN ('queued','running')"
+        ).fetchall()
+        orphans = [
+            row["job_id"] for row in rows
+            if not _owner_is_alive(row["owner"], row["created_at"], now)
+        ]
+        if not orphans:
+            return 0
+        placeholders = ",".join("?" * len(orphans))
         cursor = conn.execute(
-            """UPDATE jobs
-                  SET status='failed', error=?, error_status=503, finished_at=?
-                WHERE status IN ('queued','running')""",
-            (message, time.time()),
+            f"""UPDATE jobs
+                   SET status='failed', error=?, error_status=503, finished_at=?
+                 WHERE job_id IN ({placeholders})""",
+            (message, now, *orphans),
         )
         return cursor.rowcount or 0
 

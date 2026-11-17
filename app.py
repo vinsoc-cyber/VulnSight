@@ -401,11 +401,15 @@ def create_app():
     @app.route("/api/v1/openapi.json")
     def api_openapi():
         """The machine-readable contract, for client generators and Postman."""
-        payload = openapi.build_spec()
+        # The ETag already declares this immutable per API_VERSION, so the
+        # 304 is checked before anything is built. This endpoint is
+        # unauthenticated and exempt from the rate limiter (POST only), which
+        # made rebuilding and re-serialising a 449-line document per request
+        # the cheapest CPU on the box to burn remotely.
         etag = f'W/"openapi-{openapi.API_VERSION}"'
         if request.headers.get("If-None-Match") == etag:
             return "", 304
-        response = jsonify(payload)
+        response = jsonify(openapi.build_spec())
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = "private, max-age=3600"
         return response

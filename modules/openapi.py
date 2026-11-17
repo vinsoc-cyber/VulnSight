@@ -19,6 +19,8 @@ actually sends, not against what it was believed to send when it was written.
 
 from __future__ import annotations
 
+import functools
+
 from .cwe_categories import CATEGORIES, ECOSYSTEMS, SEVERITIES
 
 API_VERSION = "1.0.0"
@@ -217,6 +219,12 @@ _JOB = {
                    "description": "Present only when status is `done`."},
         "error": {"type": "string",
                   "description": "Present only when status is `failed`."},
+        "error_status": {
+            "type": "integer",
+            "description": ("The HTTP status this failure maps to; present "
+                            "only when status is `failed`. 4xx means the "
+                            "request was wrong, 5xx that an upstream was."),
+        },
     },
 }
 
@@ -238,8 +246,14 @@ def _json_response(description: str, schema: dict) -> dict:
 _ERROR_RESPONSE = _json_response("Error", _ERROR)
 
 
+@functools.lru_cache(maxsize=4)
 def build_spec(server_url: str = "/") -> dict:
-    """The full OpenAPI 3.1 document."""
+    """The full OpenAPI 3.1 document.
+
+    Cached: it is a pure function of module-level constants, and the ETag
+    already tells clients it cannot change within an API_VERSION. Callers
+    must treat the result as read-only -- Flask's jsonify only serialises it.
+    """
     return {
         "openapi": "3.1.0",
         "info": {

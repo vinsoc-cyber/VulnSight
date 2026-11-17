@@ -196,6 +196,16 @@ def public_view(job: dict) -> dict:
         view["result"] = job["result"]
     elif job["status"] == "failed":
         view["error"] = job["error"]
+        # error_status was persisted, covered by a test named for it, and then
+        # dropped here -- so it never reached a client. app.py promises "a
+        # polled result is identical to a synchronous one", but the
+        # synchronous path answers a gh failure with 502 while this one
+        # answered 200 + {"status":"failed"} with no way to tell 400 (your
+        # query is wrong, do not retry) from 502/503 (upstream, back off).
+        # For the cron client this API is built for, that is the difference
+        # between backing off and hammering.
+        if job.get("error_status"):
+            view["error_status"] = job["error_status"]
     return view
 
 

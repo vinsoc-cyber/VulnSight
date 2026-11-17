@@ -90,11 +90,24 @@ class TestJobLifecycle(unittest.TestCase):
         running_view = jobs.public_view(queued)
         self.assertNotIn("result", running_view)  # no partial results
 
+    def _set_owner(self, job_id, owner):
+        import sqlite3
+        with sqlite3.connect(self.tmp.name) as conn:
+            conn.execute("UPDATE jobs SET owner=? WHERE job_id=?", (owner, job_id))
+
     def test_orphaned_jobs_are_failed_on_startup(self):
-        """A restart leaves rows mid-flight that nothing is executing any more."""
+        """A restart leaves rows mid-flight that nothing is executing any more.
+
+        "Orphaned" means the process that accepted the job is gone, so the
+        rows have to carry a dead owner -- creating them in this live process
+        is the case startup() must now leave alone.
+        """
         cache.create_job("a" * 24, "search", {}, path=self.tmp.name)
         cache.mark_job_running("a" * 24, path=self.tmp.name)
         cache.create_job("b" * 24, "search", {}, path=self.tmp.name)  # still queued
+        # PID 2**22-1 is above the default pid_max, so it cannot be running.
+        for job_id in ("a" * 24, "b" * 24):
+            self._set_owner(job_id, "4194303-deadbeef")
 
         failed = jobs.startup(path=self.tmp.name)
         self.assertEqual(failed, 2)
@@ -103,6 +116,38 @@ class TestJobLifecycle(unittest.TestCase):
             self.assertEqual(job["status"], "failed")
             self.assertEqual(job["error_status"], 503)
             self.assertIn("restart", job["error"].lower())
+
+    def test_a_second_worker_does_not_kill_a_live_workers_job(self):
+        """jobs rows are shared process-wide; the worker pool is not. The
+        unqualified UPDATE meant a second gunicorn worker booting 200ms after
+        the first marked the first's in-flight job "failed -- server
+        restarted". The poller resubmitted, then the original worker's own
+        finish_job flipped the same row to "done": one job, two terminal
+        states, on every respawn."""
+        cache.create_job("c" * 24, "search", {}, path=self.tmp.name)
+        cache.mark_job_running("c" * 24, path=self.tmp.name)
+        # Owned by a process that is very much alive: this one.
+        failed = jobs.startup(path=self.tmp.name)
+        self.assertEqual(failed, 0)
+        self.assertEqual(
+            cache.get_job("c" * 24, path=self.tmp.name)["status"], "running")
+
+    def test_a_job_with_no_owner_is_still_reconciled(self):
+        """Rows written before the owner column existed."""
+        cache.create_job("d" * 24, "search", {}, path=self.tmp.name)
+        self._set_owner("d" * 24, None)
+        self.assertEqual(jobs.startup(path=self.tmp.name), 1)
+
+    def test_a_very_old_job_is_reconciled_even_if_its_pid_looks_alive(self):
+        """Backstop for a recycled PID: in a container the next boot starts
+        from low PIDs, so a dead worker's id can be worn by a live process."""
+        cache.create_job("e" * 24, "search", {}, path=self.tmp.name)
+        cache.mark_job_running("e" * 24, path=self.tmp.name)
+        import sqlite3
+        with sqlite3.connect(self.tmp.name) as conn:
+            conn.execute("UPDATE jobs SET created_at=? WHERE job_id=?",
+                         (time.time() - cache.STALE_JOB_SECONDS - 60, "e" * 24))
+        self.assertEqual(jobs.startup(path=self.tmp.name), 1)
 
     def test_startup_leaves_finished_jobs_alone(self):
         job_id = jobs.submit("search", {}, lambda _r: {"ok": 1})

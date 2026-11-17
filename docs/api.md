@@ -233,12 +233,16 @@ same upstream budget as running one.
   "started_at": 1756000001.2,
   "finished_at": 1756000118.9,
   "result": { /* identical to a POST /api/v1/search response */ },
-  "error": "GHSA fetch failed."   // present only when status is "failed"
+  "error": "GHSA fetch failed.",  // present only when status is "failed"
+  "error_status": 502             // the HTTP status this failure maps to
 }
 ```
 
-`result` appears only on `done`, `error` only on `failed` — there are no partial
-results to poll for. The payload under `result` is byte-identical to what the
+`result` appears only on `done`, `error` and `error_status` only on `failed` —
+there are no partial results to poll for. `error_status` is what the
+synchronous endpoint would have returned, so a polling client can tell "your
+query is wrong, do not retry" (4xx) from "upstream is unwell, back off"
+(5xx) without parsing the message. The payload under `result` is byte-identical to what the
 synchronous endpoint returns, so a client never parses two shapes.
 
 Unlike every other `GET`, this one **requires the token when one is configured**.
@@ -258,7 +262,11 @@ Unknown or malformed ids return `404 {"error": "No such job."}`.
   shipped `Dockerfile` uses one worker, so this is only a concern if you change it.
 - **A restart fails in-flight jobs.** They are marked `failed` with
   `Server restarted while this job was in flight; resubmit it.` rather than left
-  in `running` forever, because nothing is executing them any more.
+  in `running` forever, because nothing is executing them any more. Only jobs
+  whose owning process is actually gone are reconciled, so a second worker
+  starting up cannot fail a job the first one is still running; a job in
+  flight for more than three hours is reconciled regardless, as a backstop
+  for a recycled PID.
 - **One worker by default** (`VULNSIGHT_JOB_WORKERS`). The sources are rate
   limited per account, not per request, so running searches concurrently spends
   the same GitHub and NVD budget faster without finishing any job sooner.
