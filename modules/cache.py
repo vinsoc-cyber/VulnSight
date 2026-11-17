@@ -239,7 +239,8 @@ def get_advisories(advisory_ids, path: str | None = None) -> dict[str, dict]:
             chunk = ids[start:start + 500]
             placeholders = ",".join("?" * len(chunk))
             rows = conn.execute(
-                f"SELECT advisory_id, data FROM advisories "  # noqa: S608 - placeholders only
+                # Only placeholders are interpolated; every value is bound.
+                f"SELECT advisory_id, data FROM advisories "
                 f"WHERE advisory_id IN ({placeholders})",
                 chunk,
             ).fetchall()

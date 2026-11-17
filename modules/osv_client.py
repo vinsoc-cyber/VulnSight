@@ -157,7 +157,7 @@ def download_ecosystem(osv_eco: str, force: bool = False,
         try:
             http_retry.with_retries(
                 _once, what=f"OSV bulk {osv_eco}", attempts=2)
-        except Exception as e:  # noqa: BLE001 - surface a clean message to the UI
+        except Exception as e:  # surface a clean message to the UI
             _unlink_quietly(tmp)
             # A stale export beats no export. The freshness check above only
             # short-circuits on success, so once the zip was a day old a

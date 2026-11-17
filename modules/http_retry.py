@@ -148,7 +148,7 @@ def with_retries(
             break
         try:
             return call()
-        except Exception as exc:                      # noqa: BLE001 - re-raised below
+        except Exception as exc:                      # re-raised below
             last = exc
             if not retryable(exc) or attempt == attempts - 1:
                 raise

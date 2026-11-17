@@ -537,7 +537,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         except ghsa.GhCliError as e:
             logger.warning("GHSA fetch failed: %s", e)
             if q.sources == ["ghsa"]:
-                raise SearchError("GHSA fetch failed.", 502)
+                raise SearchError("GHSA fetch failed.", 502) from e
             warnings.append("GHSA fetch failed.")
 
     # --- OSV (local CWE filter over the bulk export) ---
@@ -601,7 +601,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         except nvd_client.NvdError as e:
             logger.warning("NVD fetch failed: %s", e)
             if q.sources == ["nvd"]:
-                raise SearchError("NVD fetch failed.", 502)
+                raise SearchError("NVD fetch failed.", 502) from e
             warnings.append("NVD fetch failed.")
 
     # --- OSV native (no CWE) — needs the AI pass to be useful ---

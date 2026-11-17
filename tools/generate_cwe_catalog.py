@@ -77,7 +77,8 @@ def load_xml(source: str | None) -> ET.Element:
     if source:
         return ET.parse(source).getroot()
     print(f"downloading {CWE_ZIP_URL} ...", file=sys.stderr)
-    with urllib.request.urlopen(CWE_ZIP_URL, timeout=120) as response:  # noqa: S310
+    # A fixed https URL, not user input.
+    with urllib.request.urlopen(CWE_ZIP_URL, timeout=120) as response:
         payload = response.read()
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         name = next(n for n in archive.namelist() if n.endswith(".xml"))

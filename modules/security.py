@@ -299,7 +299,8 @@ def _hostname_from_url(value: str) -> tuple[str, bool]:
     try:
         # Invalid ports (e.g. http://127.0.0.1:5000.evil.com) raise here.
         # hostname itself still returns 127.0.0.1, so this check is required.
-        parts.port
+        # Assigned, not a bare expression: the point is the ValueError.
+        _ = parts.port
     except ValueError:
         return "", False
     host = canonical_host(parts.hostname)

@@ -39,7 +39,7 @@ _CVSS_PR = {
 
 def _roundup(x: float) -> float:
     """Roundup() as defined by the CVSS v3.1 spec, Appendix A."""
-    i = int(round(x * 100000))
+    i = round(x * 100000)
     if i % 10000 == 0:
         return i / 100000.0
     return (i // 10000 + 1) / 10.0

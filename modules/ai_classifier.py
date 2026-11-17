@@ -127,7 +127,7 @@ _RATE_MARKERS = (
 )
 
 
-_CONFIG_CACHE: dict[tuple, "AIConfig"] = {}
+_CONFIG_CACHE: dict[tuple, AIConfig] = {}
 _CONFIG_CACHE_MAX = 8
 _CONFIG_LOCK = threading.Lock()
 
