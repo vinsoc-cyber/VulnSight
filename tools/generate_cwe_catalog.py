@@ -16,6 +16,7 @@ Source: https://cwe.mitre.org/data/xml/cwec_latest.xml.zip
 from __future__ import annotations
 
 import io
+import re
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -29,6 +30,23 @@ OUT_PATH = Path(__file__).resolve().parent.parent / "modules" / "cwe_catalog.py"
 # specific. Advisories are tagged with Base/Variant CWEs most of the time;
 # Class/Pillar entries are the vague umbrellas (CWE-284 and friends).
 ABSTRACTIONS = ("Variant", "Base", "Compound", "Class", "Pillar")
+
+# Version and Date are the only XML attributes that reach the generated file
+# outside a repr() -- they are also interpolated into its module docstring,
+# where a value containing a triple quote would close the docstring and the
+# rest would be executed on import. repr() cannot help there, so these two are
+# validated instead: anything that is not an ordinary version or date string
+# is a tampered or corrupt catalog, and refusing is the only safe answer.
+_SAFE_ATTRIBUTE = re.compile(r"[\w.\- :]{1,40}\Z")
+
+
+def _checked_attribute(value: str, name: str) -> str:
+    if not _SAFE_ATTRIBUTE.match(value or ""):
+        raise SystemExit(
+            f"refusing to generate: catalog {name} is not a plain "
+            f"version/date string: {value!r}"
+        )
+    return value
 
 # Community names that never appear in MITRE's own text but are what people
 # actually type. Everything else comes from the catalog's Alternate_Terms.
@@ -112,7 +130,13 @@ def collect(root: ET.Element) -> tuple[dict, dict, list[str], str, str]:
     if unknown_aliases:
         raise SystemExit(f"EXTRA_ALIASES references unknown CWEs: {unknown_aliases}")
 
-    return names, aliases, deprecated, root.get("Version") or "?", root.get("Date") or "?"
+    return (
+        names,
+        aliases,
+        deprecated,
+        _checked_attribute(root.get("Version") or "?", "Version"),
+        _checked_attribute(root.get("Date") or "?", "Date"),
+    )
 
 
 def render(root: ET.Element) -> str:
@@ -147,31 +171,34 @@ def render(root: ET.Element) -> str:
         "",
         "from __future__ import annotations",
         "",
-        f'CWE_VERSION = "{version}"',
-        f'CWE_RELEASED = "{date}"',
+        f"CWE_VERSION = {version!r}",
+        f"CWE_RELEASED = {date!r}",
         "",
         "NAMES: dict[str, str] = {",
     ]
     for cwe_id in sorted(names, key=key):
-        lines.append(f'    "{cwe_id}": {names[cwe_id]!r},')
+        lines.append(f"    {cwe_id!r}: {names[cwe_id]!r},")
     lines.append("}")
     lines.append("")
     lines.append("ALIASES: dict[str, tuple[str, ...]] = {")
     for cwe_id in sorted(aliases, key=key):
-        terms = ", ".join(repr(term) for term in aliases[cwe_id])
-        lines.append(f'    "{cwe_id}": ({terms},),')
+        lines.append(f"    {cwe_id!r}: {tuple(aliases[cwe_id])!r},")
     lines.append("}")
     lines.append("")
     lines.append("# Abstraction level, shown in the picker so an umbrella CWE is obvious.")
     lines.append("ABSTRACTION: dict[str, tuple[str, ...]] = {")
     for level in ABSTRACTIONS:
-        ids = ", ".join(f'"{cwe_id}"' for cwe_id in sorted(by_abstraction.get(level, []), key=key))
-        lines.append(f'    "{level}": ({ids},),')
+        ids = tuple(sorted(by_abstraction.get(level, []), key=key))
+        # repr() of a tuple, not a hand-built "(a, b,)": an abstraction level
+        # with no members used to emit "(,)", which is a SyntaxError, and
+        # main() wrote the file before anything checked it -- so a filtered or
+        # future catalog would brick `import app` on the next start.
+        lines.append(f"    {level!r}: {ids!r},")
     lines.append("}")
     lines.append("")
     lines.append("DEPRECATED: frozenset[str] = frozenset({")
     for cwe_id in sorted(deprecated, key=key):
-        lines.append(f'    "{cwe_id}",')
+        lines.append(f"    {cwe_id!r},")
     lines.append("})")
     lines.append("")
     return "\n".join(lines)
@@ -180,6 +207,17 @@ def render(root: ET.Element) -> str:
 def main() -> None:
     root = load_xml(sys.argv[1] if len(sys.argv) > 1 else None)
     text = render(root)
+    # This file writes Python that modules/cwe_categories.py imports, which
+    # every client imports in turn -- so anything that lands here runs inside
+    # the server at startup. Never write a module that does not compile, and
+    # never write one built from values that were not repr()'d above.
+    try:
+        compile(text, str(OUT_PATH), "exec")
+    except SyntaxError as exc:
+        raise SystemExit(
+            f"refusing to write {OUT_PATH}: generated module does not compile "
+            f"({exc.msg} at line {exc.lineno})"
+        ) from exc
     OUT_PATH.write_text(text, encoding="utf-8")
     print(f"wrote {OUT_PATH} ({len(text) / 1024:.1f} KiB)")
 

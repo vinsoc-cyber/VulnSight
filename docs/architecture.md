@@ -23,13 +23,13 @@ modules/
   cvss.py             122   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            357   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             159   submit/poll queue for searches too slow to hold open
-  ai_classifier.py    887   provider client, prompt, verdict cache, key rotation
+  ai_classifier.py    930   provider client, prompt, verdict cache, key rotation
   openapi.py          449   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only
 static/app.js        1551   all UI logic; server data arrives via window.BOOT
 static/style.css     1728   design tokens + components, light and dark
-tools/generate_cwe_catalog.py                       188   regenerates modules/cwe_catalog.py from MITRE XML
+tools/generate_cwe_catalog.py                       226   regenerates modules/cwe_catalog.py from MITRE XML
 tools/sync_module_map.py                        69   rewrites the line counts in this very table
 ```
 
