@@ -350,6 +350,80 @@ class TestVerdictsFollowTheQuery(UITestCase):
         self.assertTrue(self.page.is_disabled("#only_match"),
                         "filtering on stale verdicts must be blocked")
 
+    def test_a_partial_rescore_does_not_clear_the_stale_banner(self):
+        """Staleness used to be one global flag for the whole verdict map.
+
+        Scoring ANY subset overwrote it. So: score everything against BAC,
+        switch the class, then hit "Retry failed" for the one advisory that
+        errored -- the flag became ['the new class'] and the banner vanished,
+        re-enabling "Confirmed only" while every other verdict still answered
+        "is this BAC?". The user then filters and exports verdicts the UI has
+        just told them are trustworthy. Staleness is per verdict now.
+        """
+        records = [_advisory(i) for i in range(3)]
+        self.searches = []
+        self.classifies = []
+
+        def on_search(route):
+            self.searches.append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(status=200, content_type="application/json",
+                          body=_search_body(records, 100))
+        self.page.route("**/api/search", on_search)
+
+        # The first advisory always errors, so "Retry failed" stays available
+        # and re-scores exactly one row.
+        def on_classify(route):
+            payload = json.loads(route.request.post_data or "{}")
+            self.classifies.append(payload)
+            categories = payload.get("categories", [])
+            verdicts = {}
+            for advisory_id in payload.get("advisory_ids", []):
+                if advisory_id == records[0]["advisory_id"]:
+                    verdicts[advisory_id] = {"error": "upstream refused",
+                                             "has_errors": True}
+                else:
+                    verdicts[advisory_id] = {
+                        "is_match": True, "confidence": 0.9, "vuln_type": "t",
+                        "reason": "r", "scored_categories": categories,
+                        "cached": False, "has_errors": False}
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"categories": categories,
+                                           "by_category": {}, "missing": [],
+                                           "verdicts": verdicts}))
+        self.page.route("**/api/ai/classify", on_classify)
+        self.page.goto(self.base, wait_until="networkidle")
+
+        self.search_and_wait()
+        self.page.click("#ai-btn")
+        self.page.wait_for_timeout(600)
+        self.assertTrue(self.page.evaluate(
+            "() => document.querySelector('#stale-banner').hidden"),
+            "verdicts scored for the current selection are not stale")
+
+        # Switch the query. Every verdict now answers the wrong question.
+        self.page.evaluate("""() => {
+          const boxes = [...document.querySelectorAll('input[name=category]')];
+          boxes[0].checked = false;
+          boxes[0].dispatchEvent(new Event('change', {bubbles: true}));
+          boxes[1].checked = true;
+          boxes[1].dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(200)
+        self.assertFalse(self.page.evaluate(
+            "() => document.querySelector('#stale-banner').hidden"))
+
+        # Re-score ONLY the errored advisory against the new selection.
+        self.page.click("#retry-btn")
+        self.page.wait_for_timeout(700)
+        self.assertEqual(len(self.classifies[-1]["advisory_ids"]), 1,
+                         "retry should re-score only the failed advisory")
+        self.assertFalse(self.page.evaluate(
+            "() => document.querySelector('#stale-banner').hidden"),
+            "a one-row rescore cleared the banner for rows still scored "
+            "against the previous selection")
+        self.assertTrue(self.page.is_disabled("#only_match"),
+                        "filtering on stale verdicts must stay blocked")
+
     def test_summary_reports_the_visible_count(self):
         self.open(records=[_advisory(i) for i in range(4)], is_match=False)
         self.search_and_wait()

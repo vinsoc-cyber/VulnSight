@@ -387,7 +387,13 @@ class TestFlaskApp(unittest.TestCase):
         self.assertLess(len(html), 60000, "index page should stay lean")
         for export_format in ("csv", "json", "csv-matches"):
             self.assertIn(f'data-fmt="{export_format}"', html)
-        self.assertLess(html.index("window.BOOT"), html.index("app.js"))
+        # app.js reads window.BOOT at load, so the data has to be defined
+        # above the tag. Match the tag itself: a bare "app.js" also matches any
+        # comment that happens to name the file, which made this pass or fail
+        # on prose rather than on script order.
+        self.assertIn('<script src="/static/app.js">', html)
+        self.assertLess(html.index("window.BOOT"),
+                        html.index('<script src="/static/app.js">'))
         self.assertIn('id="ai-test-pill" type="button"', html)
         self.assertIn('value="epss_percentage"', html)
         self.assertIn('value="epss_percentile"', html)

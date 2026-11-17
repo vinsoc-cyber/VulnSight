@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1218">
+  <meta name="theme-color" content="#15181d">
   <meta name="description" content="VulnSight searches GHSA, NVD and OSV by bug class (CWE), then optionally confirms matches with an LLM.">
   <title>VulnSight — advisory search by bug class</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -22,7 +22,6 @@
     </a>
 
     <div class="system-status" role="group" aria-label="System status">
-      <span class="status-title">STATUS</span>
       <span class="pill">
         <span class="dot {{ 'ok' if gh_ok else 'bad' }}" aria-hidden="true"></span>
         <span class="pill-key">GH</span>
@@ -52,9 +51,9 @@
 
   <div class="layout">
     <aside class="control-rail" id="control-panel" aria-label="Search filters">
+      <div class="rail-scroll">
       <div class="rail-intro">
         <div>
-          <span class="eyebrow">Query</span>
           <h2>Build a search</h2>
           <p>Filter GHSA, NVD and OSV by bug class, ecosystem and package. Optionally confirm matches with AI.</p>
         </div>
@@ -145,7 +144,6 @@
       <section class="control-section" aria-labelledby="sources-heading">
         <div class="section-heading">
           <h3 id="sources-heading">Sources</h3>
-          <span class="section-note">Coverage</span>
         </div>
         <fieldset class="field field-last">
           <legend class="sr-only">Choose data sources</legend>
@@ -178,7 +176,6 @@
       <section class="control-section" aria-labelledby="scope-heading">
         <div class="section-heading">
           <h3 id="scope-heading">Scope</h3>
-          <span class="section-note">Target</span>
         </div>
         <div class="row">
           <div class="field">
@@ -205,7 +202,6 @@
       <section class="control-section" aria-labelledby="query-heading">
         <div class="section-heading">
           <h3 id="query-heading">Options</h3>
-          <span class="section-note">Retrieval</span>
         </div>
         <div class="row">
           <div class="field">
@@ -261,9 +257,10 @@
         </div>
       </section>
 
+      </div><!-- /.rail-scroll -->
+
       <div class="control-actions">
         <button class="primary" id="auto-btn" type="button" title="Pick optimal sources, search, run AI, and show only real matches">
-          <span class="button-kicker">Full pipeline</span>
           <span class="button-main">Run intelligent scan</span>
         </button>
         <button class="secondary-action" id="search-btn" type="button" title="Fetch advisories without AI classification">
@@ -276,7 +273,6 @@
     <main class="workspace" id="workspace">
       <section class="workspace-intro" aria-labelledby="workspace-title">
         <div class="workspace-heading">
-          <span class="eyebrow">Results</span>
           <h2 id="workspace-title">Advisory queue</h2>
           <p>Merged records from GHSA, NVD and OSV, ranked for triage. Confirm with AI when CWE tags are too broad.</p>
         </div>
@@ -296,7 +292,6 @@
 
       <section class="result-command" aria-label="Result controls">
         <div class="result-summary">
-          <span class="command-label">Queue</span>
           <div class="summary" id="summary" role="status" aria-live="polite">Select a bug class, then run a search.</div>
         </div>
         <div class="toolbar-actions">
@@ -323,7 +318,6 @@
       <section id="results" class="results" aria-label="Advisory results" aria-busy="false">
         <div class="empty empty-onboarding">
           <div class="empty-copy">
-            <span class="eyebrow">No query yet</span>
             <h3>Search by how the bug works, not by the title.</h3>
             <p>Type a CWE ID or a bug name — “639”, “IDOR”, “SQL injection” — or tick a class. VulnSight merges sources, then you can score the queue with AI.</p>
             <ol class="workflow" aria-label="Analysis workflow">
@@ -340,7 +334,6 @@
 
   <div id="auth-gate" class="auth-gate" hidden>
     <div class="auth-gate-card" role="dialog" aria-labelledby="auth-gate-title" aria-modal="true">
-      <span class="eyebrow">Access</span>
       <h2 id="auth-gate-title">API token required</h2>
       <p id="auth-gate-hint">This instance sets VULNSIGHT_API_TOKEN. Enter it to search or classify.</p>
       <label for="auth-token">Token</label>
@@ -350,18 +343,13 @@
   </div>
 
   <script nonce="{{ csp_nonce }}">
+    // Runs before paint so the page never flashes the wrong theme. It only
+    // applies the stored choice; the colour itself is read back out of the
+    // stylesheet in app.js, so no hex is duplicated here.
     (function() {
       var saved = localStorage.getItem('theme');
       if (saved === 'light' || saved === 'dark') {
         document.documentElement.dataset.theme = saved;
-      }
-      var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) {
-        var theme = document.documentElement.dataset.theme;
-        if (!theme) {
-          theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        }
-        meta.content = theme === 'dark' ? '#0b1218' : '#f4f7f8';
       }
     })();
   </script>
@@ -376,35 +364,5 @@
     };
   </script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
-  <script nonce="{{ csp_nonce }}">
-    (function() {
-      var toggle = document.getElementById('theme-toggle');
-      if (!toggle) return;
-
-      function getEffectiveTheme() {
-        var explicit = document.documentElement.dataset.theme;
-        if (explicit === 'light' || explicit === 'dark') return explicit;
-        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      }
-
-      function updateToggle() {
-        var theme = getEffectiveTheme();
-        toggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
-        toggle.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
-        var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.content = theme === 'dark' ? '#0b1218' : '#f4f7f8';
-      }
-
-      toggle.addEventListener('click', function() {
-        var next = getEffectiveTheme() === 'dark' ? 'light' : 'dark';
-        document.documentElement.dataset.theme = next;
-        localStorage.setItem('theme', next);
-        updateToggle();
-      });
-
-      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', updateToggle);
-      updateToggle();
-    })();
-  </script>
 </body>
 </html>

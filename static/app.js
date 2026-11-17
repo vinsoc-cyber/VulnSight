@@ -7,7 +7,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     // The sorted category list `AI` was scored against. A verdict for "bac" says
     // nothing about "sqli", so the queue must not be filtered or exported as if
     // it did once the selection moves on.
-    let AI_CATS = null;
     // Facts about the last successful search, so the summary can be re-rendered
     // whenever the visible set changes instead of going stale after one write.
     let SEARCH_META = null;
@@ -660,13 +659,31 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return set.size;
     }
 
+    // Toasts stack in one region instead of each pinning itself to the same
+    // viewport corner. A degraded multi-source search emits one toast per
+    // warning ("NVD rate-limited", "OSV export stale", "GHSA truncated"), and
+    // as independent fixed-position elements they landed exactly on top of
+    // each other: the user saw one line and silently lost the rest.
+    function toastRegion() {
+      let region = document.getElementById('toast-region');
+      if (!region) {
+        region = document.createElement('div');
+        region.id = 'toast-region';
+        region.className = 'toast-region';
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', 'Notifications');
+        document.body.appendChild(region);
+      }
+      return region;
+    }
+
     function toast(msg, kind='') {
       const t = document.createElement('div');
       t.className = 'toast ' + kind;
       t.textContent = msg;
       t.setAttribute('role', kind === 'err' ? 'alert' : 'status');
       t.setAttribute('aria-live', kind === 'err' ? 'assertive' : 'polite');
-      document.body.appendChild(t);
+      toastRegion().appendChild(t);
       setTimeout(() => t.remove(), 5000);
     }
 
@@ -844,9 +861,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function currentItems() {
       let items = LAST.slice();
       if ($('#only_match').checked) {
+        const cats = selectedCategories();
         items = items.filter(a => {
           const v = AI[a.advisory_id] || a.ai;
-          return v && v.is_match === true;
+          if (!v || v.is_match !== true) return false;
+          // A half-rescored queue degrades per row rather than globally: a
+          // verdict that does not cover the current query cannot confirm it.
+          const scored = v.scored_categories || [];
+          return cats.every(category => scored.includes(category));
         });
       }
       // AI-confirmed matches stay at the top; otherwise honour the selected sort.
@@ -886,11 +908,28 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // True when verdicts on screen were scored for a different selection than
     // the one now active — they describe another question's answer.
+    // Staleness is a property of each verdict, not one flag for the whole
+    // map. AI_CATS was a single global that classifyIds overwrote after
+    // scoring ANY subset: score 100 against BAC, change the class to SQLi,
+    // then hit "Retry failed" for the 3 that errored, and AI_CATS became
+    // ['sqli'] -- so the banner vanished and "Confirmed only" re-enabled
+    // while 97 verdicts still answered "is this BAC?". Every aggregate
+    // already carries scored_categories, so ask the verdicts themselves.
+    function staleVerdictCategories() {
+      const cats = selectedCategories();
+      if (!cats.length) return null;
+      for (const verdict of Object.values(AI)) {
+        const scored = verdict && verdict.scored_categories;
+        // An error verdict was never scored against anything; it is missing,
+        // not stale, and updateActionButtons already handles that.
+        if (!scored || !scored.length) continue;
+        if (cats.some(category => !scored.includes(category))) return scored;
+      }
+      return null;
+    }
+
     function verdictsAreStale() {
-      if (!AI_CATS || !Object.keys(AI).length) return false;
-      const now = selectedCategories().slice().sort();
-      return now.length !== AI_CATS.length
-        || now.some((c, i) => c !== AI_CATS[i]);
+      return staleVerdictCategories() !== null;
     }
 
     function classLabelFor(key) {
@@ -901,11 +940,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     function renderStaleBanner() {
       const banner = $('#stale-banner');
-      const stale = verdictsAreStale();
+      const scored = staleVerdictCategories();
+      const stale = scored !== null;
       banner.hidden = !stale;
       if (stale) {
         banner.textContent = 'AI verdicts below were scored for '
-          + AI_CATS.map(classLabelFor).join(' + ')
+          + scored.map(classLabelFor).join(' + ')
           + ', not the current selection. Re-run “Refine with AI” before trusting or exporting them.';
       }
       return stale;
@@ -1004,7 +1044,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       // the Auto pipeline or export controls as if it were fresh data.
       LAST = [];
       AI = {};
-      AI_CATS = null;
       updateActionButtons();
       const payload = Object.assign({}, state, {
         published: publishedWindow(state.published),
@@ -1021,9 +1060,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         AI = {};
         LAST.forEach(a => { if (a.ai) AI[a.advisory_id] = a.ai; });
         const cached = LAST.filter(a => a.ai).length;
-        // The server only attaches cached verdicts when every requested
-        // category has one, so they belong to exactly this selection.
-        AI_CATS = cached ? state.categories.slice().sort() : null;
         SEARCH_META = {
           count: data.count,
           perSource: data.query.per_source || {},
@@ -1068,7 +1104,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           advisory_ids: batch,
         });
         Object.assign(AI, data.verdicts);
-        AI_CATS = sent.slice().sort();
       }
       return ids.filter(id => AI[id] && (AI[id].error || AI[id].has_errors)).length;
     }
@@ -1474,3 +1509,43 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       });
       if (!sessionStorage.getItem('vulnsight_token')) showAuthGate();
     }
+
+    // --- Theme -------------------------------------------------------------
+    // This used to be a second inline <script> in index.html that re-derived
+    // the effective theme and restated both theme colours, so the palette
+    // lived in three places. The browser-chrome colour is now read back out
+    // of the resolved --bg token, which means style.css stays the only file
+    // that knows what the themes look like.
+    (function initTheme() {
+      const toggle = $('#theme-toggle');
+      if (!toggle) return;
+
+      const effectiveTheme = () => {
+        const explicit = document.documentElement.dataset.theme;
+        if (explicit === 'light' || explicit === 'dark') return explicit;
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      };
+
+      function sync() {
+        const dark = effectiveTheme() === 'dark';
+        const label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+        toggle.setAttribute('aria-label', label);
+        toggle.title = label;
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) {
+          const bg = getComputedStyle(document.documentElement)
+            .getPropertyValue('--bg').trim();
+          if (bg) meta.content = bg;
+        }
+      }
+
+      toggle.addEventListener('click', () => {
+        document.documentElement.dataset.theme =
+          effectiveTheme() === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('theme', document.documentElement.dataset.theme);
+        sync();
+      });
+      window.matchMedia('(prefers-color-scheme: light)')
+        .addEventListener('change', sync);
+      sync();
+    })();

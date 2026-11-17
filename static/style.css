@@ -1,214 +1,215 @@
+/* ===========================================================================
+   VulnSight design tokens
+   ---------------------------------------------------------------------------
+   One rule, not four. The palette used to be written out once for :root, once
+   for prefers-color-scheme, and once for each of [data-theme="light"] and
+   [data-theme="dark"] -- 49 tokens x 4 blocks, so every colour decision had to
+   be made in four places and could rot in three of them. light-dark() states
+   each pair once and `color-scheme` picks the side, which leaves the explicit
+   theme override as two one-line rules at the bottom.
+
+   THE COLOUR RULE: chroma means danger or verdict, and nothing else.
+   The whole chrome is graphite on paper. In a triage queue a coloured button
+   competing with a critical badge is a usability bug, not decoration -- so
+   severity, the AI verdict, and focus/selection are the only things in this
+   file allowed to carry a hue. Spend boldness there; keep everything else
+   quiet.
+
+   CONTRAST: every text tier has to clear WCAG AA 4.5:1 against the *worst*
+   surface it can land on -- --panel-2 is the hover fill under .export-pop
+   button, .combo-option and .history-run, --panel-3 is the deepest inset.
+   Measured worst cases (all against --panel-3), light / dark:
+       ink      15.03 / 10.53     muted     6.11 / 5.61
+       faint     5.24 / 5.05      meta-dim  4.51 / 4.58
+   meta-dim sits 0.01 and 0.08 above the AA floor, so there is no slack left
+   at the bottom of the ramp: do not dim any tier, or lighten --panel-3,
+   without re-measuring all four.
+   =========================================================================== */
+
 :root {
-  color-scheme: dark;
-  --bg: #0b1218;
-  --bg-soft: #101820;
-  --panel: #151e28;
-  --panel-2: #1b2632;
-  --panel-3: #243140;
-  --ink: #e8eef3;
-  /* Text ramp. Every tier below --ink carries real copy somewhere, so each one
-     has to clear WCAG AA 4.5:1 against the *worst* surface it can land on:
-     --panel-2 in dark (the hover fill under .export-pop button, .combo-option
-     and .history-run) and --panel-3 in light. Measured worst-case ratios are
-     muted 5.9 / faint 5.1 / meta-dim 4.6 (dark) and 6.0 / 5.2 / 4.6 (light) --
-     roughly 1.4 ratio-units of room for three tiers, so do not dim any of them
-     without re-measuring the whole ramp. */
-  --muted: #93a3b3;
-  --faint: #8996a4;
-  --line: #243140;
-  --line-strong: #334556;
-  --line-bright: #4a5d70;
-  --accent: #2fd3b0;
-  --accent-2: #7ee7cf;
-  --accent-ink: #06231c;
-  --ok: #3dd68c;
-  /* --warn / --bad are *text* colours (.badge--native, .badge--withdrawn,
-     button.warn-btn) and must clear 4.5:1 on --badge-bg; the --sev-* family are
-     *fills* behind dark ink and must stay bright enough for it. They coincide in
-     dark and deliberately diverge in light -- keep the two families separate. */
-  --warn: #e6b84d;
-  --bad: #ff5d73;
-  --sev-critical: #ff5d73;
-  /* The critical fill is the only severity bright enough to need its own ink:
-     on the dark palette it takes the same dark ink as the other three badges
-     (6.4:1); on the light palette that ink only reaches 4.2:1, so light keeps
-     white (4.6:1). */
-  --sev-critical-ink: #081018;
-  --sev-critical-hot: #ff2d78;
-  --sev-high: #ff8a3d;
-  --sev-high-hot: #ffc14a;
-  --sev-medium: #e6b84d;
-  --sev-low: #3dd68c;
-  --radius: 10px;
-  --radius-sm: 7px;
-  --header-h: 64px;
-  --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
-  --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
-  --shadow: 0 18px 48px rgba(0, 0, 0, .38);
-  --pill-bg: #121a22;
-  --surface-raised: #18222c;
-  --surface-deep: #0e151c;
-  --surface-inset: #0f171f;
-  --surface-verdict: #121c25;
-  --badge-bg: #1a2530;
-  --toast-bg: #18222c;
-  --topbar-bg: rgba(11, 18, 24, .88);
-  --rail-bg: rgba(13, 20, 27, .96);
-  --command-bg: rgba(11, 18, 24, .9);
-  --scrim-bg: rgba(4, 8, 12, .62);
-  --empty-bg: rgba(16, 24, 32, .72);
-  --badge-border: #2c3c4c;
-  --badge-subtle-border: #334556;
-  --meta-dim: #7e8fa0;
-  --bar-track: #2a3848;
-  --scrollbar-thumb: #3a4c5e;
-  --card-shadow: rgba(0, 0, 0, .32);
+  color-scheme: light dark;
+
+  /* -- Surfaces: graphite on paper, no hue ------------------------------- */
+  --bg:              light-dark(#f7f8f9, #15181d);
+  --bg-soft:         light-dark(#f1f3f5, #1a1e24);
+  --panel:           light-dark(#ffffff, #1e232a);
+  --panel-2:         light-dark(#f4f6f7, #252b33);
+  --panel-3:         light-dark(#e9ecef, #2d343d);
+  --pill-bg:         light-dark(#ffffff, #1a1f26);
+  --surface-raised:  light-dark(#ffffff, #232930);
+  --surface-deep:    light-dark(#eff1f3, #12151a);
+  --surface-inset:   light-dark(#f1f3f5, #171b21);
+  --surface-verdict: light-dark(#fafbfc, #1c222a);
+  --badge-bg:        light-dark(#f0f2f4, #262c34);
+  --toast-bg:        light-dark(#ffffff, #232930);
+
+  /* Translucent chrome. light-dark() cannot sit inside rgba(), so these keep
+     an explicit pair and are re-stated in the two overrides below. */
+  --topbar-bg:  rgba(247, 248, 249, .88);
+  --rail-bg:    rgba(255, 255, 255, .97);
+  --command-bg: rgba(247, 248, 249, .92);
+  --scrim-bg:   rgba(12, 16, 22, .45);
+  --empty-bg:   rgba(255, 255, 255, .90);
+
+  /* -- Text ramp (see CONTRAST above before touching) -------------------- */
+  --ink:      light-dark(#14181d, #e9ebef);
+  --muted:    light-dark(#4e5862, #a6aeb9);
+  --faint:    light-dark(#58626d, #9da5b0);
+  --meta-dim: light-dark(#626c77, #949da8);
+
+  /* -- Rules --------------------------------------------------------------*/
+  --line:        light-dark(#e3e6ea, #2a3038);
+  --line-strong: light-dark(#cdd3da, #39414b);
+  --line-bright: light-dark(#a8b1bb, #4b5560);
+  --badge-border:        light-dark(#dce0e5, #333a43);
+  --bar-track:       light-dark(#e2e6ea, #2e353e);
+  --scrollbar-thumb: light-dark(#b8c0c9, #434c57);
+
+  /* -- Structure accent: focus, selection, brand ---------------------------
+     Indigo-slate, deliberately far from all four severity hues. It earns its
+     chroma because focus and selection are meaning, not ornament. The primary
+     button is NOT this colour -- it is graphite, so it cannot outshout a
+     critical badge. */
+  --accent:     light-dark(#334e68, #8fb3d9);
+  --accent-2:   light-dark(#24384c, #b3cde8);
+  --accent-ink: light-dark(#ffffff, #121820);
+  --graphite:     light-dark(#2b3139, #e9ebef);
+  --graphite-ink: light-dark(#ffffff, #15181d);
+
+  /* -- Signal: the only other chroma in the interface ----------------------
+     --ok is the AI "confirmed match" green and is reserved for it, which is
+     why --sev-low is a steel blue rather than the green it used to share.
+     --warn / --bad are TEXT colours and must clear 4.5:1 on --badge-bg; the
+     --sev-* family are FILLS sitting behind ink. Keep the two families apart:
+     they are not interchangeable even where they look similar. */
+  --ok:   light-dark(#1a6b4a, #4fc08d);
+  --warn: light-dark(#8a5a00, #e0a93f);
+  --bad:  light-dark(#b3123c, #ff7a90);
+
+  --sev-critical:     light-dark(#c8102e, #ff5a74);
+  --sev-critical-ink: light-dark(#ffffff, #16181c);
+  --sev-high:         light-dark(#d2600f, #ff9348);
+  --sev-medium:       light-dark(#cf9426, #e8b65a);
+  --sev-low:          light-dark(#3e6e9e, #7fafd8);
+
+  /* -- Elevation ---------------------------------------------------------- */
+  --shadow:       light-dark(0 18px 40px rgba(20, 24, 29, .10),
+                             0 18px 48px rgba(0, 0, 0, .45));
+  --card-shadow:  light-dark(rgba(20, 24, 29, .07), rgba(0, 0, 0, .35));
+  --shadow-sm:    light-dark(0 1px 2px rgba(20, 24, 29, .06),
+                             0 1px 2px rgba(0, 0, 0, .30));
+  --shadow-md:    light-dark(0 4px 12px rgba(20, 24, 29, .08),
+                             0 4px 12px rgba(0, 0, 0, .38));
+
+  /* -- Type ----------------------------------------------------------------
+     No webfonts: the CSP is `default-src 'self'` with no font-src, so a CDN
+     face is blocked outright -- correct for a tool that holds the operator's
+     credentials. The personality therefore comes from the scale and from the
+     mono, which is used for CWE/CVE ids, CVSS vectors and EPSS figures
+     because those are codes where column alignment genuinely matters, never
+     as texture on a label. */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Mono",
+          "JetBrains Mono", "Roboto Mono", Consolas, monospace;
+
+  --text-2xs: 10.5px;
+  --text-xs:  11.5px;
+  --text-sm:  12.5px;
+  --text-md:  13.5px;
+  --text-base: 14.5px;
+  --text-lg:  16px;
+  --text-xl:  20px;
+  --text-2xl: 26px;
+  --text-3xl: clamp(28px, 2.4vw + 18px, 38px);
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semi:   600;
+  --weight-bold:   700;
+
+  --tracking-tight: -.02em;
+  --tracking-flat:   0;
+  --tracking-code:  .01em;
+
+  --leading-tight: 1.2;
+  --leading-snug:  1.4;
+  --leading-body:  1.6;
+
+  /* -- Space: a 4px grid, so spacing is chosen from a scale rather than
+     invented per component (the old file used 25 distinct px values). ----- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* -- Radius ------------------------------------------------------------- */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius:    9px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* -- Motion. One duration for state, one for entrances; both respect
+     prefers-reduced-motion further down the file. ------------------------- */
+  --motion-fast: .14s;
+  --motion-base: .2s;
+  --ease: cubic-bezier(.2, .6, .35, 1);
+
+  /* -- Layering: named, so a new overlay does not invent another number. -- */
+  --z-sticky:  30;
+  --z-rail:    50;
+  --z-topbar:  70;
+  --z-popover: 80;
+  --z-scrim:   100;
+  --z-modal:   200;
+
+  --header-h: 60px;
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    --bg: #f4f7f8;
-    --bg-soft: #eef3f5;
-    --panel: #ffffff;
-    --panel-2: #f3f6f8;
-    --panel-3: #e6eef2;
-    --ink: #12202c;
-    --muted: #4d5b66;
-    --faint: #57646f;
-    --line: #d7e1e8;
-    --line-strong: #c2d0da;
-    --line-bright: #9aafbd;
-    --accent: #0c7361;
-    --accent-2: #0a5e4f;
-    --accent-ink: #ffffff;
-    --ok: #1a9d63;
-    --warn: #835c0c;
-    --bad: #bb2a42;
-    --sev-critical: #d63b55;
-    --sev-critical-ink: #ffffff;
-    --sev-critical-hot: #c2185b;
-    --sev-high: #e06a16;
-    --sev-high-hot: #d09200;
-    --sev-medium: #c48a12;
-    --sev-low: #1a9d63;
-    --shadow: 0 18px 40px rgba(18, 32, 44, .1);
-    --pill-bg: #ffffff;
-    --surface-raised: #ffffff;
-    --surface-deep: #eef3f5;
-    --surface-inset: #eaf0f3;
-    --surface-verdict: #f7fafb;
-    --badge-bg: #eef3f5;
-    --toast-bg: #ffffff;
-    --topbar-bg: rgba(244, 247, 248, .9);
-    --rail-bg: rgba(255, 255, 255, .96);
-    --command-bg: rgba(244, 247, 248, .92);
-    --scrim-bg: rgba(12, 22, 30, .4);
-    --empty-bg: rgba(255, 255, 255, .88);
-    --badge-border: #d3dee6;
-    --badge-subtle-border: #c8d5de;
-    --meta-dim: #5c6c7a;
-    --bar-track: #dbe4ea;
-    --scrollbar-thumb: #b7c6d0;
-    --card-shadow: rgba(18, 32, 44, .08);
-  }
-}
-
+/* The explicit theme override. color-scheme flips every light-dark() above,
+   so only the values that cannot use it are repeated here. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f7f8;
-  --bg-soft: #eef3f5;
-  --panel: #ffffff;
-  --panel-2: #f3f6f8;
-  --panel-3: #e6eef2;
-  --ink: #12202c;
-  --muted: #4d5b66;
-  --faint: #57646f;
-  --line: #d7e1e8;
-  --line-strong: #c2d0da;
-  --line-bright: #9aafbd;
-  --accent: #0c7361;
-  --accent-2: #0a5e4f;
-  --accent-ink: #ffffff;
-  --ok: #1a9d63;
-  --warn: #835c0c;
-  --bad: #bb2a42;
-  --sev-critical: #d63b55;
-  --sev-critical-ink: #ffffff;
-  --sev-critical-hot: #c2185b;
-  --sev-high: #e06a16;
-  --sev-high-hot: #d09200;
-  --sev-medium: #c48a12;
-  --sev-low: #1a9d63;
-  --shadow: 0 18px 40px rgba(18, 32, 44, .1);
-  --pill-bg: #ffffff;
-  --surface-raised: #ffffff;
-  --surface-deep: #eef3f5;
-  --surface-inset: #eaf0f3;
-  --surface-verdict: #f7fafb;
-  --badge-bg: #eef3f5;
-  --toast-bg: #ffffff;
-  --topbar-bg: rgba(244, 247, 248, .9);
-  --rail-bg: rgba(255, 255, 255, .96);
-  --command-bg: rgba(244, 247, 248, .92);
-  --scrim-bg: rgba(12, 22, 30, .4);
-  --empty-bg: rgba(255, 255, 255, .88);
-  --badge-border: #d3dee6;
-  --badge-subtle-border: #c8d5de;
-  --meta-dim: #5c6c7a;
-  --bar-track: #dbe4ea;
-  --scrollbar-thumb: #b7c6d0;
-  --card-shadow: rgba(18, 32, 44, .08);
+  --topbar-bg:  rgba(247, 248, 249, .88);
+  --rail-bg:    rgba(255, 255, 255, .97);
+  --command-bg: rgba(247, 248, 249, .92);
+  --scrim-bg:   rgba(12, 16, 22, .45);
+  --empty-bg:   rgba(255, 255, 255, .90);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b1218;
-  --bg-soft: #101820;
-  --panel: #151e28;
-  --panel-2: #1b2632;
-  --panel-3: #243140;
-  --ink: #e8eef3;
-  --muted: #93a3b3;
-  --faint: #8996a4;
-  --line: #243140;
-  --line-strong: #334556;
-  --line-bright: #4a5d70;
-  --accent: #2fd3b0;
-  --accent-2: #7ee7cf;
-  --accent-ink: #06231c;
-  --ok: #3dd68c;
-  --warn: #e6b84d;
-  --bad: #ff5d73;
-  --sev-critical: #ff5d73;
-  --sev-critical-ink: #081018;
-  --sev-critical-hot: #ff2d78;
-  --sev-high: #ff8a3d;
-  --sev-high-hot: #ffc14a;
-  --sev-medium: #e6b84d;
-  --sev-low: #3dd68c;
-  --shadow: 0 18px 48px rgba(0, 0, 0, .38);
-  --pill-bg: #121a22;
-  --surface-raised: #18222c;
-  --surface-deep: #0e151c;
-  --surface-inset: #0f171f;
-  --surface-verdict: #121c25;
-  --badge-bg: #1a2530;
-  --toast-bg: #18222c;
-  --topbar-bg: rgba(11, 18, 24, .88);
-  --rail-bg: rgba(13, 20, 27, .96);
-  --command-bg: rgba(11, 18, 24, .9);
-  --scrim-bg: rgba(4, 8, 12, .62);
-  --empty-bg: rgba(16, 24, 32, .72);
-  --badge-border: #2c3c4c;
-  --badge-subtle-border: #334556;
-  --meta-dim: #7e8fa0;
-  --bar-track: #2a3848;
-  --scrollbar-thumb: #3a4c5e;
-  --card-shadow: rgba(0, 0, 0, .32);
+  --topbar-bg:  rgba(21, 24, 29, .88);
+  --rail-bg:    rgba(26, 30, 36, .97);
+  --command-bg: rgba(21, 24, 29, .92);
+  --scrim-bg:   rgba(4, 6, 9, .66);
+  --empty-bg:   rgba(30, 35, 42, .72);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --topbar-bg:  rgba(21, 24, 29, .88);
+    --rail-bg:    rgba(26, 30, 36, .97);
+    --command-bg: rgba(21, 24, 29, .92);
+    --scrim-bg:   rgba(4, 6, 9, .66);
+    --empty-bg:   rgba(30, 35, 42, .72);
+  }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+/* One rule instead of the eight per-component patches that used to live
+   scattered through this file. Any component that sets its own `display`
+   beats the UA sheet's `[hidden] { display: none }`, and this has already
+   shipped as a bug once: .cat sets display:grid, so filterClasses() hid every
+   row in the DOM while nothing changed on screen -- and a property-based test
+   stayed green throughout. The defence was to remember to add a ninth rule
+   for every new JS-toggled element. !important because the components this
+   overrides are more specific than a bare attribute selector. */
+[hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 
 body {
@@ -310,12 +311,6 @@ fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
   justify-content: flex-end;
   gap: 6px;
 }
-.status-title {
-  margin-right: 2px;
-  color: var(--faint);
-  font: 650 10px var(--mono);
-  letter-spacing: .12em;
-}
 .pill {
   min-height: 32px;
   display: inline-flex;
@@ -363,26 +358,16 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
   border-radius: 999px;
 }
 .theme-toggle:hover { border-color: var(--line-bright); }
+/* Shape, not hue, carries the meaning: a solid disc in light, bitten into a
+   crescent by the shadow in dark. The light icon used to be --warn, which
+   spent amber -- a severity colour -- on chrome. Three override blocks
+   collapse into one because light-dark() picks the shadow colour. */
 .theme-icon {
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: var(--ink);
-  box-shadow: 4px -3px 0 0 var(--pill-bg);
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .theme-icon {
-    background: var(--warn);
-    box-shadow: none;
-  }
-}
-:root[data-theme="light"] .theme-icon {
-  background: var(--warn);
-  box-shadow: none;
-}
-:root[data-theme="dark"] .theme-icon {
-  background: var(--ink);
-  box-shadow: 4px -3px 0 0 var(--pill-bg);
+  box-shadow: 4px -3px 0 0 light-dark(transparent, var(--pill-bg));
 }
 
 .filters-toggle, .rail-close, .filter-scrim { display: none; }
@@ -400,16 +385,25 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
   min-width: 0;
   background: var(--rail-bg);
   border-right: 1px solid var(--line);
+  /* The rail owns its scroll so the action footer can be a real footer.
+     `position: sticky; bottom: 0` on a ~1700px column reserves no space --
+     it floats over whatever happens to be scrolled under it, which is why
+     the bug-class list was clipped mid-description with no way to reach the
+     rows underneath. */
+  position: sticky;
+  top: var(--header-h);
+  height: calc(100vh - var(--header-h));
+  display: flex;
+  flex-direction: column;
+}
+.rail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .rail-intro { position: relative; padding: 22px 20px 18px; border-bottom: 1px solid var(--line); }
-.eyebrow {
-  display: block;
-  color: var(--accent);
-  font: 700 10px/1.2 var(--mono);
-  letter-spacing: .14em;
-  text-transform: uppercase;
-}
 .rail-intro h2 { margin: 8px 0 6px; font-size: 20px; letter-spacing: -.03em; }
 .rail-intro p { margin: 0; color: var(--muted); font-size: 12.5px; }
 .rail-stats {
@@ -425,8 +419,8 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   text-align: center;
-  font: 600 10px/1.3 var(--mono);
-  text-transform: uppercase;
+  font: var(--weight-medium) var(--text-xs)/1.35 var(--sans);
+  letter-spacing: var(--tracking-flat);
 }
 .rail-stats b { display: block; margin-bottom: 2px; color: var(--ink); font-size: 13px; }
 
@@ -439,7 +433,7 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
   margin-bottom: 12px;
 }
 .section-heading h3 { margin: 0; font-size: 13px; }
-.section-note { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+.section-note { color: var(--meta-dim); font: var(--weight-medium) var(--text-sm) var(--mono); letter-spacing: var(--tracking-code); }
 
 .field { min-width: 0; margin: 0 0 12px; }
 .field-last { margin-bottom: 0; }
@@ -569,13 +563,8 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   box-shadow: 0 -5px 0 0 var(--surface-inset);
   font: 650 10px var(--mono);
   letter-spacing: .08em;
-  text-transform: uppercase;
 }
 .taxonomy-group:first-child { margin-top: 0; }
-.taxonomy-group[hidden] { display: none; }
-/* .cat sets display:grid, which beats the UA sheet's [hidden] { display:none },
-   so the filter's item.hidden would otherwise do nothing at all. */
-.taxonomy-item[hidden] { display: none; }
 /* "Kept because it is selected, not because it matches" -- same inset accent
    rule .combo-option.class uses, deliberately quiet. */
 .taxonomy-item.filtered-keep { box-shadow: inset 2px 0 0 var(--accent); }
@@ -587,7 +576,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   line-height: 1.45;
   text-align: center;
 }
-.taxonomy-empty[hidden] { display: none; }
 .nvd-hint {
   margin: 0 0 4px 26px;
   color: var(--faint);
@@ -680,7 +668,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
 .chip-x:hover:not(:disabled),
 .history-drop:hover:not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, transparent); }
 .combo-clear:focus-visible, .chip-x:focus-visible, .history-drop:focus-visible { outline-offset: 1px; }
-.combo-clear[hidden] { display: none; }
 
 .combo-list {
   position: absolute;
@@ -702,7 +689,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
-.combo-list[hidden] { display: none; }
 
 .combo-option {
   position: relative;
@@ -778,7 +764,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   color: var(--meta-dim);
   font: 600 10px/1.4 var(--mono);
   letter-spacing: .06em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 .combo-sub {
@@ -807,7 +792,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   border-radius: 4px;
   font: 700 10px/1.5 var(--mono);
   letter-spacing: .06em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 .combo-empty {
@@ -843,7 +827,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
 .chip-text { max-width: 22ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .chips-empty { color: var(--faint); font-size: 11.5px; }
 
-.history-section[hidden] { display: none; }
 .section-action {
   min-height: 0;
   padding: 2px 6px;
@@ -853,7 +836,6 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   border-radius: 4px;
   font: 700 10px var(--mono);
   letter-spacing: .06em;
-  text-transform: uppercase;
 }
 .section-action:hover:not(:disabled) { color: var(--accent-2); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
@@ -964,15 +946,12 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
 
 /* The rail is ~1700px tall, so both search buttons used to sit below the fold
    and reaching them scrolled the whole document -- taking the results column
-   with it. .control-rail is a stretched grid item, so its box is as tall as the
-   taller of the two columns; that gives this footer real travel room and it
-   pins to the bottom of the viewport for the whole scroll. Opaque
-   --surface-deep, not a tint, because cards slide underneath it. */
+   with it. It is a flex child of .control-rail now rather than a sticky
+   overlay, so it reserves its own height and can no longer cover the list
+   above it. Opaque --surface-deep, not a tint. */
 .control-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  padding: 18px 20px 22px;
+  flex: 0 0 auto;
+  padding: var(--space-4) var(--space-5) var(--space-5);
   background: var(--surface-deep);
   border-top: 1px solid var(--line);
 }
@@ -1019,10 +998,7 @@ button.primary {
   border-color: var(--accent);
 }
 button.primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
-/* .7 put the kicker at 2.7:1 on the light accent fill. .9 keeps it visibly
-   secondary to .button-main while clearing AA (5.0:1 light, 7.1:1 dark). */
-.button-kicker { font: 700 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; opacity: .9; }
-.button-main { margin-top: 2px; font-size: 14.5px; letter-spacing: -.02em; }
+.button-main { font-size: var(--text-base); letter-spacing: var(--tracking-tight); }
 
 .secondary-action {
   width: 100%;
@@ -1070,7 +1046,6 @@ kbd {
   color: var(--faint);
   font: 650 10px var(--mono);
   letter-spacing: .08em;
-  text-transform: uppercase;
 }
 .threat-key-head { padding-bottom: 8px; }
 .threat-scale { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
@@ -1108,7 +1083,6 @@ kbd {
   backdrop-filter: blur(14px);
 }
 .result-summary { min-width: 180px; flex: 1 1 240px; }
-.command-label { display: block; margin-bottom: 2px; color: var(--faint); font: 650 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 .summary { min-width: 0; color: var(--muted); font-size: 13px; }
 .summary b { color: var(--ink); }
 .summary code { white-space: normal; }
@@ -1175,7 +1149,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
-.menu-label { display: block; padding: 7px 8px 8px; color: var(--faint); font: 650 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.menu-label { display: block; padding: 7px 8px 8px; color: var(--meta-dim); font: var(--weight-medium) var(--text-xs) var(--sans); }
 .export-pop button { width: 100%; display: grid; min-height: 46px; padding: 8px 9px; text-align: left; background: transparent; border-color: transparent; }
 .export-pop button:hover { background: var(--panel-2); }
 .export-pop button span { font: 700 12px var(--sans); }
@@ -1196,7 +1170,6 @@ button.warn-btn:disabled { background: var(--panel-2); }
   font-size: 12.5px;
   line-height: 1.5;
 }
-.stale-banner[hidden] { display: none; }
 
 .results { min-width: 0; padding-top: 16px; }
 .card {
@@ -1304,7 +1277,7 @@ button.warn-btn:disabled { background: var(--panel-2); }
   text-overflow: ellipsis;
 }
 .badge.pkg { font-weight: 500; }
-.badge.eco { text-transform: uppercase; letter-spacing: .04em; }
+.badge.eco { letter-spacing: var(--tracking-code); }
 .badge.src { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .badge--native { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
 .badge--withdrawn { color: var(--bad); text-decoration: line-through; }
@@ -1322,7 +1295,10 @@ button.warn-btn:disabled { background: var(--panel-2); }
   font: 550 12px var(--mono);
 }
 .meta a { color: var(--ink); font-weight: 700; }
-.meta-label { margin-right: 5px; color: var(--meta-dim); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+/* These label real values (advisory, cve, published, cvss, epss), so they
+   stay -- but as quiet sentence case, not tracked-out caps competing with
+   the data beside them. */
+.meta-label { margin-right: 5px; color: var(--meta-dim); font-size: var(--text-xs); letter-spacing: var(--tracking-flat); }
 
 .epss-meter {
   display: inline-flex;
@@ -1378,7 +1354,6 @@ button.warn-btn:disabled { background: var(--panel-2); }
   border-radius: 4px;
   font: 700 10px var(--mono);
   letter-spacing: .06em;
-  text-transform: uppercase;
 }
 .verdict-retry:hover:not(:disabled) {
   color: var(--ink);
@@ -1465,13 +1440,23 @@ button.warn-btn:disabled { background: var(--panel-2); }
   border-radius: 50%;
   animation: spin .65s linear infinite;
 }
-.toast {
+/* The region is fixed; the toasts inside it are normal flow, so several can
+   be on screen at once (column-reverse keeps the newest nearest the corner).
+   pointer-events on the region would otherwise block the page beneath it. */
+.toast-region {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 100;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-scrim);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
   width: min(390px, calc(100vw - 32px));
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   color: var(--ink);
   background: var(--toast-bg);
   border: 1px solid var(--line-strong);
@@ -1493,7 +1478,6 @@ button.warn-btn:disabled { background: var(--panel-2); }
   padding: 24px;
   background: var(--scrim-bg);
 }
-.auth-gate[hidden] { display: none !important; }
 .auth-gate-card {
   width: min(420px, 100%);
   padding: 22px 22px 20px;
@@ -1555,7 +1539,7 @@ code {
 }
 
 @media (max-width: 1180px) {
-  .status-title, .cache-pill { display: none; }
+  .cache-pill { display: none; }
   .layout { grid-template-columns: 300px minmax(0, 1fr); }
   .workspace-intro { grid-template-columns: 1fr minmax(260px, 360px); }
   .result-command { align-items: flex-start; flex-direction: column; gap: 10px; }
@@ -1578,7 +1562,6 @@ code {
     color: var(--accent-ink);
     background: var(--accent);
     border-color: var(--accent);
-    text-transform: uppercase;
     font: 750 11px var(--mono);
     letter-spacing: .05em;
   }
@@ -1602,8 +1585,8 @@ code {
     inset: 0 auto 0 0;
     z-index: 80;
     width: min(400px, 92vw);
-    max-height: 100dvh;
-    overflow-y: auto;
+    height: auto;
+    overflow: hidden;
     box-shadow: var(--shadow);
     transform: translateX(-105%);
     visibility: hidden;
@@ -1724,10 +1707,16 @@ code {
   }
 }
 
+/* Printing used to patch only body and .card, leaving all 40-odd tokens at
+   whatever theme was active. Printed from the dark theme, every .desc, .meta,
+   .c-desc and badge came out in --muted on white -- 2.6:1, under even the
+   large-text floor. Flip color-scheme instead, so every light-dark() token
+   resolves to its light value and the whole page prints legibly. */
 @media print {
-  .topbar, .control-rail, .result-command { display: none !important; }
-  body { color: #111; background: #fff; }
+  :root { color-scheme: light; }
+  .topbar, .control-rail, .result-command, .toast-region { display: none !important; }
   .layout { display: block; }
   .workspace { padding: 0; }
-  .card { break-inside: avoid; color: #111; background: #fff; border-color: #aaa; }
+  .card { break-inside: avoid; box-shadow: none; }
+  a { text-decoration: underline; }
 }
