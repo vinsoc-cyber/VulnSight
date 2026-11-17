@@ -542,65 +542,14 @@ def create_app():
                 )
             }), 400
 
-        # One query, not one connection per id.
-        cached = cache.get_advisories(advisory_ids)
-        records: dict[str, dict] = {}
-        missing: list[str] = []
-        for gid in advisory_ids:
-            rec = cached.get(gid)
-            if rec:
-                # The id we looked it up by is authoritative. Older cache rows
-                # predate the advisory_id field, and without this the verdict
-                # comes back keyed by nothing and is dropped on the floor.
-                rec["advisory_id"] = rec.get("advisory_id") or gid
-                records[gid] = rec
-            else:
-                missing.append(gid)
-
-        by_category: dict[str, dict[str, dict]] = {}
-        for category in categories:
-            fingerprints = {
-                gid: ai_classifier.classification_fingerprint(cfg, rec, category)
-                for gid, rec in records.items()
-            }
-            category_results: dict[str, dict] = {}
-            if not force:
-                category_results.update(cache.get_classifications(
-                    list(records), category, expected_fingerprints=fingerprints
-                ))
-            todo = [rec for gid, rec in records.items() if gid not in category_results]
-
-            def _persist(gid, verdict, *, _category=category, _fps=fingerprints):
-                cache.save_classification(
-                    gid,
-                    _category,
-                    verdict,
-                    cfg.model,
-                    fingerprint=_fps[gid],
-                )
-
-            fresh = ai_classifier.classify_many(
-                cfg, todo, category, on_result=_persist
-            )
-            category_results.update(fresh)
-            by_category[category] = category_results
-
-        verdicts = {
-            gid: ai_classifier.aggregate_category_verdicts({
-                category: by_category[category][gid]
-                for category in categories
-                if gid in by_category[category]
-            })
-            for gid in records
-        }
-
-        return jsonify({
-            "category": categories[0],
-            "categories": categories,
-            "verdicts": verdicts,
-            "by_category": by_category,
-            "missing": missing,
-        })
+        # Orchestration lives in the module, not the view: it is callable
+        # from a script, and docs/architecture.md's "app.py ... No logic" is
+        # true again.
+        payload = ai_classifier.classify_batch(
+            cfg, advisory_ids, categories, force=force)
+        # `category` is the first requested one, kept for the older clients
+        # that read it.
+        return jsonify({"category": categories[0], **payload})
 
     return app
 

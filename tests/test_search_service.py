@@ -563,6 +563,118 @@ class TestRunSearchNvd(unittest.TestCase):
 
 
 
+class TestCveIdsSortAsNumbers(unittest.TestCase):
+    """A CVE id is a year and a sequence, not a word.
+
+    Sorted as text, "newest CVE first" silently meant "highest ASCII first":
+    CVE-2026-9 outranked CVE-2026-100. The sequence is not zero-padded, so
+    this is wrong for most real result sets, and static/app.js sorted the
+    same way client-side.
+    """
+
+    def test_the_sequence_is_compared_numerically(self):
+        ids = ["CVE-2026-10", "CVE-2026-9", "CVE-2026-100", "CVE-2026-2"]
+        ordered = sorted(ids, key=search_service._cve_sort_key, reverse=True)
+        self.assertEqual(
+            ordered, ["CVE-2026-100", "CVE-2026-10", "CVE-2026-9", "CVE-2026-2"])
+
+    def test_the_year_outranks_the_sequence(self):
+        ids = ["CVE-2025-99999", "CVE-2026-1"]
+        self.assertEqual(
+            sorted(ids, key=search_service._cve_sort_key, reverse=True),
+            ["CVE-2026-1", "CVE-2025-99999"])
+
+    def test_rows_without_a_cve_sort_last_rather_than_interleaved(self):
+        ids = ["CVE-2026-5", None, "not-a-cve", "CVE-2026-1"]
+        ordered = sorted(ids, key=search_service._cve_sort_key, reverse=True)
+        self.assertEqual(ordered[:2], ["CVE-2026-5", "CVE-2026-1"])
+
+    def test_a_search_sorted_by_cve_id_uses_it(self):
+        records = [
+            {"source": "ghsa", "advisory_id": f"GHSA-{i}", "cve_id": cve,
+             "aliases": [cve], "severity": "high", "summary": "s",
+             "description": "d", "cwes": ["639"], "packages": [],
+             "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"}
+            for i, cve in enumerate(["CVE-2026-9", "CVE-2026-100", "CVE-2026-10"])
+        ]
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=records), \
+             mock.patch.object(search_service.ghsa, "normalize",
+                               side_effect=lambda a: a), \
+             mock.patch.object(search_service.epss_client, "fetch_epss",
+                               return_value={}):
+            out = search_service.run_search(search_service.parse_search_query(
+                {"categories": ["bac"], "sources": ["ghsa"], "sort": "cve_id"}))
+        self.assertEqual([r["cve_id"] for r in out.results],
+                         ["CVE-2026-100", "CVE-2026-10", "CVE-2026-9"])
+
+
+class TestSourceRecordsAreOptIn(unittest.TestCase):
+    """source_records is ~35% of the payload and nothing reads it.
+
+    Measured over 500 cached rows: 2.91 MB with, 1.89 MB without. It was
+    also persisted into advisories.db, doubling the cache for data no reader
+    ever asked for.
+    """
+
+    RECORDS = [
+        {"source": "ghsa", "advisory_id": "GHSA-a", "cve_id": "CVE-2026-1",
+         "aliases": ["CVE-2026-1"], "severity": "medium", "cvss_score": 5.3,
+         "summary": "s", "description": "d", "cwes": ["639"], "packages": [],
+         "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"},
+        {"source": "ghsa", "advisory_id": "GHSA-b", "cve_id": "CVE-2026-1",
+         "aliases": ["CVE-2026-1"], "severity": "low", "cvss_score": 3.3,
+         "summary": "s", "description": "d", "cwes": ["639"], "packages": [],
+         "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"},
+    ]
+
+    def _search(self, body):
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=list(self.RECORDS)), \
+             mock.patch.object(search_service.ghsa, "normalize",
+                               side_effect=lambda a: a), \
+             mock.patch.object(search_service.cache, "upsert_advisories"), \
+             mock.patch.object(search_service.epss_client, "fetch_epss",
+                               return_value={}):
+            return search_service.run_search(search_service.parse_search_query(body))
+
+    def test_it_is_absent_by_default(self):
+        out = self._search({"categories": ["bac"], "sources": ["ghsa"]})
+        self.assertNotIn("source_records", out.results[0])
+
+    def test_it_is_returned_on_request(self):
+        out = self._search({"categories": ["bac"], "sources": ["ghsa"],
+                            "include_source_records": True})
+        self.assertIn("source_records", out.results[0])
+        self.assertEqual(len(out.results[0]["source_records"]["ghsa"]), 2)
+
+    def test_dropping_it_does_not_change_the_merge(self):
+        """It is built for the merge and the re-filter, both of which have
+        already run by the time it is stripped."""
+        without = self._search({"categories": ["bac"], "sources": ["ghsa"]})
+        with_it = self._search({"categories": ["bac"], "sources": ["ghsa"],
+                                "include_source_records": True})
+        self.assertEqual(without.results[0]["severity"], "medium")
+        self.assertEqual(without.results[0]["severity"],
+                         with_it.results[0]["severity"])
+        self.assertEqual(without.results[0]["cvss_score"],
+                         with_it.results[0]["cvss_score"])
+
+    def test_it_is_not_persisted_unless_requested(self):
+        captured = {}
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=list(self.RECORDS)), \
+             mock.patch.object(search_service.ghsa, "normalize",
+                               side_effect=lambda a: a), \
+             mock.patch.object(search_service.cache, "upsert_advisories",
+                               side_effect=lambda rows, **kw: captured.setdefault("rows", rows)), \
+             mock.patch.object(search_service.epss_client, "fetch_epss",
+                               return_value={}):
+            search_service.run_search(search_service.parse_search_query(
+                {"categories": ["bac"], "sources": ["ghsa"]}))
+        self.assertNotIn("source_records", captured["rows"][0])
+
+
 class TestTheUserIsToldWhatWasNotHonoured(unittest.TestCase):
     """Silent data loss is the failure mode this whole tool exists to avoid.
 

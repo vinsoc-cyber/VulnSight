@@ -134,7 +134,8 @@ Which OSV bulk exports are on disk, and how stale.
   "direction": "desc",                 // asc|desc
   "max_results": 100,                  // clamped to 1..500
   "sources": ["ghsa", "osv-native"],   // ghsa|nvd|osv|osv-native
-  "refresh_osv": false
+  "refresh_osv": false,
+  "include_source_records": false      // per-source snapshots; ~35% more payload
 }
 ```
 
@@ -166,11 +167,16 @@ Response:
 ```
 
 Each result carries `advisory_id`, `ghsa_id`, `cve_id`, `aliases`, `sources`,
-`source_records`, `severity` and `severity_by_source`, `cvss_score`,
+`severity` and `severity_by_source`, `cvss_score`,
 `cvss_vector` and `cvss_by_source`, `cwes`, `cwe_labels`, `packages`, `ecosystems`, `published_at`,
 `updated_at`, `withdrawn_at`, `kev`, `epss_percentage`, `epss_percentile`,
 `html_url`, `summary`, `description`, and `ai` when a fresh cached verdict exists
 for **every** requested category.
+
+`source_records` — each contributing source's untouched snapshot — is returned
+only when the request sets `include_source_records`. It is about 35% of the
+response by size (measured over 500 cached rows: 2.91 MB against 1.89 MB) and
+is useful for auditing how a row was merged, not for displaying it.
 
 `cvss_score` is `null` when the advisory's only vector is CVSS v4.0 — v4 is not
 scored here, and the reason is in
@@ -343,3 +349,26 @@ advisories = [g.normalize(a) for a in g.fetch_advisories(params)]
 
 resolve_cwes(["cwe:1321"])      # -> ['1321']
 ```
+
+The AI pass likewise. `classify_batch` is the whole of what
+`POST /api/v1/ai/classify` does — cache lookup, scoring, persistence and
+aggregation — so a script can score a queue without a Flask test client:
+
+```python
+from modules import ai_classifier, config
+config.load_dotenv()
+
+cfg = ai_classifier.load_config()
+result = ai_classifier.classify_batch(
+    cfg,
+    [r["advisory_id"] for r in outcome.results],
+    ["bac"],
+)
+for advisory_id, verdict in result["verdicts"].items():
+    if verdict.get("is_match"):
+        print(advisory_id, verdict["vuln_type"], verdict["reason"])
+```
+
+The advisories must already be in the cache — run a search first; unknown ids
+come back under `missing` rather than failing. It spends real money on the
+same terms as the endpoint.

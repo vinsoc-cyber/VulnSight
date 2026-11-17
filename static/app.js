@@ -881,7 +881,11 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         if (my !== mx) return my - mx;
         let cmp = 0;
         if (sort === 'cve_id') {
-          cmp = (x.cve_id || '').localeCompare(y.cve_id || '');
+          // numeric: a CVE id is a year and a sequence, not a word. Plain
+          // localeCompare put CVE-2026-9 above CVE-2026-100, so "newest CVE
+          // first" meant "highest ASCII first". Matches the server's sort.
+          cmp = (x.cve_id || '').localeCompare(y.cve_id || '', undefined,
+                                               { numeric: true });
         } else if (sort === 'updated') {
           cmp = (x.updated_at || '').localeCompare(y.updated_at || '');
         } else if (sort === 'epss_percentage') {

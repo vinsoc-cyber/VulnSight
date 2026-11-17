@@ -100,6 +100,14 @@ _SEARCH_REQUEST = {
             "default": False,
             "description": "Re-download the OSV bulk export before searching.",
         },
+        "include_source_records": {
+            "type": "boolean",
+            "default": False,
+            "description": ("Return each contributing source's untouched "
+                            "snapshot under `source_records`. Off by default: "
+                            "it is roughly 35% of the payload and is only "
+                            "useful for auditing how a row was merged."),
+        },
     },
 }
 
@@ -139,7 +147,9 @@ _ADVISORY = {
         "sources": {"type": "array", "items": {"type": "string"}},
         "source_records": {
             "type": "object",
-            "description": "Each contributing source's untouched snapshot.",
+            "description": ("Each contributing source's untouched snapshot. "
+                            "Present only when the request set "
+                            "`include_source_records`."),
         },
         "severity": {"type": "string",
                      "enum": ["unknown", "low", "medium", "high", "critical"]},

@@ -20,6 +20,7 @@ import io
 import urllib.error
 
 from modules import ai_classifier
+from modules import cache
 from modules import ghsa_client as ghsa
 from samples import SAMPLE
 
@@ -490,6 +491,91 @@ class TestClassify(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestClassifyBatchIsCallableWithoutFlask(unittest.TestCase):
+    """The whole AI pass used to live inside the Flask view.
+
+    That is why docs/architecture.md's claim that app.py holds "no logic" was
+    untrue, and why there was no way to run a classification from a script --
+    docs/api.md advertises "using the modules directly" for search, and there
+    was no equivalent entry point for this.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+        cache.init_db(self.db)
+        cache.upsert_advisories([
+            {"advisory_id": "GHSA-aaaa", "cve_id": "CVE-2026-1",
+             "severity": "high", "summary": "s", "description": "d",
+             "cwes": ["639"], "packages": []},
+            {"advisory_id": "GHSA-bbbb", "cve_id": "CVE-2026-2",
+             "severity": "low", "summary": "s", "description": "d",
+             "cwes": ["79"], "packages": []},
+        ], path=self.db)
+        self.cfg = ai_classifier.AIConfig(
+            provider="glm", base_url="https://x", tokens=["k"], model="m")
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def _verdict(self, **over):
+        verdict = {"is_match": True, "confidence": 0.9, "vuln_type": "t",
+                   "reason": "r"}
+        verdict.update(over)
+        return verdict
+
+    def test_it_scores_cached_advisories_without_a_request_context(self):
+        with mock.patch.object(ai_classifier, "classify_one",
+                               return_value=self._verdict()):
+            out = ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa", "GHSA-bbbb"], ["bac"],
+                cache_path=self.db)
+        self.assertEqual(out["categories"], ["bac"])
+        self.assertEqual(set(out["verdicts"]), {"GHSA-aaaa", "GHSA-bbbb"})
+        self.assertEqual(out["missing"], [])
+
+    def test_unknown_ids_come_back_under_missing_rather_than_failing(self):
+        with mock.patch.object(ai_classifier, "classify_one",
+                               return_value=self._verdict()):
+            out = ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa", "GHSA-nope"], ["bac"],
+                cache_path=self.db)
+        self.assertEqual(out["missing"], ["GHSA-nope"])
+        self.assertEqual(set(out["verdicts"]), {"GHSA-aaaa"})
+
+    def test_a_second_pass_reuses_the_cached_verdict(self):
+        with mock.patch.object(ai_classifier, "classify_one",
+                               return_value=self._verdict()) as scorer:
+            ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa"], ["bac"], cache_path=self.db)
+            first = scorer.call_count
+            ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa"], ["bac"], cache_path=self.db)
+            self.assertEqual(scorer.call_count, first, "verdict was not reused")
+
+    def test_force_re_scores_even_a_cached_verdict(self):
+        with mock.patch.object(ai_classifier, "classify_one",
+                               return_value=self._verdict()) as scorer:
+            ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa"], ["bac"], cache_path=self.db)
+            first = scorer.call_count
+            ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa"], ["bac"], force=True, cache_path=self.db)
+            self.assertGreater(scorer.call_count, first)
+
+    def test_every_category_gets_its_own_verdict_set(self):
+        with mock.patch.object(ai_classifier, "classify_one",
+                               return_value=self._verdict()):
+            out = ai_classifier.classify_batch(
+                self.cfg, ["GHSA-aaaa"], ["bac", "xss"], cache_path=self.db)
+        self.assertEqual(set(out["by_category"]), {"bac", "xss"})
+        self.assertEqual(
+            out["verdicts"]["GHSA-aaaa"]["scored_categories"], ["bac", "xss"])
 
 
 class TestRateLimitsDoNotSpendKeys(unittest.TestCase):

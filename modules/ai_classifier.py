@@ -834,6 +834,86 @@ def _parse_verdict(text: str) -> dict:
     }
 
 
+def classify_batch(
+    cfg: AIConfig,
+    advisory_ids: list[str],
+    categories: list[str],
+    *,
+    force: bool = False,
+    cache_path: str | None = None,
+) -> dict:
+    """Score cached advisories against every requested category.
+
+    This is the whole AI pass as a callable: look the advisories up, reuse
+    fresh cached verdicts unless *force*, score the rest, persist each verdict
+    as it lands, and aggregate per advisory.
+
+    It lived inside the Flask view, which is why docs/architecture.md's claim
+    that app.py holds "no logic" was untrue, why there was no way to run a
+    classification from a script the way docs/api.md advertises for search,
+    and why the view had to duplicate validation against search_service's
+    parsers. The view now parses, calls this, and jsonifies.
+
+    Returns the response body: ``categories``, ``verdicts``, ``by_category``
+    and ``missing`` (ids that are not in the cache).
+    """
+    from . import cache as cache_module
+
+    found = cache_module.get_advisories(advisory_ids, path=cache_path)
+    records: dict[str, dict] = {}
+    missing: list[str] = []
+    for advisory_id in advisory_ids:
+        record = found.get(advisory_id)
+        if record is None:
+            missing.append(advisory_id)
+            continue
+        # The id it was looked up by is authoritative: rows written before the
+        # advisory_id field exists would otherwise key the verdict by nothing
+        # and have it dropped on the floor.
+        record["advisory_id"] = record.get("advisory_id") or advisory_id
+        records[advisory_id] = record
+
+    by_category: dict[str, dict[str, dict]] = {}
+    for category in categories:
+        fingerprints = {
+            advisory_id: classification_fingerprint(cfg, record, category)
+            for advisory_id, record in records.items()
+        }
+        category_results: dict[str, dict] = {}
+        if not force:
+            category_results.update(cache_module.get_classifications(
+                list(records), category,
+                expected_fingerprints=fingerprints, path=cache_path,
+            ))
+        todo = [record for advisory_id, record in records.items()
+                if advisory_id not in category_results]
+
+        def _persist(advisory_id, verdict, *, _category=category, _fps=fingerprints):
+            cache_module.save_classification(
+                advisory_id, _category, verdict, cfg.model,
+                fingerprint=_fps[advisory_id], path=cache_path,
+            )
+
+        category_results.update(
+            classify_many(cfg, todo, category, on_result=_persist))
+        by_category[category] = category_results
+
+    verdicts = {
+        advisory_id: aggregate_category_verdicts({
+            category: by_category[category][advisory_id]
+            for category in categories
+            if advisory_id in by_category[category]
+        })
+        for advisory_id in records
+    }
+    return {
+        "categories": list(categories),
+        "verdicts": verdicts,
+        "by_category": by_category,
+        "missing": missing,
+    }
+
+
 def classify_one(cfg: AIConfig, adv: dict, category: str,
                  retries: int = MAX_RETRIES, token_offset: int = 0) -> dict:
     """Classify one advisory, retrying with key rotation on failure.
