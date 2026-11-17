@@ -542,10 +542,12 @@ def create_app():
                 )
             }), 400
 
+        # One query, not one connection per id.
+        cached = cache.get_advisories(advisory_ids)
         records: dict[str, dict] = {}
         missing: list[str] = []
         for gid in advisory_ids:
-            rec = cache.get_advisory(gid)
+            rec = cached.get(gid)
             if rec:
                 # The id we looked it up by is authoritative. Older cache rows
                 # predate the advisory_id field, and without this the verdict

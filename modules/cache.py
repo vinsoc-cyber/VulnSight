@@ -219,6 +219,38 @@ def get_advisory(advisory_id: str, path: str | None = None) -> dict | None:
     return json.loads(row["data"]) if row else None
 
 
+def get_advisories(advisory_ids, path: str | None = None) -> dict[str, dict]:
+    """Read many advisories in one round trip.
+
+    The caller used to loop over get_advisory, which opens a connection and
+    issues `PRAGMA journal_mode=WAL` per id -- 100 connects, 100 pragmas and
+    100 single-row queries for one classify request, before a single model
+    call. The IN-clause is built from a placeholder count and every value is
+    bound, so no identifier reaches the SQL text.
+    """
+    ids = list(dict.fromkeys(advisory_ids))
+    if not ids:
+        return {}
+    found: dict[str, dict] = {}
+    with _db(path) as conn:
+        # SQLite's default parameter limit is 999; chunk so a large batch
+        # cannot trip it.
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT advisory_id, data FROM advisories "  # noqa: S608 - placeholders only
+                f"WHERE advisory_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                try:
+                    found[row["advisory_id"]] = json.loads(row["data"])
+                except (TypeError, ValueError):
+                    continue          # one unreadable row must not sink the batch
+    return found
+
+
 def count_advisories(path: str | None = None) -> int:
     with _db(path) as conn:
         return conn.execute("SELECT COUNT(*) AS c FROM advisories").fetchone()["c"]

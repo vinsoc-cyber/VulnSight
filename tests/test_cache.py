@@ -193,6 +193,61 @@ class TestCache(unittest.TestCase):
 
 
 
+class TestBatchedAdvisoryReads(unittest.TestCase):
+    """The classify endpoint looped over get_advisory, which opens a
+    connection and issues PRAGMA journal_mode=WAL per id -- 100 connects for
+    one request, before a single model call."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+        cache.init_db(self.db)
+        self.records = [
+            {"advisory_id": f"GHSA-{i:05d}", "cve_id": f"CVE-2026-{i}",
+             "severity": "high", "summary": "s", "description": "d"}
+            for i in range(120)
+        ]
+        cache.upsert_advisories(self.records, path=self.db)
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def test_it_returns_the_same_rows_as_reading_one_at_a_time(self):
+        ids = [r["advisory_id"] for r in self.records]
+        one_by_one = {i: cache.get_advisory(i, path=self.db) for i in ids}
+        self.assertEqual(cache.get_advisories(ids, path=self.db),
+                         {k: v for k, v in one_by_one.items() if v})
+
+    def test_unknown_ids_are_simply_absent(self):
+        found = cache.get_advisories(
+            ["GHSA-00001", "GHSA-does-not-exist"], path=self.db)
+        self.assertEqual(set(found), {"GHSA-00001"})
+
+    def test_an_empty_request_does_not_touch_the_database(self):
+        self.assertEqual(cache.get_advisories([], path=self.db), {})
+
+    def test_duplicate_ids_are_collapsed(self):
+        found = cache.get_advisories(["GHSA-00001"] * 5, path=self.db)
+        self.assertEqual(list(found), ["GHSA-00001"])
+
+    def test_a_batch_larger_than_the_sqlite_parameter_limit_works(self):
+        """SQLite's default limit is 999 bound parameters."""
+        ids = [f"GHSA-{i:05d}" for i in range(120)] + [f"missing-{i}" for i in range(1500)]
+        found = cache.get_advisories(ids, path=self.db)
+        self.assertEqual(len(found), 120)
+
+    def test_one_unreadable_row_does_not_sink_the_batch(self):
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("UPDATE advisories SET data='{not json' "
+                         "WHERE advisory_id='GHSA-00002'")
+        found = cache.get_advisories(
+            ["GHSA-00001", "GHSA-00002", "GHSA-00003"], path=self.db)
+        self.assertEqual(set(found), {"GHSA-00001", "GHSA-00003"})
+
+
 class TestMigrationsFailLoudly(unittest.TestCase):
     """A migration that fails must not be recorded as applied.
 
