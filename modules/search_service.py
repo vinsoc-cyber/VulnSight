@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -28,7 +29,9 @@ from .query_filters import matches_common_filters, valid_published_filter
 
 logger = logging.getLogger(__name__)
 
-VALID_SORTS = ("published", "updated", "cve_id", "epss_percentage", "epss_percentile")
+# Derived, not a second literal: the two had to be edited together and
+# nothing checked that they matched.
+VALID_SORTS: tuple[str, ...]  # assigned below, once _SORT_FIELD exists
 VALID_DIRECTIONS = ("asc", "desc")
 VALID_SOURCES = ("ghsa", "nvd", "osv", "osv-native")
 VALID_TYPES = ("reviewed", "unreviewed", "malware")
@@ -39,6 +42,7 @@ _SORT_FIELD = {
     "epss_percentage": "epss_percentage",
     "epss_percentile": "epss_percentile",
 }
+VALID_SORTS = tuple(_SORT_FIELD)
 MAX_CATEGORY_INPUTS = 100
 
 
@@ -255,7 +259,11 @@ def parse_search_query(body: dict) -> SearchQuery:
     )
 
 
-_SOURCE_PRIORITY = {"ghsa": 0, "osv": 1, "nvd": 2}
+# Base-record precedence, explicit for every valid source. osv-native
+# used to fall to the default 99 and tie with a record whose `source`
+# was missing or misspelt, leaving fetch order to break the tie.
+_SOURCE_PRIORITY = {name: index for index, name in
+                    enumerate(("ghsa", "osv", "osv-native", "nvd"))}
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
@@ -319,12 +327,29 @@ def _merge_group(records: list[dict]) -> dict:
     if ghsa_ids:
         base_id = str(base.get("ghsa_id") or "")
         merged["ghsa_id"] = base_id if base_id.upper().startswith("GHSA-") else ghsa_ids[0]
-    elif cve_ids:
-        merged["ghsa_id"] = cve_ids[0]
-    # advisory_id: prefer the base record's advisory_id; fall back to best
+    else:
+        # A CVE id is not a GHSA id. Filling this field with one put a CVE
+        # under a column named `ghsa_id` in the CSV export and in the
+        # documented API shape; the UI already falls back to advisory_id.
+        merged["ghsa_id"] = None
+    # advisory_id: prefer the base record's advisory_id; fall back to the best
     # GHSA or CVE identifier so the merged record always has a stable key.
     if not merged.get("advisory_id"):
         merged["advisory_id"] = merged.get("ghsa_id") or (cve_ids[0] if cve_ids else "")
+    if not merged.get("advisory_id"):
+        # Every record in this group lacks an identifier. They used to all
+        # collapse onto "": cache.upsert_advisories skips those rows, but the
+        # AI block keys its verdicts by advisory_id, so two such rows shared
+        # one verdict and one overwrote the other. A content hash keeps them
+        # distinct and is stable across runs, so a cached verdict still
+        # matches on the next search.
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                [base.get("summary"), base.get("description"), sources],
+                sort_keys=True, ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        merged["advisory_id"] = f"anon-{fingerprint}"
     if cve_ids:
         base_cve = str(base.get("cve_id") or "")
         merged["cve_id"] = base_cve if base_cve.upper().startswith("CVE-") else cve_ids[0]
@@ -411,6 +436,17 @@ def _merge_group(records: list[dict]) -> dict:
         (record.get("cvss_vector") for record in records if record.get("cvss_vector")),
         None,
     )
+    # The descriptive fields are not in the merge whitelist above, so they
+    # came from the base record even when the base's copy was empty: a GHSA
+    # base with description "" merged with an NVD record carrying a full one
+    # produced "", and the text sat unreachable under source_records. Base
+    # first, then the first source that actually has something.
+    for key in ("summary", "description", "html_url"):
+        if not merged.get(key):
+            merged[key] = next(
+                (record.get(key) for record in records if record.get(key)),
+                merged.get(key),
+            )
     return merged
 
 
@@ -503,6 +539,11 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     """Fetch from each requested source, then merge, sort, cache and enrich."""
     warnings: list[str] = []
     per_source: dict[str, int] = {}
+    # Which requested sources returned nothing because they failed, as
+    # opposed to having nothing to return. A partial failure is reported here
+    # and in `warnings`; a total one is a 502 (see below).
+    failed_sources: list[str] = []
+    first_error: Exception | None = None
     collected: list[dict] = []
     # 'osv' and 'osv-native' read the same bulk export. Honour the refresh
     # request once so selecting both does not download and re-parse ~10 MB twice.
@@ -536,9 +577,9 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 )
         except ghsa.GhCliError as e:
             logger.warning("GHSA fetch failed: %s", e)
-            if q.sources == ["ghsa"]:
-                raise SearchError("GHSA fetch failed.", 502) from e
+            failed_sources.append("ghsa")
             warnings.append("GHSA fetch failed.")
+            first_error = first_error or e
 
     # --- OSV (local CWE filter over the bulk export) ---
     if "osv" in q.sources:
@@ -558,7 +599,9 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 per_source["osv"] = len(o)
             except osv_client.OsvError as e:
                 logger.warning("OSV fetch failed: %s", e)
+                failed_sources.append("osv")
                 warnings.append("OSV fetch failed.")
+                first_error = first_error or e
 
     # --- NVD (server-side CWE filter via NIST API v2) ---
     if "nvd" in q.sources:
@@ -600,9 +643,9 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 )
         except nvd_client.NvdError as e:
             logger.warning("NVD fetch failed: %s", e)
-            if q.sources == ["nvd"]:
-                raise SearchError("NVD fetch failed.", 502) from e
+            failed_sources.append("nvd")
             warnings.append("NVD fetch failed.")
+            first_error = first_error or e
 
     # --- OSV native (no CWE) — needs the AI pass to be useful ---
     if "osv-native" in q.sources:
@@ -629,9 +672,24 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                     )
             except osv_client.OsvError as e:
                 logger.warning("OSV native fetch failed: %s", e)
+                failed_sources.append("osv-native")
                 warnings.append("OSV native fetch failed.")
+                first_error = first_error or e
 
     fetched_total = len(collected)
+    # Every requested source failed. GHSA and NVD already answered 502 when
+    # they were the only source; OSV returned 200 + a warning for the same
+    # failure, so a script could rely on neither. The rule is the same for
+    # all four now, and it also covers the multi-source case, where 200 with
+    # count: 0 could not be told apart from "nothing matched".
+    if failed_sources and set(failed_sources) >= set(q.sources):
+        # One failed source keeps its own message, which docs/api.md
+        # documents verbatim; several are joined.
+        failures = [w for w in warnings if w.endswith("fetch failed.")]
+        message = (failures[0] if len(failures) == 1
+                   else "Every selected source failed: " + " ".join(failures))
+        raise SearchError(message, 502) from first_error
+
     results = merge_advisories(collected)
     merged_total = len(results)
     results = [
@@ -761,5 +819,10 @@ def run_search(q: SearchQuery) -> SearchOutcome:
             # the signal a paging client needs and could not previously derive:
             # a smaller `returned` might equally have meant de-duplication.
             "truncated": filtered_total > len(results),
+            # Sources that failed outright. `count: 0` with every requested
+            # source in here means "everything is down", not "nothing matched"
+            # -- the distinction docs/automation.md warns scripts about and
+            # previously left them to infer from warning text.
+            "failed_sources": sorted(set(failed_sources)),
         },
     )

@@ -301,7 +301,7 @@ def _extract_cwes(cve: dict) -> list[str]:
     return cwes
 
 
-def _extract_cvss(cve: dict) -> tuple[float | None, str]:
+def _extract_cvss(cve: dict) -> tuple[float | None, str, str | None]:
     metrics = cve.get("metrics") or {}
     # Prefer the newest CVSS version available: v4.0 > v3.1 > v3.0 > v2.
     for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30"):
@@ -310,14 +310,21 @@ def _extract_cvss(cve: dict) -> tuple[float | None, str]:
             score = cvss_data.get("baseScore")
             sev = (cvss_data.get("baseSeverity") or "").upper()
             if score is not None:
-                return float(score), _SEVERITY_MAP.get(sev, "unknown")
+                # The vector was read and thrown away, which is why
+                # docs/data-sources.md credited NVD with "CVSS v3/v4 vectors"
+                # that never reached a row: cvss_vector was OSV-only, so a
+                # GHSA+NVD merge showed cvss_vector null with nothing to look
+                # up even when NVD had supplied one.
+                return (float(score), _SEVERITY_MAP.get(sev, "unknown"),
+                        cvss_data.get("vectorString") or None)
     for entry in metrics.get("cvssMetricV2") or []:
         cvss_data = entry.get("cvssData") or {}
         score = cvss_data.get("baseScore")
         sev = (entry.get("baseSeverity") or "").upper()
         if score is not None:
-            return float(score), _SEVERITY_MAP.get(sev, "unknown")
-    return None, "unknown"
+            return (float(score), _SEVERITY_MAP.get(sev, "unknown"),
+                    cvss_data.get("vectorString") or None)
+    return None, "unknown", None
 
 
 def _extract_packages(cve: dict) -> list[dict]:
@@ -355,7 +362,7 @@ def normalize(vuln: dict) -> dict:
     cve_id = cve.get("id", "")
     desc = _extract_description(cve)
     cwes = _extract_cwes(cve)
-    cvss_score, severity = _extract_cvss(cve)
+    cvss_score, severity, cvss_vector = _extract_cvss(cve)
     packages = _extract_packages(cve)
     refs = [r.get("url") for r in (cve.get("references") or []) if r.get("url")]
 
@@ -370,6 +377,7 @@ def normalize(vuln: dict) -> dict:
         "description": desc,
         "severity": severity,
         "cvss_score": cvss_score,
+        "cvss_vector": cvss_vector,
         "cwes": cwes,
         "packages": packages,
         "ecosystems": sorted({p["ecosystem"] for p in packages if p.get("ecosystem")}),

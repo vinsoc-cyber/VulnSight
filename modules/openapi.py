@@ -134,6 +134,16 @@ _STATS = {
                 "own first, so a single-source search usually reports false."
             ),
         },
+        "failed_sources": {
+            "type": "array", "items": {"type": "string"},
+            "description": (
+                "Requested sources that failed outright. Empty on a clean "
+                "run. If every selected source fails the request is a 502 "
+                "instead, so a non-empty list here always means a partial "
+                "result -- which `count` alone cannot distinguish from "
+                "'nothing matched'."
+            ),
+        },
     },
 }
 

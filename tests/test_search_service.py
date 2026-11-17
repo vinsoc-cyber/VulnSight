@@ -563,6 +563,135 @@ class TestRunSearchNvd(unittest.TestCase):
 
 
 
+class TestTheMergeKeepsWhatTheSourcesActuallyHave(unittest.TestCase):
+    """Fields outside the merge whitelist came from the base record even when
+    the base's copy was empty, so text that one source had and the base did
+    not was unreachable outside source_records."""
+
+    def test_an_empty_base_does_not_erase_another_sources_text(self):
+        ghsa = {"source": "ghsa", "advisory_id": "GHSA-x", "cve_id": "CVE-1",
+                "aliases": ["CVE-1"], "summary": "", "description": "",
+                "html_url": "", "severity": "high"}
+        nvd = {"source": "nvd", "advisory_id": "CVE-1", "cve_id": "CVE-1",
+               "aliases": ["CVE-1"], "summary": "Real summary",
+               "description": "The real description",
+               "html_url": "https://nvd.example/CVE-1", "severity": "high"}
+        merged = search_service.merge_advisories([ghsa, nvd])[0]
+        self.assertEqual(merged["description"], "The real description")
+        self.assertEqual(merged["summary"], "Real summary")
+        self.assertEqual(merged["html_url"], "https://nvd.example/CVE-1")
+
+    def test_a_non_empty_base_still_wins(self):
+        ghsa = {"source": "ghsa", "advisory_id": "GHSA-x", "cve_id": "CVE-1",
+                "aliases": ["CVE-1"], "summary": "GHSA summary",
+                "description": "GHSA description", "severity": "high"}
+        nvd = {"source": "nvd", "advisory_id": "CVE-1", "cve_id": "CVE-1",
+               "aliases": ["CVE-1"], "summary": "NVD summary",
+               "description": "NVD description", "severity": "high"}
+        merged = search_service.merge_advisories([ghsa, nvd])[0]
+        self.assertEqual(merged["summary"], "GHSA summary")
+
+    def test_ghsa_id_holds_a_ghsa_id_or_nothing(self):
+        """It was filled with a CVE id when no GHSA id existed, which put a
+        CVE under a column named ghsa_id in the CSV and the API shape."""
+        nvd_only = {"source": "nvd", "advisory_id": "CVE-9", "cve_id": "CVE-9",
+                    "aliases": ["CVE-9"], "summary": "s", "description": "d",
+                    "severity": "low"}
+        merged = search_service.merge_advisories([nvd_only])[0]
+        self.assertIsNone(merged["ghsa_id"])
+        self.assertEqual(merged["advisory_id"], "CVE-9")
+
+    def test_records_with_no_identifier_stay_distinct(self):
+        """They all collapsed onto advisory_id == "", so two such rows shared
+        one AI verdict and one overwrote the other."""
+        rows = search_service.merge_advisories([
+            {"source": "osv", "summary": "first", "description": "d"},
+            {"source": "osv", "summary": "second", "description": "e"},
+        ])
+        ids = [r["advisory_id"] for r in rows]
+        self.assertEqual(len(set(ids)), 2, ids)
+        self.assertTrue(all(i.startswith("anon-") for i in ids), ids)
+
+    def test_an_anonymous_id_is_stable_across_runs(self):
+        """A cached verdict has to still match on the next search."""
+        record = {"source": "osv", "summary": "first", "description": "d"}
+        first = search_service.merge_advisories([dict(record)])[0]["advisory_id"]
+        second = search_service.merge_advisories([dict(record)])[0]["advisory_id"]
+        self.assertEqual(first, second)
+
+    def test_every_valid_source_has_an_explicit_base_priority(self):
+        """osv-native fell to the default and tied with a record whose source
+        was missing or misspelt, leaving fetch order to break the tie."""
+        self.assertEqual(set(search_service._SOURCE_PRIORITY),
+                         set(search_service.VALID_SOURCES))
+
+    def test_valid_sorts_is_derived_from_the_sort_field_map(self):
+        self.assertEqual(set(search_service.VALID_SORTS),
+                         set(search_service._SORT_FIELD))
+
+
+class TestEverySourceFailingIsA502(unittest.TestCase):
+    """GHSA and NVD answered 502 when they were the only source; OSV answered
+    200 + a warning for the same failure. A script could rely on neither."""
+
+    def _run(self, body, ghsa_fails=False, osv_fails=False, nvd_fails=False,
+             ghsa_rows=None):
+        def ghsa_fetch(params):
+            if ghsa_fails:
+                raise search_service.ghsa.GhCliError("gh exploded")
+            return list(ghsa_rows or [])
+
+        def osv_fetch(*a, **kw):
+            if osv_fails:
+                raise search_service.osv_client.OsvError("osv exploded")
+            return []
+
+        def nvd_fetch(params, report=None):
+            if nvd_fails:
+                raise search_service.nvd_client.NvdError("nvd exploded")
+            return []
+
+        with mock.patch.object(search_service.ghsa, "fetch_advisories", ghsa_fetch), \
+             mock.patch.object(search_service.ghsa, "normalize", side_effect=lambda a: a), \
+             mock.patch.object(search_service.osv_client, "fetch_osv", osv_fetch), \
+             mock.patch.object(search_service.osv_client, "supported_ecosystem",
+                               return_value=True), \
+             mock.patch.object(search_service.nvd_client, "fetch_nvd", nvd_fetch), \
+             mock.patch.object(search_service.epss_client, "fetch_epss", return_value={}):
+            return search_service.run_search(search_service.parse_search_query(body))
+
+    def test_osv_alone_failing_is_now_a_502_like_the_others(self):
+        with self.assertRaises(search_service.SearchError) as caught:
+            self._run({"categories": ["bac"], "sources": ["osv"],
+                       "ecosystem": "maven"}, osv_fails=True)
+        self.assertEqual(caught.exception.status, 502)
+
+    def test_all_of_several_sources_failing_is_a_502(self):
+        with self.assertRaises(search_service.SearchError) as caught:
+            self._run({"categories": ["bac"], "sources": ["ghsa", "nvd"]},
+                      ghsa_fails=True, nvd_fails=True)
+        self.assertEqual(caught.exception.status, 502)
+
+    def test_a_partial_failure_is_still_a_200_with_the_names(self):
+        rows = [{"source": "ghsa", "advisory_id": "GHSA-a", "cve_id": "CVE-1",
+                 "aliases": ["CVE-1"], "severity": "high", "summary": "s",
+                 "description": "d", "cwes": ["639"], "packages": [],
+                 "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"}]
+        out = self._run({"categories": ["bac"], "sources": ["ghsa", "nvd"]},
+                        nvd_fails=True, ghsa_rows=rows)
+        self.assertEqual(len(out.results), 1)
+        self.assertEqual(out.stats["failed_sources"], ["nvd"])
+
+    def test_a_clean_run_reports_no_failed_sources(self):
+        rows = [{"source": "ghsa", "advisory_id": "GHSA-a", "cve_id": "CVE-1",
+                 "aliases": ["CVE-1"], "severity": "high", "summary": "s",
+                 "description": "d", "cwes": ["639"], "packages": [],
+                 "published_at": "2026-01-01T00:00:00Z", "type": "reviewed"}]
+        out = self._run({"categories": ["bac"], "sources": ["ghsa"]},
+                        ghsa_rows=rows)
+        self.assertEqual(out.stats["failed_sources"], [])
+
+
 class TestCveIdsSortAsNumbers(unittest.TestCase):
     """A CVE id is a year and a sequence, not a word.
 

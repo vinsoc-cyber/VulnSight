@@ -123,13 +123,19 @@ while True:
 
 Three things a script gets wrong if it only looks at `count`.
 
-**An all-sources failure is a 200.** If every source fails, you get HTTP 200
-with `count: 0` and the reasons in `warnings`. "Nothing matched" and "everything
-is broken" are the same status code. Always check `warnings`:
+**An all-sources failure is a 502, a partial one is a 200.** If every
+selected source fails you get HTTP 502 and the reasons in the error message.
+If *some* fail you get HTTP 200 with whatever the rest returned, the reasons
+in `warnings`, and the names in `stats.failed_sources` — so "nothing
+matched" and "two of three sources are down" are no longer the same
+response. Check both:
 
 ```bash
-jq -e '.warnings | length == 0' results.json || echo "degraded run" >&2
+jq -e '.stats.failed_sources | length == 0' results.json || echo "degraded run" >&2
 ```
+
+(Before, GHSA and NVD answered 502 when they were the only source while OSV
+answered 200 for the same failure, so a script could rely on neither.)
 
 **`count` does not tell you whether more exist.** Use `stats`:
 
