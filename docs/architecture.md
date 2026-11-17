@@ -24,7 +24,7 @@ modules/
   cvss.py             124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py            479   SQLite: advisories + verdicts, jobs, migrations
   jobs.py             218   submit/poll queue for searches too slow to hold open
-  ai_classifier.py   1064   provider client, prompt, verdict cache, key rotation
+  ai_classifier.py   1036   provider client, prompt, verdict cache, key rotation
   openapi.py          483   the OpenAPI description of /api/v1
   security.py         436   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html  368   page shell -- HTML and Jinja only

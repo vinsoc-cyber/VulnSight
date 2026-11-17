@@ -308,23 +308,6 @@ class AIConfig:
             self._current_idx = idx
             return self.tokens[idx]
 
-    def rotate_token(self) -> bool:
-        """Advance to the next live token. Returns False if none remain."""
-        with self._lock:
-            if len(self.tokens) <= 1:
-                return False
-            n = len(self.tokens)
-            now = time.monotonic()
-            for step in range(1, n + 1):
-                idx = (self._current_idx + step) % n
-                if self._skip_until.get(idx, 0) <= now:
-                    prev = self._current_idx
-                    self._current_idx = idx
-                    logger.info("Rotated API key #%d → #%d  (%d keys total)",
-                                prev + 1, idx + 1, n)
-                    return True
-            return False
-
     def mark_skip_token(self, token: str, seconds: float, *,
                         persist: bool = True) -> None:
         """Pause a key. *persist* records it for the next process too.
@@ -589,45 +572,34 @@ def _call_messages(cfg: AIConfig, system: str, user: str,
     )
 
 
-def _call_messages_retrying(cfg: AIConfig, system: str, user: str,
-                            max_tokens: int = 512, timeout: int = 45,
-                            retries: int = MAX_RETRIES) -> str:
-    """_call_messages with exponential backoff and key rotation on failure."""
-    max_attempts = max(retries + 1, len(cfg.tokens))
-    last: AIError | None = None
-    for attempt in range(max_attempts):
-        try:
-            return _call_messages(cfg, system, user, max_tokens, timeout)
-        except AIError as e:
-            last = e
-            can_rotate = cfg.rotate_token()
-            if not can_rotate and not e.retryable:
-                raise
-            if attempt == max_attempts - 1:
-                raise
-            if e.key_exhausted:
-                continue
-            delay = RETRY_BASE_DELAY * (2 ** min(attempt, 3)) + random.uniform(0, 0.6)
-            time.sleep(delay)
-    assert last is not None
-    raise last
-
-
 def ping(cfg: AIConfig | None = None) -> dict:
     """Health check used by the UI 'Test AI' button."""
     cfg = cfg or load_config()
     if not cfg.configured:
         return {"ok": False, "error": "AI not configured (missing env vars)"}
+    # Do not spend a paid request on a key we already know is cooling. The
+    # old path called straight through, and with 8 keys at a 25s timeout the
+    # "Test AI" button could block for 200 seconds before reporting anything.
+    waiting = cfg.seconds_until_any_live()
+    if cfg.tokens and not cfg.live_indices():
+        return {"ok": False, "keys": len(cfg.tokens),
+                "error": f"All API keys are cooling down; the first frees up "
+                         f"in about {int(waiting)}s."}
     try:
         # Give reasoning models (e.g. GLM behind "PRO") enough room that the
-        # visible answer isn't swallowed by hidden thinking tokens.
-        out = _call_messages_retrying(
-            cfg,
-            system="You are a health check. Reply with the single word PONG.",
-            user="ping",
-            max_tokens=256,
-            timeout=25,
-            retries=1,
+        # visible answer isn't swallowed by hidden thinking tokens. One
+        # attempt plus one retry: a health check reports, it does not grind.
+        out = http_retry.with_retries(
+            lambda: _call_messages(
+                cfg,
+                "You are a health check. Reply with the single word PONG.",
+                "ping",
+                max_tokens=256,
+                timeout=25,
+            ),
+            what="AI ping",
+            attempts=2,
+            retryable=lambda exc: isinstance(exc, AIError) and exc.retryable,
         )
         reply = out.strip() or "(reachable, empty text)"
         return {"ok": True, "model": cfg.model, "reply": reply[:60],

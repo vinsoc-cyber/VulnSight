@@ -205,20 +205,30 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.messages_url, "https://x/v1/messages")
         self.assertFalse(ai_classifier.AIConfig("anthropic", "", [], "").configured)
 
-    def test_multi_key_rotation(self):
+    def test_the_picker_skips_a_cooling_key(self):
+        """There used to be two rotation implementations: this one, and a
+        rotate_token()/_current_idx cursor that only the health-check button
+        reached. They had different backoff, attempt budgets and exhaustion
+        semantics, which is how the 429-kills-the-batch defect came to apply
+        to only one of them."""
         cfg = ai_classifier.AIConfig("glm", "https://x", ["k1", "k2", "k3"], "m")
-        self.assertEqual(cfg.token, "k1")
-        self.assertTrue(cfg.rotate_token())
-        self.assertEqual(cfg.token, "k2")
-        self.assertTrue(cfg.rotate_token())
-        self.assertEqual(cfg.token, "k3")
-        self.assertTrue(cfg.rotate_token())
-        self.assertEqual(cfg.token, "k1")  # wraps around
+        self.assertEqual(cfg.live_indices(), [0, 1, 2])
+        with mock.patch.dict(os.environ, {"VULNSIGHT_DATA_DIR": tempfile.gettempdir()}):
+            cfg.mark_skip_token("k1", 60, persist=False)
+        self.assertEqual(cfg.live_indices(), [1, 2])
+        self.assertIn(cfg.token, ("k2", "k3"))
 
-    def test_single_key_no_rotation(self):
+    def test_when_every_key_is_cooling_the_soonest_is_offered(self):
+        cfg = ai_classifier.AIConfig("glm", "https://x", ["k1", "k2"], "m")
+        cfg.mark_skip_token("k1", 600, persist=False)
+        cfg.mark_skip_token("k2", 5, persist=False)
+        self.assertEqual(cfg.live_indices(), [])
+        self.assertEqual(cfg.token, "k2")
+
+    def test_a_single_key_config_still_works(self):
         cfg = ai_classifier.AIConfig("glm", "https://x", ["only"], "m")
-        self.assertFalse(cfg.rotate_token())
         self.assertEqual(cfg.token, "only")
+        self.assertEqual(cfg.live_indices(), [0])
 
 
 class TestClassify(unittest.TestCase):
@@ -488,9 +498,6 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(ai_classifier._classify_workers(one, None), 2)
         self.assertEqual(ai_classifier._classify_workers(eight, 3), 3)
 
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class TestClassifyBatchIsCallableWithoutFlask(unittest.TestCase):
@@ -876,3 +883,7 @@ class TestConfigReuse(unittest.TestCase):
         restarted = ai_classifier.load_config()
         self.assertIsNot(restarted, first)
         self.assertEqual(restarted.token, "b", "cooldown was not restored")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
