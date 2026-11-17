@@ -13,6 +13,7 @@ from . import epss_client
 from . import ghsa_client as ghsa
 from . import nvd_client
 from . import osv_client
+from . import records as records_mod
 from .cwe_categories import (
     ECOSYSTEMS,
     SEVERITIES,
@@ -492,9 +493,22 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         )
         try:
             raw = ghsa.fetch_advisories(params)
-            g = [ghsa.normalize(a) for a in raw]
+            # Per record: ghsa.normalize dereferences identifiers[].value,
+            # cwes[].cwe_id and severity.lower(), none of which the API
+            # guarantees. One advisory with "identifiers": [None] used to
+            # raise AttributeError -- not a GhCliError, so it bypassed the
+            # degradation below and 500'd the whole search, discarding the
+            # results already fetched from the other three sources.
+            g, skipped = records_mod.normalize_all(
+                raw, ghsa.normalize, source="GHSA",
+                identify=lambda a: records_mod.identify(a, "ghsa_id"),
+            )
             collected += g
             per_source["ghsa"] = len(g)
+            if skipped:
+                warnings.append(
+                    f"GHSA: skipped {skipped} advisory record(s) that could not be read."
+                )
         except ghsa.GhCliError as e:
             logger.warning("GHSA fetch failed: %s", e)
             if q.sources == ["ghsa"]:

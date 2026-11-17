@@ -27,6 +27,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from . import records
+
 from .cwe_categories import normalize_cwe_id
 from .query_filters import published_bounds
 
@@ -233,7 +235,18 @@ def fetch_nvd(params: NvdSearchParams) -> list[dict]:
     if errors and not successful_queries:
         raise NvdError(f"all NVD CWE queries failed; last error: {errors[-1]}")
 
-    normalized = [normalize(v) for v in raw_all]
+    # Per record: normalize dereferences weaknesses[].description[],
+    # cpeMatch[].criteria.split() and float(baseScore), none of which the NVD
+    # schema guarantees. A null criteria or a baseScore of "N/A" used to raise
+    # out of here as an AttributeError/ValueError -- not an NvdError, so it
+    # bypassed the per-source degradation in run_search and 500'd the entire
+    # search, including the sources that had already succeeded.
+    normalized, skipped = records.normalize_all(
+        raw_all, normalize, source="NVD",
+        identify=lambda v: records.identify((v or {}).get("cve") or {}, "id"),
+    )
+    if skipped:
+        logger.warning("NVD: %d record(s) could not be normalized", skipped)
     normalized.sort(key=lambda item: item.get("published_at") or "", reverse=True)
     return normalized[: params.max_results]
 

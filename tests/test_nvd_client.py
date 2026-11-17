@@ -14,7 +14,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
-from modules import nvd_client
+from modules import nvd_client, records
 from samples import NVD_VULN
 
 
@@ -241,6 +241,54 @@ class TestNormalizeCVSSFallback(unittest.TestCase):
         n = nvd_client.normalize(vuln)
         self.assertEqual(n["cvss_score"], 9.3)
         self.assertEqual(n["severity"], "critical")
+
+
+class TestOneBadRecordDoesNotSinkTheBatch(unittest.TestCase):
+    """normalize() dereferences fields the NVD schema does not guarantee.
+
+    Normalizing a page with a list comprehension made any one of them fatal
+    for the whole search: the AttributeError/ValueError is not an NvdError, so
+    it bypassed the per-source degradation in run_search and surfaced as a 500
+    that discarded the sources which had already succeeded.
+    """
+
+    def _vuln(self, cve_id, **overrides):
+        cve = {
+            "id": cve_id,
+            "descriptions": [{"lang": "en", "value": f"description of {cve_id}"}],
+            "published": "2026-01-01T00:00:00.000",
+            "lastModified": "2026-01-01T00:00:00.000",
+            "metrics": {}, "weaknesses": [], "configurations": [], "references": [],
+        }
+        cve.update(overrides)
+        return {"cve": cve}
+
+    def test_malformed_records_are_skipped_and_counted(self):
+        batch = [
+            self._vuln("CVE-2026-1"),
+            # Shapes NVD does not forbid, each of which used to raise:
+            self._vuln("CVE-2026-2", descriptions=[{"lang": "en", "value": None}]),
+            self._vuln("CVE-2026-3", weaknesses=["CWE-79"]),
+            self._vuln("CVE-2026-4", configurations=[
+                {"nodes": [{"cpeMatch": [{"vulnerable": True, "criteria": None}]}]}]),
+            self._vuln("CVE-2026-5"),
+        ]
+        kept, skipped = records.normalize_all(
+            batch, nvd_client.normalize, source="NVD")
+        self.assertEqual(skipped, 3)
+        self.assertEqual([r["cve_id"] for r in kept], ["CVE-2026-1", "CVE-2026-5"])
+
+    def test_a_clean_batch_reports_no_skips(self):
+        batch = [self._vuln("CVE-2026-1"), self._vuln("CVE-2026-2")]
+        kept, skipped = records.normalize_all(
+            batch, nvd_client.normalize, source="NVD")
+        self.assertEqual(skipped, 0)
+        self.assertEqual(len(kept), 2)
+
+    def test_identify_never_raises_on_a_malformed_record(self):
+        for item in (None, "a string", 42, [], {}, {"id": None}):
+            self.assertEqual(records.identify(item, "id"), "")
+        self.assertEqual(records.identify({"id": "CVE-1"}, "id"), "CVE-1")
 
 
 if __name__ == "__main__":
