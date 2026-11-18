@@ -83,6 +83,41 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the request body size cap is removed",
+        [("app.py",
+          '    app.config["MAX_CONTENT_LENGTH"] = max(1024, _max_request_bytes)',
+          '    app.config["MAX_CONTENT_LENGTH"] = None')],
+        "test_app",
+    ),
+    (
+        "the AI rate limiter matches the path, so /api/v1 is unlimited",
+        [("app.py",
+          '        elif request.endpoint in ("api_ai_classify", "api_ai_test"):',
+          '        elif request.path in ("/api/ai/classify", "/api/ai/test"):')],
+        "test_app",
+    ),
+    (
+        "the system prompt stops reaching the provider",
+        [("modules/ai_classifier.py",
+          '            "system": system,',
+          '            "system": "",')],
+        "test_ai_classifier",
+    ),
+    (
+        "the default provider's reply shape stops being parsed",
+        [("modules/ai_classifier.py",
+          'c.get("type") == "text"',
+          'c.get("type") == "nope"')],
+        "test_ai_classifier",
+    ),
+    (
+        "a revoked key stops being parked",
+        [("modules/ai_classifier.py",
+          "        return False, True, 24 * 3600",
+          "        return False, False, 0")],
+        "test_ai_classifier",
+    ),
+    (
         "a transient rate limit is persisted across restarts again",
         [("modules/ai_classifier.py",
           "            cfg.mark_skip_token(auth, skip_for, persist=not retryable)",

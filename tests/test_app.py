@@ -752,6 +752,72 @@ class TestApiVersioning(unittest.TestCase):
         self.assertTrue(stats["truncated"])
 
 
+class TestTheRequestGuardsNobodyExercised(unittest.TestCase):
+    """Three guards the docs promise and no test reached. Each was
+    confirmed by mutation: the suite stayed green with the guard removed.
+    """
+
+    def _make(self, env=None):
+        merged = {"VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
+                  "HOST": "127.0.0.1", "VULNSIGHT_BIND": "127.0.0.1"}
+        merged.update(env or {})
+        patcher = mock.patch.dict(os.environ, merged, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        original = cache.DB_PATH
+        cache.DB_PATH = tmp.name
+
+        def restore():
+            cache.DB_PATH = original
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+
+        self.addCleanup(restore)
+        from app import create_app
+        app = create_app()
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def test_an_oversized_body_is_refused(self):
+        """docs/automation.md promises MAX_REQUEST_BYTES. Setting
+        MAX_CONTENT_LENGTH to None left every test green -- the cap could
+        have been removed and shipped."""
+        client = self._make({"MAX_REQUEST_BYTES": "2048"})
+        huge = {"categories": ["bac"], "pad": "x" * 8192}
+        self.assertEqual(client.post("/api/v1/search", json=huge).status_code, 413)
+
+    def test_a_body_inside_the_cap_is_accepted(self):
+        client = self._make({"MAX_REQUEST_BYTES": "65536"})
+        with mock.patch("modules.ghsa_client.fetch_advisories", return_value=[]):
+            r = client.post("/api/v1/search", json={"categories": ["bac"]})
+        self.assertNotEqual(r.status_code, 413)
+
+    def test_the_versioned_ai_endpoint_is_rate_limited_too(self):
+        """Only the legacy path was tested, so mutating just the AI branch
+        of _rate_limit to path-matching left the suite green."""
+        client = self._make({"VULNSIGHT_RATE_LIMIT": "on",
+                             "VULNSIGHT_AI_RATE": "1",
+                             "VULNSIGHT_RATE_WINDOW": "60"})
+        body = {"categories": ["bac"], "advisory_ids": ["GHSA-x"]}
+        with mock.patch("modules.cache.get_advisories", return_value={}):
+            first = client.post("/api/v1/ai/classify", json=body)
+            second = client.post("/api/v1/ai/classify", json=body)
+        self.assertNotEqual(first.status_code, 429)
+        self.assertEqual(second.status_code, 429)
+
+    def test_a_non_object_json_body_is_a_400(self):
+        client = self._make()
+        r = client.post("/api/v1/search", data="[1, 2, 3]",
+                        content_type="application/json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("error", r.get_json())
+
+
 class TestJobEndpoints(unittest.TestCase):
     """The async path: submit, poll, and the guards around both."""
 
