@@ -344,6 +344,75 @@ class TestTheGeneratorsCannotTruncateWhatTheyRewrite(unittest.TestCase):
                                  f"{name} writes a file without the rename")
 
 
+class TestTheSuiteLeavesNothingBehind(unittest.TestCase):
+    """`tests/test_app.py` and `docs/testing.md` both promise the suite
+    needs no network and no credentials. It needed both.
+
+    Measured before the fix: two job tests reached the real GitHub
+    Advisory API with the operator's `gh` credentials, because the
+    `with mock.patch(...)` around the submit call had already exited by the
+    time the worker thread ran the search. Four search classes wrote their
+    fixtures into the repo's own advisories.db -- `GHSA-a`, `CVE-2026-*`,
+    and the genuine CVE-2021-44228 row overwritten with
+    `summary: "Log4Shell", description: "d"` inside a 1,059-row cache the
+    app serves from. And the classifier tests wrote fixture-token hashes
+    into the real `.ai_key_cooldown.json`, which in Docker is the mounted
+    volume holding live key cooldowns.
+
+    None of that is visible from a green suite, which is why it survived
+    this long. These tests make the residue itself the assertion.
+    """
+
+    REPO_STATE = ("advisories.db", ".ai_key_cooldown.json",
+                  ".vulnsight_api_token")
+
+    def _snapshot(self):
+        state = {}
+        for name in self.REPO_STATE:
+            path = os.path.join(ROOT, name)
+            if os.path.exists(path):
+                with open(path, "rb") as handle:
+                    state[name] = hashlib.sha256(handle.read()).hexdigest()
+        return state
+
+    def _run_subset(self, pattern):
+        return subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "tests",
+             "-p", pattern],
+            cwd=ROOT, capture_output=True, text=True, timeout=900)
+
+    def test_running_the_search_and_app_tests_touches_no_repo_state(self):
+        before = self._snapshot()
+        proc = self._run_subset("test_search_service.py")
+        self.assertIn("OK", proc.stderr, proc.stderr[-2000:])
+        proc = self._run_subset("test_app.py")
+        self.assertIn("OK", proc.stderr, proc.stderr[-2000:])
+        self.assertEqual(self._snapshot(), before,
+                         "a test wrote into the repo's own state files")
+
+    def test_the_classifier_tests_write_no_cooldown_file(self):
+        marker = os.path.join(ROOT, ".ai_key_cooldown.json")
+        existed = os.path.exists(marker)
+        proc = self._run_subset("test_ai_classifier.py")
+        self.assertIn("OK", proc.stderr, proc.stderr[-2000:])
+        self.assertEqual(
+            os.path.exists(marker), existed,
+            "the classifier tests wrote the real AI key-cooldown file; in "
+            "Docker that is the operator's live key state")
+
+    def test_the_job_tests_do_not_shell_out_to_gh(self):
+        """A job is run by a worker thread after the request returns, so a
+        patch scoped to the submit call is already gone by the time the
+        search happens."""
+        source = _source("tests/test_app.py")
+        marker = 'mock.patch(target, return_value=value)'
+        self.assertIn(marker, source,
+                      "TestJobEndpoints no longer patches gh for the whole "
+                      "test; the worker thread will reach GitHub")
+        self.assertIn("modules.ghsa_client.fetch_advisories", source)
+        self.assertIn("modules.ghsa_client.gh_auth_ok", source)
+
+
 class TestEveryFixedRowHasAGuard(unittest.TestCase):
     """The disposition table is the author's account of their own work. This
     is the part that is not: every `fixed` row is either locked by a revert

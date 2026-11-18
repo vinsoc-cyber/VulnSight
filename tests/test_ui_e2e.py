@@ -24,6 +24,7 @@ import socket
 import sys
 import threading
 import unittest
+from unittest import mock
 import wsgiref.simple_server
 from wsgiref.simple_server import WSGIRequestHandler
 
@@ -37,6 +38,7 @@ except ImportError:  # pragma: no cover
 
 import app as app_module
 from modules import cache
+from modules import ghsa_client as ghsa
 
 
 class _QuietHandler(WSGIRequestHandler):
@@ -118,6 +120,13 @@ class UITestCase(unittest.TestCase):
         cls._orig_bind = os.environ.get("VULNSIGHT_BIND")
         os.environ["VULNSIGHT_BIND"] = "127.0.0.1"
 
+        # The browser suite renders the real shell, which reports gh auth
+        # status -- unmocked that is a real `gh auth status` with the
+        # operator's credentials, from a suite documented as needing
+        # neither network nor credentials.
+        cls._gh = mock.patch.object(ghsa, "gh_auth_ok", return_value=True)
+        cls._gh.start()
+
         cls.port = _free_port()
         cls.server = wsgiref.simple_server.make_server(
             "127.0.0.1", cls.port, app_module.create_app(),
@@ -147,6 +156,7 @@ class UITestCase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls._gh.stop()
         cls.browser.close()
         cls.playwright.stop()
         cls._stop_server()

@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 694 tests: 648 offline + 46 browser
+.venv/bin/python -m unittest discover -s tests        # 697 tests: 651 offline + 46 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -29,7 +29,7 @@ OSV and the AI provider are all mocked.
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
 | `test_docs.py` | 18 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_deployment.py` | 16 | Dockerfile, compose, entrypoint and run.sh: the bind the image declares, the user it drops to, head parity |
-| `test_cleanup_stays_clean.py` | 21 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
+| `test_cleanup_stays_clean.py` | 24 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 13 | batching, malformed responses |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 694 tests` / `OK (skipped=46)`, and every other test still runs.
+`Ran 697 tests` / `OK (skipped=46)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -207,7 +207,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 109 named bugs it re-introduces the bug in the working tree, runs the
+For each of 111 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

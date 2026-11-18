@@ -19,7 +19,7 @@ from modules import nvd_client
 from modules import osv_client
 from samples import (
     NVD_VULN, OSV_GHSA, SAMPLE, SORT_A, SORT_B, SORT_C, http_error,
-    make_sortable_raw,
+    make_sortable_raw, redirect_cooldown,
 )
 
 import app as app_module
@@ -31,15 +31,23 @@ import app as app_module
 # Individual tests that patch fetch_epss themselves still win: an inner
 # mock.patch takes precedence over this one.
 _epss_patch = None
+_undo_cooldown = None
 
 
 def setUpModule():
-    global _epss_patch
+    global _epss_patch, _undo_cooldown
+    # test_ai_classify_flow and friends drive the classifier with fixture
+    # tokens, and mark_skip_token defaults to persist=True -- so without
+    # this the suite writes their hashes into the repo's real
+    # .ai_key_cooldown.json. See samples.redirect_cooldown.
+    _undo_cooldown = redirect_cooldown()
     _epss_patch = mock.patch("modules.epss_client.fetch_epss", return_value={})
     _epss_patch.start()
 
 
 def tearDownModule():
+    if _undo_cooldown is not None:
+        _undo_cooldown()
     if _epss_patch is not None:
         _epss_patch.stop()
 
@@ -753,6 +761,20 @@ class TestJobEndpoints(unittest.TestCase):
         merged.update(env or {})
         self._env = mock.patch.dict(os.environ, merged, clear=False)
         self._env.start()
+
+        # For the whole test, not just the POST. A job is run by a worker
+        # thread *after* the request returns, so a `with mock.patch(...)`
+        # around the submit call has already exited by the time the search
+        # happens -- and the worker then called the real `gh api`, reaching
+        # GitHub with the operator's credentials. This file's header and
+        # docs/testing.md both promise the suite needs no network and no
+        # credentials; two tests here were quietly breaking that.
+        for target, value in (("modules.ghsa_client.fetch_advisories", [SAMPLE]),
+                              ("modules.ghsa_client.gh_auth_ok", True)):
+            patcher = mock.patch(target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
         from app import create_app
         self.app = create_app()
         self.app.config["TESTING"] = True
@@ -939,8 +961,11 @@ class TestAppAuthAndLimits(unittest.TestCase):
             self.client.post("/api/search", json={"categories": ["bac"]}).status_code,
             401,
         )
-        self.assertEqual(self.client.get("/api/meta").status_code, 200)
+        # Both "/" and "/api/meta" report gh auth status, and unmocked that
+        # shells out to the real `gh auth status`. It is cached, so only the
+        # first caller paid -- which is why this went unnoticed.
         with mock.patch("modules.ghsa_client.gh_auth_ok", return_value=False):
+            self.assertEqual(self.client.get("/api/meta").status_code, 200)
             html = self.client.get("/").get_data(as_text=True)
         self.assertIn("AUTH_REQUIRED: true", html)
         self.assertNotIn("test-secret-token", html)
@@ -1091,10 +1116,15 @@ class TestAppAuthAndLimits(unittest.TestCase):
         self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_API_TOKEN": "s3cret",
                     "VULNSIGHT_RATE_LIMIT": "off"})
         client = self.app.test_client()
-        for path in ("/", "/api/v1/cwes", "/api/v1/meta",
-                     "/api/v1/openapi.json", "/api/v1/osv/status"):
-            with self.subTest(path=path):
-                self.assertEqual(client.get(path).status_code, 200)
+        # "/" renders the shell, which asks gh whether it is authenticated.
+        # Unmocked that shells out to the real `gh auth status` with the
+        # operator's credentials, in a suite whose header promises it needs
+        # neither network nor credentials.
+        with mock.patch("modules.ghsa_client.gh_auth_ok", return_value=True):
+            for path in ("/", "/api/v1/cwes", "/api/v1/meta",
+                         "/api/v1/openapi.json", "/api/v1/osv/status"):
+                with self.subTest(path=path):
+                    self.assertEqual(client.get(path).status_code, 200)
 
     def test_a_mutating_api_call_still_needs_the_token(self):
         self._make({"GLM_TOKEN": "live-key", "VULNSIGHT_API_TOKEN": "s3cret",

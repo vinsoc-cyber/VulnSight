@@ -11,6 +11,7 @@ import io
 import os
 import re
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -18,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import app as app_module
-from modules import cwe_catalog
+from modules import cache, cwe_catalog
 from tools import (revert_checks, sync_bug_classes_doc, sync_check_counts,
                    sync_module_map, sync_testing_doc)
 from modules.cwe_categories import CATEGORIES, picker_catalog, resolve_cwes
@@ -343,14 +344,33 @@ class TestDocsMatchTheCode(unittest.TestCase):
                     self.assertEqual(int(claimed), offline + browser, doc)
 
     def test_every_route_is_documented(self):
-        # Only the URL map is wanted here. Without an declared bind, create_app()
-        # sees an unknown (therefore exposed) listener and mints an API token
-        # into the working tree on any machine that has credentials loaded.
-        with mock.patch.dict(os.environ, {"VULNSIGHT_BIND": "127.0.0.1"}, clear=False):
-            routes = {
-                str(rule) for rule in app_module.create_app().url_map.iter_rules()
-                if not str(rule).startswith("/static")
-            }
+        # Only the URL map is wanted here, but create_app() has two side
+        # effects. Without a declared bind it sees an unknown (therefore
+        # exposed) listener and mints an API token into the working tree on
+        # any machine with credentials loaded. And it calls cache.init_db()
+        # against the default DB_PATH -- the repo's own advisories.db --
+        # creating the schema as a side effect of reading a route table.
+        # That masked a real bug: four search tests wrote their fixtures
+        # into that same database, and only passed on a clean checkout
+        # because this test had created the tables first.
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+            db_path = handle.name
+        original_db = cache.DB_PATH
+        try:
+            cache.DB_PATH = db_path
+            with mock.patch.dict(os.environ, {"VULNSIGHT_BIND": "127.0.0.1"},
+                                 clear=False):
+                routes = {
+                    str(rule) for rule in app_module.create_app().url_map.iter_rules()
+                    if not str(rule).startswith("/static")
+                }
+        finally:
+            cache.DB_PATH = original_db
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(db_path + suffix)
+                except OSError:
+                    pass
         api_doc = self.text["docs/api.md"]
         for route in routes:
             self.assertIn(route, api_doc, f"{route} is not in docs/api.md")

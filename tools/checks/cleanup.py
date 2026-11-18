@@ -13,6 +13,21 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "search tests write their fixtures into the real cache",
+        [("tests/test_search_service.py",
+          "class TestEverySourceFailingIsA502(TempCacheDB, unittest.TestCase):",
+          "class TestEverySourceFailingIsA502(unittest.TestCase):")],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "the job tests let the worker reach the real GitHub API",
+        [("tests/test_app.py",
+          "            patcher = mock.patch(target, return_value=value)",
+          "            patcher = mock.patch(target, return_value=value)\n"
+          "            del patcher")],
+        "test_cleanup_stays_clean",
+    ),
+    (
         "a generator truncates the file it rewrites",
         [("tools/generate_cwe_catalog.py",
           "    write_atomic(OUT_PATH, text)",

@@ -21,7 +21,23 @@ import urllib.error
 from modules import ai_classifier
 from modules import cache
 from modules import ghsa_client as ghsa
-from samples import SAMPLE, http_error
+from samples import SAMPLE, http_error, redirect_cooldown
+
+
+# Module-scoped rather than per-class: every class here can reach
+# _persist_cooldown, and the next class added inherits the isolation
+# instead of having to remember it. See samples.redirect_cooldown.
+_UNDO_COOLDOWN = None
+
+
+def setUpModule():
+    global _UNDO_COOLDOWN
+    _UNDO_COOLDOWN = redirect_cooldown()
+
+
+def tearDownModule():
+    if _UNDO_COOLDOWN is not None:
+        _UNDO_COOLDOWN()
 
 
 class TestAIParsing(unittest.TestCase):

@@ -8,15 +8,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import tempfile
 import unittest
 from unittest import mock
 
-from modules import cache
 from modules import ghsa_client as ghsa
 from modules import nvd_client
 from modules import search_service
-from samples import NVD_VULN, SAMPLE, SORT_A, SORT_B, SORT_C, make_sortable_raw
+from samples import NVD_VULN, SAMPLE, SORT_A, SORT_B, SORT_C, TempCacheDB, make_sortable_raw
 
 # EPSS enrichment runs inside run_search, and nothing was mocking it, so the
 # "offline" suite made 12 live DNS lookups to api.first.org per run. It passed
@@ -374,22 +372,7 @@ class TestMergeAdvisories(unittest.TestCase):
         self.assertFalse(search_service._group_matches_filters(merged, severity="low"))
 
 
-class TestRunSearch(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmp.close()
-        self._orig_db = cache.DB_PATH
-        cache.DB_PATH = self.tmp.name
-        cache.init_db(cache.DB_PATH)
-
-    def tearDown(self):
-        cache.DB_PATH = self._orig_db
-        for ext in ["", "-wal", "-shm"]:
-            try:
-                os.unlink(self.tmp.name + ext)
-            except OSError:
-                pass
-
+class TestRunSearch(TempCacheDB, unittest.TestCase):
     def _run(self, body):
         body.setdefault("categories", ["bac"])
         q = search_service.parse_search_query(body)
@@ -469,23 +452,8 @@ class TestRunSearch(unittest.TestCase):
         self.assertEqual(out.results, [])
 
 
-class TestRunSearchNvd(unittest.TestCase):
+class TestRunSearchNvd(TempCacheDB, unittest.TestCase):
     """NVD source integration in run_search."""
-
-    def setUp(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmp.close()
-        self._orig_db = cache.DB_PATH
-        cache.DB_PATH = self.tmp.name
-        cache.init_db(cache.DB_PATH)
-
-    def tearDown(self):
-        cache.DB_PATH = self._orig_db
-        for ext in ["", "-wal", "-shm"]:
-            try:
-                os.unlink(self.tmp.name + ext)
-            except OSError:
-                pass
 
     def test_nvd_source_included(self):
         nvd_normalized = nvd_client.normalize(NVD_VULN)
@@ -630,7 +598,7 @@ class TestTheMergeKeepsWhatTheSourcesActuallyHave(unittest.TestCase):
                          set(search_service._SORT_FIELD))
 
 
-class TestEverySourceFailingIsA502(unittest.TestCase):
+class TestEverySourceFailingIsA502(TempCacheDB, unittest.TestCase):
     """GHSA and NVD answered 502 when they were the only source; OSV answered
     200 + a warning for the same failure. A script could rely on neither."""
 
@@ -692,7 +660,7 @@ class TestEverySourceFailingIsA502(unittest.TestCase):
         self.assertEqual(out.stats["failed_sources"], [])
 
 
-class TestOneBadGhsaRecordDoesNotSinkTheSearch(unittest.TestCase):
+class TestOneBadGhsaRecordDoesNotSinkTheSearch(TempCacheDB, unittest.TestCase):
     """ghsa.normalize dereferences identifiers[].value, cwes[].cwe_id and
     severity.lower(), none of which the API guarantees. Normalizing a page
     with a list comprehension made any one of them fatal: the resulting
@@ -809,7 +777,7 @@ class TestSeverityVocabulary(unittest.TestCase):
         self.assertEqual(merged["cvss_by_source"], {"osv": 5.8})
 
 
-class TestEpssIsCaseInsensitive(unittest.TestCase):
+class TestEpssIsCaseInsensitive(TempCacheDB, unittest.TestCase):
     """_merge_group preserves the publisher's casing and FIRST keys its
     response case-sensitively, so a lower-cased CVE alias silently returned
     no score -- which the UI renders as "no data", not as an error."""
@@ -837,7 +805,7 @@ class TestEpssIsCaseInsensitive(unittest.TestCase):
         self.assertEqual(out.results[0].get("epss_percentage"), 0.42)
 
 
-class TestCveIdsSortAsNumbers(unittest.TestCase):
+class TestCveIdsSortAsNumbers(TempCacheDB, unittest.TestCase):
     """A CVE id is a year and a sequence, not a word.
 
     Sorted as text, "newest CVE first" silently meant "highest ASCII first":
@@ -883,7 +851,7 @@ class TestCveIdsSortAsNumbers(unittest.TestCase):
                          ["CVE-2026-100", "CVE-2026-10", "CVE-2026-9"])
 
 
-class TestSourceRecordsAreOptIn(unittest.TestCase):
+class TestSourceRecordsAreOptIn(TempCacheDB, unittest.TestCase):
     """source_records is ~35% of the payload and nothing reads it.
 
     Measured over 500 cached rows: 2.91 MB with, 1.89 MB without. It was
@@ -949,7 +917,7 @@ class TestSourceRecordsAreOptIn(unittest.TestCase):
         self.assertNotIn("source_records", captured["rows"][0])
 
 
-class TestTheUserIsToldWhatWasNotHonoured(unittest.TestCase):
+class TestTheUserIsToldWhatWasNotHonoured(TempCacheDB, unittest.TestCase):
     """Silent data loss is the failure mode this whole tool exists to avoid.
 
     A result set that is quietly incomplete, or quietly unfiltered, still

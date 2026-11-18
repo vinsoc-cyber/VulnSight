@@ -7,10 +7,15 @@ sets up sys.path itself (so every file also runs standalone) and then does
 
 import io
 import json
+import os
+import shutil
+import tempfile
+import unittest
 import urllib.error
 import zipfile
 from email.message import Message
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+from unittest import mock
 
 # Sentinels: `headers=None` means "no header store", which is different from
 # "build the default one", and `fp=None` is a real urllib case too.
@@ -188,3 +193,81 @@ def http_error(code, *, retry_after=None, body=b"{}", reason="err",
         cast(Any, headers),          # typeshed is stricter than urllib here
         cast(Any, body_fp),
     )
+
+
+# --- cache isolation -------------------------------------------------------
+
+# At runtime this is a plain mixin: inheriting unittest.TestCase here would
+# make the loader collect it as a test class of its own. A type checker
+# still has to know where super().setUp() goes, hence the split.
+if TYPE_CHECKING:
+    _MixinBase = unittest.TestCase
+else:
+    _MixinBase = object
+
+
+class TempCacheDB(_MixinBase):
+    """Point modules.cache at a throwaway database for the test's lifetime.
+
+    `run_search()` ends in `cache.upsert_advisories(results)`. Four classes
+    here called it with neither a temp DB nor a patched upsert, so every
+    suite run wrote their fixtures into the repo's real advisories.db --
+    `GHSA-a`, `GHSA-0/1/2`, `CVE-2026-0/1/2`, and the genuine
+    CVE-2021-44228 row overwritten with `summary: "Log4Shell",
+    description: "d"` inside a 1,059-row cache the app serves from.
+
+    It also hid an ordering dependency: advisories.db is gitignored, so on
+    a clean checkout those classes errored with "no such table: advisories"
+    and only passed in a full run because an earlier test had created the
+    schema as a side effect.
+
+    Mix in before unittest.TestCase so setUp/tearDown resolve here first.
+    """
+
+    def setUp(self):
+        from modules import cache as _cache
+        self._cache = _cache
+        self._orig_db = _cache.DB_PATH
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        self._db_path = handle.name
+        _cache.DB_PATH = self._db_path
+        _cache.init_db(self._db_path)
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self._cache.DB_PATH = self._orig_db
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self._db_path + suffix)
+            except OSError:
+                pass
+
+
+def redirect_cooldown():
+    """Point the AI key-cooldown file at a temp dir for a whole module.
+
+    `mark_skip_token` defaults to `persist=True`, and classify/ping park a
+    key on 401/403, so any module that exercises the classifier can write
+    the real `.ai_key_cooldown.json`. Several did: the file in the repo
+    root held nothing but the sha256 of fixture tokens -- "tok", "dead",
+    "key0", "key1", "key2" -- with expiries hours out. In Docker that file
+    lives in the mounted DATA_DIR beside the operator's genuine cooldowns,
+    so a suite run there parks real keys with fake entries.
+
+    Returns a callable that undoes it, for tearDownModule.
+    """
+    from modules import ai_classifier
+
+    directory = tempfile.mkdtemp(prefix="vulnsight-cooldown-")
+    patcher = mock.patch.object(
+        ai_classifier, "COOLDOWN_PATH",
+        os.path.join(directory, ".ai_key_cooldown.json"))
+    patcher.start()
+
+    def undo():
+        patcher.stop()
+        shutil.rmtree(directory, ignore_errors=True)
+
+    return undo
