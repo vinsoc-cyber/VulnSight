@@ -13,6 +13,13 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the NVD page size stops accounting for what is left to fetch",
+        [("modules/nvd_client.py",
+          "        page_size = min(max(params.results_per_page, remaining), 2000)",
+          "        page_size = params.results_per_page")],
+        "test_nvd_client",
+    ),
+    (
         "a typo in a transient-error marker stops GHSA retrying",
         [("modules/ghsa_client.py",
           '    "timed out", "502", "503", "504", "bad gateway", "service unavailable",',

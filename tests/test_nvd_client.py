@@ -318,10 +318,25 @@ class TestTheQuerySentToNvd(unittest.TestCase):
     def test_the_page_size_that_ships_is_the_computed_one(self):
         """base_q carried a resultsPerPage that every call site overrode, so
         the assignment never reached a request."""
-        params = nvd_client.NvdSearchParams(cwes=["79"], max_results=10)
-        expected = min(max(params.results_per_page, 10), 2000)
-        query = self._capture(max_results=10)[0]
-        self.assertEqual(query["resultsPerPage"], str(expected))
+        # Fixed expectations, not the formula restated: the old version
+        # recomputed `min(max(results_per_page, 10), 2000)` while the module
+        # uses `remaining`, not 10. With the default 200 both reduce to 200,
+        # so replacing the whole expression with `params.results_per_page`
+        # left this green and neither the `remaining` interaction nor the
+        # 2000 cap was ever reached.
+        self.assertEqual(self._capture(max_results=10)[0]["resultsPerPage"], "200")
+
+    def test_a_large_budget_raises_the_page_size_to_the_cap(self):
+        """`remaining` wins when the caller wants more than one page, and
+        NVD's own maximum caps it."""
+        self.assertEqual(
+            self._capture(max_results=5000)[0]["resultsPerPage"], "2000")
+
+    def test_a_small_budget_still_asks_for_the_optimized_page(self):
+        """Fetching a full page avoids a second tail request for most
+        120-day windows; trimming happens locally."""
+        self.assertEqual(
+            self._capture(max_results=1)[0]["resultsPerPage"], "200")
 
     def test_the_cwe_is_sent_normalised(self):
         self.assertEqual(self._capture()[0]["cweId"], "CWE-79")

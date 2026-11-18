@@ -103,7 +103,11 @@ class TestFetchOsv(unittest.TestCase):
             self.assertFalse(
                 os.path.exists(osv_client._zip_path("Go") + ".tmp"))
 
-    def test_zip_records_and_cwe_filter(self):
+    def test_the_cwe_filter_keeps_only_matching_records(self):
+        """Named for what it does. It was `test_zip_records_and_cwe_filter`,
+        but it unzips and normalises inline and then patches `_load_records`
+        away, so no zip is parsed by the code under test -- the archive path
+        is reached only by TestOneBadRecordDoesNotKillTheSearch."""
         # Build an in-memory bulk zip (samples.make_osv_zip replaces the removed
         # osv_client.bytes_to_records), unzip+normalize it ourselves, and drive
         # fetch_osv via a patched loader.

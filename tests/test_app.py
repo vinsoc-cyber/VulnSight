@@ -448,9 +448,15 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(again.get_data(), b"")
 
     def test_classify_accepts_single_cwe_pseudo_category(self):
+        # get_advisories, plural: classify_batch has used the batched
+        # reader since it stopped opening one connection per id, and
+        # cache.get_advisory (singular) has had no production caller
+        # since. Patching it stubbed nothing -- these passed only because
+        # the per-test database happened to be empty, which was also the
+        # only brake on the fan-out test below.
         cfg = ai_classifier.AIConfig("anthropic", "https://x", ["tok"], "PRO")
         with mock.patch("modules.ai_classifier.load_config", return_value=cfg), \
-                mock.patch("modules.cache.get_advisory", return_value=None):
+                mock.patch("modules.cache.get_advisories", return_value={}):
             r = self.client.post(
                 "/api/ai/classify",
                 json={"categories": ["cwe:1321", "bac"], "advisory_ids": ["GHSA-x"]},
@@ -483,7 +489,7 @@ class TestFlaskApp(unittest.TestCase):
         real_cwes = [f"cwe:{row[0]}" for row in picker_catalog()["rows"][:10]]
         cfg = ai_classifier.AIConfig("anthropic", "https://x", ["tok"], "PRO")
         with mock.patch("modules.ai_classifier.load_config", return_value=cfg), \
-                mock.patch("modules.cache.get_advisory", return_value=None):
+                mock.patch("modules.cache.get_advisories", return_value={}):
             r = self.client.post(
                 "/api/ai/classify",
                 json={"categories": real_cwes,

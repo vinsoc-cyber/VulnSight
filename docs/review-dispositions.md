@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 718 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 720 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **120/120 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **121/121 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 120 named bugs in the working tree, runs the test module that is
+each of 121 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 120 checks, by area
+## The 121 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -345,10 +345,11 @@ codebase and the test module that now refuses to let it back in.
 | the OpenAPI document is rebuilt for every unauthenticated request | `tests/test_openapi.py` |
 | the AI endpoints are missing from the OpenAPI document | `tests/test_openapi.py` |
 
-### Search pipeline and source clients (29)
+### Search pipeline and source clients (30)
 
 | Reverting this | is caught by |
 |---|---|
+| the NVD page size stops accounting for what is left to fetch | `tests/test_nvd_client.py` |
 | a typo in a transient-error marker stops GHSA retrying | `tests/test_ghsa_client.py` |
 | GHSA stops retrying a transient page at all | `tests/test_ghsa_client.py` |
 | EPSS keys are not normalised on the way back | `tests/test_epss_client.py` |

@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 718 tests: 670 offline + 48 browser
+.venv/bin/python -m unittest discover -s tests        # 720 tests: 672 offline + 48 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -18,7 +18,7 @@ OSV and the AI provider are all mocked.
 | `test_app.py` | 73 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
 | `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
-| `test_nvd_client.py` | 36 | date windowing, normalisation, rate-limit and 403 handling |
+| `test_nvd_client.py` | 38 | date windowing, normalisation, rate-limit and 403 handling |
 | `test_http_retry.py` | 29 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
 | `test_osv_client.py` | 32 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
 | `test_ui_e2e.py` | 48 | the real UI in a browser — *optional*, see below |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 718 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 720 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -217,7 +217,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 120 named bugs it re-introduces the bug in the working tree, runs the
+For each of 121 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never
