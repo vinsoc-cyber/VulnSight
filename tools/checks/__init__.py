@@ -19,6 +19,7 @@ from __future__ import annotations
 from . import cleanup
 from . import core
 from . import frontend
+from . import hardening
 from . import runtime
 from . import search
 
@@ -31,6 +32,7 @@ GROUPS: dict[str, list[Check]] = {
     "search": search.CHECKS,
     "frontend": frontend.CHECKS,
     "cleanup": cleanup.CHECKS,
+    "hardening": hardening.CHECKS,
 }
 
 

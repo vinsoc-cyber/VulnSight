@@ -299,5 +299,64 @@ class TestTheQuerySentToFirst(unittest.TestCase):
         self.assertIn("CVE-2024-1234", result)
 
 
+class TestEnrichmentCannotCostTheSearch(unittest.TestCase):
+    """Each batch retried independently (attempts=2, timeout=30) and
+    failures were swallowed per batch, so a FIRST outage cost the FULL
+    budget rather than failing fast: sort=epss_percentage with
+    max_results=500 enriches up to 2,000 CVEs in 20 batches, which is
+    ~1240s inside one request against a 180s worker timeout. Enrichment is
+    an optimisation; it must never be why a search dies."""
+
+    def _run(self, n_cves, per_batch_seconds, fail=False):
+        now = {"t": 0.0}
+        calls = {"n": 0}
+
+        def fake_batch(batch, timeout=30):
+            calls["n"] += 1
+            now["t"] += per_batch_seconds
+            if fail:
+                raise RuntimeError("FIRST is down")
+            return {}
+
+        with mock.patch.object(epss_client, "_fetch_batch", fake_batch), \
+             mock.patch.object(epss_client.time, "monotonic", lambda: now["t"]):
+            epss_client.fetch_epss([f"CVE-2026-{i}" for i in range(n_cves)])
+        return calls["n"], now["t"]
+
+    def test_a_slow_endpoint_stops_at_the_deadline(self):
+        calls, elapsed = self._run(2000, per_batch_seconds=62.0)
+        self.assertLess(elapsed, epss_client.FETCH_DEADLINE_SECONDS + 70,
+                        f"enrichment ran for {elapsed:.0f}s")
+        self.assertLess(calls, 20, "every batch was attempted anyway")
+
+    def test_a_dead_endpoint_gives_up_rather_than_retrying_every_batch(self):
+        calls, _ = self._run(2000, per_batch_seconds=0.1, fail=True)
+        self.assertLessEqual(
+            calls, epss_client.MAX_CONSECUTIVE_FAILURES,
+            f"{calls} batches were attempted against a dead endpoint")
+
+    def test_a_healthy_endpoint_still_scores_everything(self):
+        calls, _ = self._run(500, per_batch_seconds=0.01)
+        self.assertEqual(calls, 5, "a working endpoint was cut short")
+
+
+class TestTheBatchCarriesDistinctCves(unittest.TestCase):
+    """_fetch_batch upper-cases on the way out, but dedup ran first, so
+    ["CVE-2024-1", "cve-2024-1"] survived as two entries and went out twice
+    in the same ?cve= list."""
+
+    def test_case_variants_are_one_entry(self):
+        seen = []
+
+        def fake_batch(batch, timeout=30):
+            seen.extend(batch)
+            return {}
+
+        with mock.patch.object(epss_client, "_fetch_batch", fake_batch):
+            epss_client.fetch_epss(["CVE-2024-1", "cve-2024-1", "Cve-2024-1",
+                                    "CVE-2024-2"])
+        self.assertEqual(seen, ["CVE-2024-1", "CVE-2024-2"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

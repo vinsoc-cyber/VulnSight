@@ -1196,9 +1196,54 @@
         : '';
       const shownCwes = m.cwes.slice(0, 6).join(', ');
       const more = m.cwes.length > 6 ? `<span title="${safeAttr(m.cwes.join(', '))}"> +${m.cwes.length - 6} more</span>` : '';
-      $('#summary').innerHTML = head + unscoredNote + psText + capped
-        + ` · CWEs: <code>${esc(shownCwes)}</code>${more}`
+      // Only when there is something to list: an empty set still rendered
+      // " · CWEs:" followed by an empty <code>, which paints as a stray
+      // 6px box after the count.
+      // The active order, where the list is. Nothing on the results surface
+      // said what the order was, so a date-sorted queue read as a ranked
+      // one -- and the first row being LOW looked like a bug rather than
+      // the newest advisory.
+      const orderText = ` · <span class="summary-order">${esc(currentOrderWords())}</span>`;
+      const cweText = shownCwes
+        ? ` · CWEs: <code>${esc(shownCwes)}</code>${more}`
+        : '';
+      $('#summary').innerHTML = head + orderText + unscoredNote + psText + capped + cweText
         + (m.cached ? ` · <span class="summary-cached">${m.cached} already AI-scored</span>` : '');
+    }
+
+    // "Newest first" is a date word. It was shown for every sort field, so
+    // ordering by CVE ID offered "Newest/Oldest" for a thing that has no
+    // age, and ordering by EPSS called the highest probability "newest" --
+    // the control described a different query than the one it ran.
+    const DIRECTION_WORDS = {
+      published: ['Newest first', 'Oldest first'],
+      updated: ['Most recently updated', 'Least recently updated'],
+      cve_id: ['Highest CVE id first', 'Lowest CVE id first'],
+      epss_percentage: ['Most likely exploited first', 'Least likely first'],
+      epss_percentile: ['Highest percentile first', 'Lowest percentile first'],
+    };
+
+    function currentOrderWords() {
+      const words = DIRECTION_WORDS[$('#sort').value] || DIRECTION_WORDS.published;
+      return ($('#direction').value === 'asc' ? words[1] : words[0]).toLowerCase();
+    }
+
+    function syncDirectionWords() {
+      const select = $('#direction');
+      const words = DIRECTION_WORDS[$('#sort').value] || DIRECTION_WORDS.published;
+      const [desc, asc] = words;
+      for (const option of select.options) {
+        option.textContent = option.value === 'asc' ? asc : desc;
+      }
+    }
+
+    function renderWarnings(list) {
+      const slot = $('#search-warnings');
+      if (!slot) return;
+      slot.innerHTML = list
+        .map(w => `<li>${esc(String(w))}</li>`)
+        .join('');
+      slot.hidden = list.length === 0;
     }
 
     // render() replaces all of #results in one innerHTML write, so whatever
@@ -1296,7 +1341,7 @@
           maxResults: state.max_results,
           cached: cached,
         };
-        (data.warnings || []).forEach(w => toast('⚠️ ' + w, 'err'));
+        renderWarnings(data.warnings || []);
         $('#ai-btn').disabled = LAST.length === 0;
         $('#only_match').disabled = LAST.length === 0;
         $('#only_match').checked = false;
@@ -1560,6 +1605,8 @@
 
     // === Event Listeners ===
     $('#auto-btn').addEventListener('click', autoRun);
+    $('#sort').addEventListener('change', syncDirectionWords);
+    syncDirectionWords();
     $('#search-btn').addEventListener('click', () => search());
     $('#ai-btn').addEventListener('click', refineAI);
     // "Only AI matches" is a display filter — but if nothing is scored yet it

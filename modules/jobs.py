@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import atexit
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,11 @@ from .security import env_int
 logger = logging.getLogger(__name__)
 
 JOB_ID_BYTES = 12
+# How many jobs may be queued or running before a submission is refused.
+# The pool is one worker on purpose (the sources are rate-limited per
+# account, not per request), so this is a depth, not a concurrency limit:
+# past it the honest answer is 503, not a poll URL that resolves in days.
+MAX_UNFINISHED_JOBS = env_int("VULNSIGHT_MAX_QUEUED_JOBS", 50)
 _JOB_ID_RE = re.compile(rf"[0-9a-f]{{{JOB_ID_BYTES * 2}}}")
 #: Finished jobs are dropped after this long. Long enough that a cron run which
 #: polls slowly still finds its result; short enough that the table stays small.
@@ -45,6 +51,16 @@ DEFAULT_RETENTION_SECONDS = 24 * 3600
 
 _POOL: ThreadPoolExecutor | None = None
 _POOL_LOCK = threading.Lock()
+_EXIT_HOOK_REGISTERED = False
+
+
+def _register_exit_hook() -> None:
+    """Drop queued work at interpreter exit, once per process."""
+    global _EXIT_HOOK_REGISTERED
+    if _EXIT_HOOK_REGISTERED:
+        return
+    atexit.register(shutdown)
+    _EXIT_HOOK_REGISTERED = True
 
 
 def _pool() -> ThreadPoolExecutor:
@@ -57,6 +73,7 @@ def _pool() -> ThreadPoolExecutor:
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
+            _register_exit_hook()
             workers = max(1, min(8, env_int("VULNSIGHT_JOB_WORKERS", 1)))
             _POOL = ThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="vulnsight-job"
@@ -124,9 +141,24 @@ def submit(kind: str, request: dict, runner, path: str | None = None) -> str:
     logged in full and reported generically, because a job result is a response
     body and exception text is not safe to put in one.
     """
+    # Backpressure. ThreadPoolExecutor's work queue is unbounded and the
+    # pool is one worker by design, so nothing here looked at the depth: the
+    # search limiter allows 30 submissions a minute and an NVD search takes
+    # minutes each, so a loop or a careless script left thousands of rows
+    # queued, every POST still answering 202 with a poll URL that would not
+    # resolve for days. There is no cancellation, so the only way out was a
+    # restart -- which then failed all of them at once.
+    _prune(path)
+    depth = cache.count_unfinished_jobs(path)
+    if depth >= MAX_UNFINISHED_JOBS:
+        raise JobFailure(
+            f"{depth} searches are already queued or running. Wait for them "
+            f"to finish before submitting another.",
+            status=503,
+        )
+
     job_id = new_job_id()
     cache.create_job(job_id, kind, request, path=path)
-    _prune(path)
     _pool().submit(_run, job_id, request, runner, path)
     return job_id
 
@@ -215,9 +247,22 @@ def public_view(job: dict) -> dict:
 
 
 def shutdown(wait: bool = False) -> None:
-    """Release the pool. Used by tests; the process exit handles the real case."""
+    """Release the pool, dropping anything still queued.
+
+    The docstring used to say "the process exit handles the real case". It
+    does the opposite: ThreadPoolExecutor's workers are non-daemon and
+    CPython joins them through threading._register_atexit, so interpreter
+    exit BLOCKS on an in-flight job. A four-minute NVD sweep therefore held
+    shutdown open until Docker's 10s stop timeout turned SIGTERM into
+    SIGKILL -- neither graceful (the job died mid-flight anyway) nor prompt,
+    and the row was left `running` until the next process reconciled it.
+
+    `cancel_futures` drops the queued work that nothing is waiting on, so
+    only the job already executing can delay exit, and register_atexit makes
+    this run without every caller having to remember it.
+    """
     global _POOL
     with _POOL_LOCK:
         pool, _POOL = _POOL, None
     if pool is not None:
-        pool.shutdown(wait=wait)
+        pool.shutdown(wait=wait, cancel_futures=True)

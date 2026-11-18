@@ -30,12 +30,44 @@ class TestATransientPageIsRetried(unittest.TestCase):
 
     def test_the_markers_that_decide_a_retry(self):
         for text in ("502 Bad Gateway", "connection reset by peer",
-                     "TLS handshake timeout", "API rate limit exceeded",
+                     "TLS handshake timeout",
                      "temporary failure in name resolution", "unexpected EOF"):
             with self.subTest(stderr=text):
                 self.assertTrue(
                     ghsa._is_transient_gh_error(ghsa.GhCliError(text)),
                     f"{text!r} should be worth another attempt")
+
+    def test_a_rate_limit_is_not_worth_another_attempt(self):
+        """This list used to contain "API rate limit exceeded".
+
+        A rate limit is not a "try again in 1.5 seconds" condition.
+        GitHub's primary limit resets up to an hour out, its
+        secondary-limit guidance says to stop rather than retry, and
+        retry_after_of cannot read the reset time because a GhCliError is
+        not an HTTPError -- so the backoff was a blind 1.5s then 3.0s.
+        Three futile retries per page, over five pages and four sources, is
+        ~15 extra authenticated calls against the budget that just ran out,
+        which is what abuse detection is looking for.
+        """
+        for text in ("API rate limit exceeded",
+                     "You have exceeded a secondary rate limit",
+                     "HTTP 403: rate limit exceeded for user"):
+            with self.subTest(stderr=text):
+                self.assertFalse(
+                    ghsa._is_transient_gh_error(ghsa.GhCliError(text)),
+                    f"{text!r} must not be retried blindly")
+
+    def test_a_short_marker_matches_as_a_word_not_a_substring(self):
+        """"502", "503", "504" and "eof" were matched anywhere in the
+        message, and those digits sit inside GHSA ids and CVE numbers -- so
+        a permanent 404 naming GHSA-xxxx-1503-yyyy was retried three
+        times."""
+        for text in ("HTTP 404: Not Found (GHSA-xxxx-1503-yyyy)",
+                     "HTTP 404 for CVE-2021-45046",
+                     "could not resolve advisory 9502"):
+            with self.subTest(stderr=text):
+                self.assertFalse(
+                    ghsa._is_transient_gh_error(ghsa.GhCliError(text)))
 
     def test_a_permanent_failure_is_not_retried(self):
         for text in ("Not Found", "Bad credentials", "Validation Failed",

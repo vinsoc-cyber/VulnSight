@@ -121,14 +121,32 @@ def matches_published(record: dict, value: str | None) -> bool:
 
 
 def matches_package(record: dict, affects: str | None) -> bool:
-    """Match the normalized, canonical package name exactly, case-insensitively."""
+    """Match the canonical package name exactly, case-insensitively.
+
+    NVD names packages `vendor:product`, built from the CPE criteria, while
+    GHSA and OSV use the ecosystem's own name. An exact comparison therefore
+    could never match an NVD-only record: searching `affects=lodash` against
+    a row named `lodash:lodash` was always False, so every NVD-only group
+    was dropped after NVD had reported a healthy count for it -- silently,
+    although the same pipeline warns about the `type` and `ecosystem`
+    filters it cannot honour.
+
+    The product half of a `vendor:product` name counts as a match. A bare
+    name is still compared whole, so `affects=foo` does not match `foobar`.
+    """
     if not affects:
         return True
     wanted = affects.strip().casefold()
-    return any(
-        str(package.get("name") or "").strip().casefold() == wanted
-        for package in (record.get("packages") or [])
-    )
+    for package in record.get("packages") or []:
+        name = str(package.get("name") or "").strip().casefold()
+        if not name:
+            continue
+        if name == wanted:
+            return True
+        # vendor:product -- match either half, not a substring of either.
+        if ":" in name and wanted in name.split(":", 1):
+            return True
+    return False
 
 
 def matches_severity(record: dict, severity: str | None) -> bool:

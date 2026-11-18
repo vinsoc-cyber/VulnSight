@@ -3,6 +3,7 @@
 All HTTP calls are mocked; nothing touches the network.
 """
 
+import re
 import os
 import sys
 
@@ -318,6 +319,9 @@ class TestTheQuerySentToNvd(unittest.TestCase):
     """Driven through _fetch_cves_for_cwe, because the query is built inline."""
 
     def _capture(self, **params):
+        """Every request, in order. Request 0 is the one-row probe that
+        learns totalResults; the data request follows. Use _data() to assert
+        on the page that actually carries rows."""
         seen = []
 
         def fake_page(query, timeout=60):
@@ -330,6 +334,15 @@ class TestTheQuerySentToNvd(unittest.TestCase):
                 "79", nvd_client.NvdSearchParams(cwes=["79"], **params))
         self.assertTrue(seen, "no request was built")
         return seen
+
+    def _data(self, **params):
+        """The request that fetches rows, not the probe in front of it."""
+        seen = self._capture(**params)
+        self.assertGreaterEqual(len(seen), 2,
+                                "expected a probe and then a data request")
+        self.assertEqual(seen[0]["resultsPerPage"], "1",
+                         "the first request should be the one-row probe")
+        return seen[1]
 
     def test_severity_is_sent_in_the_form_nvd_wants(self):
         """The inverse-map lookup that used to sit here could never fire: an
@@ -354,19 +367,19 @@ class TestTheQuerySentToNvd(unittest.TestCase):
         # so replacing the whole expression with `params.results_per_page`
         # left this green and neither the `remaining` interaction nor the
         # 2000 cap was ever reached.
-        self.assertEqual(self._capture(max_results=10)[0]["resultsPerPage"], "200")
+        self.assertEqual(self._data(max_results=10)["resultsPerPage"], "200")
 
     def test_a_large_budget_raises_the_page_size_to_the_cap(self):
         """`remaining` wins when the caller wants more than one page, and
         NVD's own maximum caps it."""
         self.assertEqual(
-            self._capture(max_results=5000)[0]["resultsPerPage"], "2000")
+            self._data(max_results=5000)["resultsPerPage"], "2000")
 
     def test_a_small_budget_still_asks_for_the_optimized_page(self):
         """Fetching a full page avoids a second tail request for most
         120-day windows; trimming happens locally."""
         self.assertEqual(
-            self._capture(max_results=1)[0]["resultsPerPage"], "200")
+            self._data(max_results=1)["resultsPerPage"], "200")
 
     def test_the_cwe_is_sent_normalised(self):
         self.assertEqual(self._capture()[0]["cweId"], "CWE-79")
@@ -473,6 +486,150 @@ class TestTheCvssVectorReachesTheRow(unittest.TestCase):
         row = nvd_client.normalize(_vuln("CVE-2026-1", metrics={}))
         self.assertIn("cvss_vector", row)
         self.assertIsNone(row["cvss_vector"])
+
+
+class TestOneSearchCannotOutliveTheWorker(unittest.TestCase):
+    """NVD is the source that sleeps between every request, and it had no
+    deadline while ghsa_client has had one all along.
+
+    Selecting every bug class resolves to 158 CWEs. Without NVD_API_KEY the
+    spacing is 6.5s, so that is 1027 seconds of mandatory sleep before a
+    single round trip -- against the shipped `--timeout 180` with one worker
+    and eight threads. The worker is killed and takes all eight threads with
+    it, so one click on "select all" aborted every other search in flight."""
+
+    def _run_with_clock(self, cwes, per_cwe_seconds):
+        now = {"t": 0.0}
+        fetched = []
+
+        def fake_monotonic():
+            return now["t"]
+
+        def fake_sleep(seconds):
+            now["t"] += seconds
+
+        def fake_fetch(cwe, params):
+            fetched.append(cwe)
+            now["t"] += per_cwe_seconds
+            return []
+
+        report = {}
+        with mock.patch.object(nvd_client.time, "monotonic", fake_monotonic), \
+             mock.patch.object(nvd_client.time, "sleep", fake_sleep), \
+             mock.patch.object(nvd_client, "_fetch_cves_for_cwe", fake_fetch), \
+             mock.patch.object(nvd_client, "_request_delay", lambda: 6.5):
+            nvd_client.fetch_nvd(
+                nvd_client.NvdSearchParams(cwes=cwes), report=report)
+        return fetched, report, now["t"]
+
+    def test_a_wide_selection_stops_at_the_deadline(self):
+        cwes = [str(n) for n in range(158)]
+        fetched, report, elapsed = self._run_with_clock(cwes, per_cwe_seconds=0.2)
+        self.assertLess(
+            elapsed, nvd_client.FETCH_DEADLINE_SECONDS + 10,
+            f"158 CWEs ran for {elapsed:.0f}s; the budget is "
+            f"{nvd_client.FETCH_DEADLINE_SECONDS:.0f}s")
+        self.assertLess(len(fetched), len(cwes), "nothing was skipped")
+        self.assertTrue(report["timed_out"])
+
+    def test_the_budget_is_under_the_shipped_worker_timeout(self):
+        """Reading the real number out of the Dockerfile, so raising one
+        without the other is a failure rather than a surprise in
+        production."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "Dockerfile"), encoding="utf-8") as fh:
+            dockerfile = fh.read()
+        match = re.search(r'"--timeout",\s*"(\d+)"', dockerfile)
+        self.assertIsNotNone(match, "the worker timeout is no longer pinned")
+        assert match is not None
+        self.assertLess(nvd_client.FETCH_DEADLINE_SECONDS, int(match.group(1)))
+
+    def test_a_narrow_selection_is_not_cut_short(self):
+        fetched, report, _ = self._run_with_clock(["79", "89"], per_cwe_seconds=0.2)
+        self.assertEqual(fetched, ["79", "89"])
+        self.assertFalse(report["timed_out"])
+
+
+class TestTheShapesNvdDoesNotGuarantee(unittest.TestCase):
+    """The paging code dereferenced `vulnerabilities` and `totalResults`
+    before records.normalize_all ever saw them, and neither AttributeError
+    nor ValueError is an NvdError -- so they bypassed fetch_nvd's handler
+    and run_search's per-source degradation and surfaced as a 500 that
+    discarded the GHSA and OSV results already paid for."""
+
+    def _fetch(self, body):
+        with mock.patch.object(nvd_client, "_fetch_page", lambda q, timeout=60: body), \
+             mock.patch.object(nvd_client.time, "sleep", lambda s: None):
+            return nvd_client._fetch_cves_for_cwe(
+                "79", nvd_client.NvdSearchParams(cwes=["79"]))
+
+    def test_a_null_entry_costs_that_entry_and_nothing_else(self):
+        good = _vuln("CVE-2026-1")
+        out = self._fetch({"vulnerabilities": [None, good], "totalResults": 2})
+        self.assertEqual([(v.get("cve") or {}).get("id") for v in out],
+                         ["CVE-2026-1"])
+
+    def test_a_non_list_vulnerabilities_is_empty_not_an_exception(self):
+        for body in ({"vulnerabilities": {"cve": {}}, "totalResults": 1},
+                     {"vulnerabilities": "nope", "totalResults": 1},
+                     {"totalResults": 1},
+                     {}):
+            with self.subTest(body=body):
+                self.assertEqual(self._fetch(body), [])
+
+    def test_a_non_numeric_total_does_not_raise(self):
+        out = self._fetch({"vulnerabilities": [_vuln("CVE-2026-1")],
+                           "totalResults": "many"})
+        self.assertEqual(len(out), 1)
+
+    def test_none_of_these_escape_as_something_other_than_an_nvd_error(self):
+        """The point of the guard: whatever goes wrong here has to be an
+        NvdError, or run_search cannot degrade this source on its own."""
+        for body in ({"vulnerabilities": [None]}, {"totalResults": "many"},
+                     {"vulnerabilities": "nope"}, None):
+            with self.subTest(body=body):
+                raised = None
+                try:
+                    self._fetch(body)
+                except BaseException as exc:
+                    raised = exc
+                self.assertIsInstance(
+                    raised, (type(None), nvd_client.NvdError),
+                    f"{type(raised).__name__} escapes the module's own error "
+                    f"type, so run_search cannot degrade this source alone")
+
+
+class TestTheProbeReplacesADiscardedPage(unittest.TestCase):
+    """The first request used to fetch a full page and throw every row away
+    whenever a tail page was needed: two 2,000-row responses to return 100
+    rows, doubling the request count against the tightest rate limit in the
+    app."""
+
+    def _requests(self, total):
+        seen = []
+
+        def fake_page(query, timeout=60):
+            seen.append(dict(query))
+            rows = [] if query.get("resultsPerPage") == "1" else [_vuln("CVE-2026-1")]
+            return {"vulnerabilities": rows, "totalResults": total}
+
+        with mock.patch.object(nvd_client, "_fetch_page", fake_page), \
+             mock.patch.object(nvd_client.time, "sleep", lambda s: None):
+            nvd_client._fetch_cves_for_cwe(
+                "79", nvd_client.NvdSearchParams(cwes=["79"], max_results=100))
+        return seen
+
+    def test_no_request_fetches_rows_that_are_then_discarded(self):
+        seen = self._requests(total=50000)
+        self.assertEqual(len(seen), 2, "expected exactly a probe and one page")
+        self.assertEqual(seen[0]["resultsPerPage"], "1")
+        self.assertNotEqual(seen[1]["startIndex"], "0",
+                            "a tail was needed, so the data page is the tail")
+
+    def test_a_small_result_set_still_costs_two_requests_at_most(self):
+        seen = self._requests(total=5)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1]["startIndex"], "0")
 
 
 if __name__ == "__main__":

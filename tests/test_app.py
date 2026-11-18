@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
 import tempfile
 import time
 import unittest
@@ -1285,6 +1286,71 @@ class TestAppAuthAndLimits(unittest.TestCase):
             second = self.client.post("/api/ai/test", json={})
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 429)
+
+
+class TestConditionalRequestsFollowTheSpec(unittest.TestCase):
+    """`If-None-Match == etag` rejected both legal forms a caller may send:
+    a comma-separated tag list and `*`.
+
+    That matters more than a style nit here. app.py's own comment frames
+    the 304 on /openapi.json as a DoS control -- the endpoint is
+    unauthenticated and exempt from the rate limiter precisely because the
+    304 is meant to be the cheap path -- so a caller sending a tag list
+    walked past it and re-serialised the whole document every time."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self._orig_db = cache.DB_PATH
+        cache.DB_PATH = self.tmp.name
+        self._env = mock.patch.dict(os.environ, {
+            "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
+            "VULNSIGHT_BIND": "127.0.0.1"}, clear=False)
+        self._env.start()
+        from app import create_app
+        self.client = create_app().test_client()
+
+    def tearDown(self):
+        self._env.stop()
+        cache.DB_PATH = self._orig_db
+        for ext in ("", "-wal", "-shm"):
+            with contextlib.suppress(OSError):
+                os.unlink(self.tmp.name + ext)
+
+    def _etag(self, path):
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        return response.headers["ETag"]
+
+    def test_a_tag_list_containing_the_match_is_a_304(self):
+        for path in ("/api/v1/openapi.json", "/api/v1/cwes"):
+            etag = self._etag(path)
+            for header in (etag, f'{etag}, W/"other"', f'W/"other", {etag}', "*"):
+                with self.subTest(path=path, header=header):
+                    response = self.client.get(
+                        path, headers={"If-None-Match": header})
+                    self.assertEqual(response.status_code, 304, header)
+
+    def test_a_tag_list_without_the_match_still_serves_the_body(self):
+        for path in ("/api/v1/openapi.json", "/api/v1/cwes"):
+            with self.subTest(path=path):
+                response = self.client.get(
+                    path, headers={"If-None-Match": 'W/"a", W/"b"'})
+                self.assertEqual(response.status_code, 200)
+
+    def test_the_304_still_carries_its_validators(self):
+        """RFC 9110 S15.4.5: a 304 SHOULD send what a 200 would have sent
+        for caching. Dropping them makes the next request unconditional, so
+        the 304 saves one round trip and then stops saving anything."""
+        for path in ("/api/v1/openapi.json", "/api/v1/cwes"):
+            etag = self._etag(path)
+            with self.subTest(path=path):
+                response = self.client.get(
+                    path, headers={"If-None-Match": etag})
+                self.assertEqual(response.status_code, 304)
+                self.assertEqual(response.headers.get("ETag"), etag)
+                self.assertTrue(response.headers.get("Cache-Control"),
+                                "the 304 dropped Cache-Control")
 
 
 if __name__ == "__main__":

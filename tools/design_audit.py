@@ -55,18 +55,94 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # It was outside every earlier audit, which only ever loaded "/", so nothing
 # had measured its contrast, its tap targets or its focus rings -- on the
 # one page an integrator reads before writing a client.
+# (name, path, width, height, theme, populate)
+#
+# `populate` runs a search against stubbed sources before measuring. Without
+# it this tool only ever saw the empty landing screen: the results surface,
+# which is where the operator spends the whole session, had never been
+# measured at any width in either theme -- and that is where the severity
+# badge, the EPSS bar, the per-card meta row and the warnings live. The
+# first look at it found an empty <code> painted after the count, severity
+# encoded twice, and a warning toast sitting on top of a card title.
 STATES = [
-    ("01-landing-dark", "", 1440, 900, "dark"),
-    ("02-landing-light", "", 1440, 900, "light"),
-    ("03-mobile-dark", "", 390, 844, "dark"),
-    ("04-mobile-light", "", 390, 844, "light"),
-    ("05-narrow", "", 320, 844, "dark"),
-    ("06-tablet", "", 820, 1180, "dark"),
-    ("07-wide", "", 1920, 1080, "light"),
-    ("08-apidocs-dark", "api/docs", 1440, 900, "dark"),
-    ("09-apidocs-light", "api/docs", 1440, 900, "light"),
-    ("10-apidocs-mobile", "api/docs", 390, 844, "dark"),
+    ("01-landing-dark", "", 1440, 900, "dark", False),
+    ("02-landing-light", "", 1440, 900, "light", False),
+    ("03-mobile-dark", "", 390, 844, "dark", False),
+    ("04-mobile-light", "", 390, 844, "light", False),
+    ("05-narrow", "", 320, 844, "dark", False),
+    ("06-tablet", "", 820, 1180, "dark", False),
+    ("07-wide", "", 1920, 1080, "light", False),
+    ("08-apidocs-dark", "api/docs", 1440, 900, "dark", False),
+    ("09-apidocs-light", "api/docs", 1440, 900, "light", False),
+    ("10-apidocs-mobile", "api/docs", 390, 844, "dark", False),
+    ("11-results-dark", "", 1440, 900, "dark", True),
+    ("12-results-light", "", 1440, 900, "light", True),
+    ("13-results-mobile", "", 390, 844, "dark", True),
+    ("14-results-narrow", "", 320, 844, "light", True),
 ]
+
+# One advisory per severity band, each carrying the fields the card renders:
+# a KEV flag, several sources, a CWE label, a package range and an EPSS
+# score. Stubbed at the network boundary, so no credentials and no requests.
+_SEVERITIES = ("critical", "high", "medium", "low")
+
+
+def _sample_advisory(index: int) -> dict:
+    severity = _SEVERITIES[index % 4]
+    return {
+        "advisory_id": f"GHSA-aaaa-bbbb-{index:04d}",
+        "ghsa_id": f"GHSA-aaaa-bbbb-{index:04d}",
+        "cve_id": f"CVE-2026-{1000 + index}",
+        "severity": severity,
+        "summary": ("Improper access control allows an authenticated user to "
+                    "read another tenant's records"),
+        "description": "d" * 280,
+        "cvss_score": (9.8, 8.1, 5.4, 3.1)[index % 4],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "cwes": ["639"],
+        "cwe_labels": [{"id": "639",
+                        "label": "Authorization Bypass Through User-Controlled Key"}],
+        "packages": [{"ecosystem": "npm", "name": "lodash",
+                      "vulnerable_version_range": "< 4.17.21",
+                      "first_patched_version": "4.17.21"}],
+        "ecosystems": ["npm"],
+        "sources": ["ghsa", "nvd"],
+        "published_at": "2026-08-15T00:00:00Z",
+        "updated_at": "2026-09-01T00:00:00Z",
+        "html_url": "https://github.com/advisories/GHSA-aaaa-bbbb",
+        "epss_percentage": (0.97, 0.42, 0.08, 0.01)[index % 4],
+        "epss_percentile": (0.99, 0.78, 0.31, 0.05)[index % 4],
+        "kev": index % 4 == 0,
+        "aliases": [f"CVE-2026-{1000 + index}"],
+    }
+
+
+def _stub_and_search(page) -> None:
+    """Fill the workspace with results, without touching the network."""
+    records = [_sample_advisory(i) for i in range(6)]
+    body = json.dumps({
+        "results": records,
+        "count": len(records),
+        "query": {"categories": ["bac"], "max_results": 100, "cwes": ["639"]},
+        # One warning, so the slot that used to be a toast is measured too.
+        "warnings": ["NVD cannot filter by ecosystem, so its rows were "
+                     "filtered locally."],
+        "stats": {"fetched_per_source": {"ghsa": 4, "nvd": 3},
+                  "after_merge": 6, "after_filter": 6, "truncated": False},
+    })
+    page.route("**/api/search", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=body))
+    page.evaluate("""() => {
+      const box = document.querySelector('input[name=category]');
+      box.checked = true;
+      box.dispatchEvent(new Event('change', {bubbles: true}));
+    }""")
+    # Clicked through the DOM: below the panel breakpoint the rail is a
+    # slide-over, so the button is off-screen and a real click cannot reach
+    # it -- which would make the two narrow states silently measure the
+    # empty page instead of the results.
+    page.evaluate("() => document.querySelector('#search-btn').click()")
+    page.wait_for_selector(".card", timeout=20000)
 
 MEASURE = r"""
 () => {
@@ -273,7 +349,7 @@ def audit(base: str, out: pathlib.Path | None) -> int:
     report, problems = {}, []
     with sync_playwright() as pw:
         browser = launch(pw)
-        for name, path, width, height, theme in STATES:
+        for name, path, width, height, theme, populate in STATES:
             page = browser.new_page(viewport={"width": width, "height": height})
             errors: list[str] = []
             page.on("pageerror",
@@ -283,6 +359,8 @@ def audit(base: str, out: pathlib.Path | None) -> int:
                     if msg.type == "error" else None)
             page.goto(base + path, wait_until="networkidle")
             page.evaluate(f"() => document.documentElement.dataset.theme = '{theme}'")
+            if populate:
+                _stub_and_search(page)
             page.wait_for_timeout(300)
 
             data = page.evaluate(MEASURE)

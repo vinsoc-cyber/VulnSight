@@ -5,6 +5,7 @@ worth testing is that a job actually leaves the request thread, lands in SQLite,
 and comes back with the right terminal state.
 """
 
+import contextlib
 import os
 import pathlib
 import sys
@@ -370,6 +371,60 @@ class TestFinishedJobsArePruned(unittest.TestCase):
         with mock.patch.object(cache, "prune_jobs",
                                side_effect=sqlite3.OperationalError("locked")):
             jobs._prune(self.db, force=True)   # must not raise
+
+
+class TestTheQueueHasABottom(unittest.TestCase):
+    """ThreadPoolExecutor's work queue is unbounded and the pool is one
+    worker by design, and `submit` never looked at the depth. The search
+    limiter allows 30 submissions a minute and an NVD search takes minutes
+    each, so a loop or a careless script left thousands of rows queued --
+    every POST still answering 202 with a poll URL that would not resolve
+    for days. There is no cancellation, so the only way out was a restart,
+    which then failed all of them at once."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self._orig = cache.DB_PATH
+        cache.DB_PATH = self.tmp.name
+        cache.init_db(cache.DB_PATH)
+
+    def tearDown(self):
+        jobs.shutdown(wait=True)
+        cache.DB_PATH = self._orig
+        for ext in ("", "-wal", "-shm"):
+            with contextlib.suppress(OSError):
+                os.unlink(self.tmp.name + ext)
+
+    def test_a_submission_past_the_depth_is_refused_with_503(self):
+        for n in range(jobs.MAX_UNFINISHED_JOBS):
+            cache.create_job(f"job{n}", "search", {}, path=cache.DB_PATH)
+        with self.assertRaises(jobs.JobFailure) as caught:
+            jobs.submit("search", {}, lambda req: None, path=cache.DB_PATH)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertIn("queued", caught.exception.public_message)
+
+    def test_the_refusal_does_not_create_a_row_nobody_will_ever_poll(self):
+        for n in range(jobs.MAX_UNFINISHED_JOBS):
+            cache.create_job(f"job{n}", "search", {}, path=cache.DB_PATH)
+        before = cache.count_unfinished_jobs(cache.DB_PATH)
+        with contextlib.suppress(jobs.JobFailure):
+            jobs.submit("search", {}, lambda req: None, path=cache.DB_PATH)
+        self.assertEqual(cache.count_unfinished_jobs(cache.DB_PATH), before)
+
+    def test_a_normal_submission_below_the_depth_still_works(self):
+        job_id = jobs.submit("search", {}, lambda req: {"ok": True},
+                             path=cache.DB_PATH)
+        self.assertTrue(job_id)
+
+    def test_finished_jobs_do_not_count_against_the_depth(self):
+        """Otherwise the queue fills permanently after enough searches."""
+        for n in range(jobs.MAX_UNFINISHED_JOBS + 10):
+            cache.create_job(f"done{n}", "search", {}, path=cache.DB_PATH)
+            cache.finish_job(f"done{n}", result={"ok": True}, path=cache.DB_PATH)
+        self.assertEqual(cache.count_unfinished_jobs(cache.DB_PATH), 0)
+        self.assertTrue(jobs.submit("search", {}, lambda req: None,
+                                    path=cache.DB_PATH))
 
 
 if __name__ == "__main__":

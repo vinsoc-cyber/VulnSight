@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
 import io
 import json
 import tempfile
@@ -533,6 +534,156 @@ class TestCacheStatusSurvivesAVanishingFile(unittest.TestCase):
                 handle.write(b"x" * 10)
             status = osv_client.cache_status()
         self.assertEqual([entry["ecosystem"] for entry in status], ["go"])
+
+
+class TestEveryVulnerableBranchIsRendered(unittest.TestCase):
+    """OSV expresses several vulnerable branches as repeated
+    introduced/fixed pairs inside one range. Folding the event list into a
+    single pair kept only the last of each, so everything but the final
+    branch vanished.
+
+    Measured against this repo's own osv_cache/Go.zip: 928 of 15,341
+    affected entries carry more than one `introduced`, and 906 rendered a
+    range that contradicted the `first_patched_version` printed beside it.
+    An operator on Go 1.13 read GO-2021-0068 as ">= 1.15.0-0, < 1.15.7" and
+    concluded they were unaffected -- an under-report, which is the
+    expensive direction for a triage tool.
+    """
+
+    GO_2021_0068 = [{"events": [{"introduced": "0"}, {"fixed": "1.14.14"},
+                                {"introduced": "1.15.0-0"}, {"fixed": "1.15.7"}]}]
+
+    def _rendered(self, ranges):
+        out = osv_client._introduced_range(ranges)
+        self.assertIsNotNone(out, "no range was rendered at all")
+        assert out is not None
+        return out
+
+    def test_both_branches_survive(self):
+        rendered = self._rendered(self.GO_2021_0068)
+        self.assertIn("1.14.14", rendered)
+        self.assertIn("1.15.7", rendered)
+        self.assertIn("1.15.0-0", rendered)
+
+    def test_the_range_does_not_contradict_the_first_patched_version(self):
+        """These two fields sit next to each other in the same dict."""
+        rendered = self._rendered(self.GO_2021_0068)
+        first_patched = "1.14.14"
+        self.assertIn(
+            first_patched, rendered,
+            f"the range {rendered!r} omits the version it was patched in")
+
+    def test_a_single_branch_is_unchanged(self):
+        self.assertEqual(
+            osv_client._introduced_range(
+                [{"events": [{"introduced": "1.0"}, {"fixed": "2.0"}]}]),
+            ">= 1.0, < 2.0")
+
+    def test_introduced_zero_is_still_not_rendered_as_a_bound(self):
+        self.assertEqual(
+            osv_client._introduced_range(
+                [{"events": [{"introduced": "0"}, {"fixed": "2.0"}]}]),
+            "< 2.0")
+
+    def test_a_branch_left_open_is_still_reported(self):
+        """No `fixed` event means it is still vulnerable, which must not
+        read as "not affected"."""
+        self.assertEqual(
+            osv_client._introduced_range([{"events": [{"introduced": "3.0"}]}]),
+            ">= 3.0")
+
+    def test_last_affected_closes_a_branch(self):
+        rendered = self._rendered(
+            [{"events": [{"introduced": "1.0"}, {"last_affected": "1.9"}]}])
+        self.assertEqual(rendered, ">= 1.0")
+
+
+class TestAWarmCacheDoesNotWaitForSomeoneElsesDownload(unittest.TestCase):
+    """_DOWNLOAD_LOCK is process-wide, not per-ecosystem, and it was taken
+    before the "already cached and fresh?" check -- so a search for `go`,
+    whose zip was on disk, blocked behind an in-flight 221 MB `npm`
+    download (timeout=120, attempts=2, so up to ~240s) for a file it was
+    never going to fetch, and then died at gunicorn's 180s."""
+
+    def test_a_fresh_cache_returns_without_taking_the_lock(self):
+        """A sentinel that refuses to be entered, not a held lock.
+
+        Holding a real lock reproduces the bug exactly -- and the reverted
+        code then deadlocks for the module's whole timeout instead of
+        failing, which makes the revert check unusable. This fails in
+        milliseconds and says why.
+        """
+        class NeverEnter:
+            def __enter__(self):
+                raise AssertionError(
+                    "download_ecosystem took the process-wide download lock "
+                    "for a cache entry that was already fresh, so a search "
+                    "for one ecosystem waits on another's 221 MB download")
+
+            def __exit__(self, *a):
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Go.zip")
+            with open(path, "wb") as fh:
+                fh.write(b"not really a zip, but non-empty")
+            with mock.patch.object(osv_client, "CACHE_DIR", tmp), \
+                 mock.patch.object(osv_client, "_DOWNLOAD_LOCK", NeverEnter()):
+                got = osv_client.download_ecosystem("Go")
+            self.assertEqual(got, path)
+
+    def test_a_cold_cache_still_takes_the_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = {"n": 0}
+
+            class CountingLock:
+                def __enter__(self):
+                    calls["n"] += 1
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+            with mock.patch.object(osv_client, "CACHE_DIR", tmp), \
+                 mock.patch.object(osv_client, "_DOWNLOAD_LOCK", CountingLock()), \
+                 mock.patch.object(osv_client.http_retry, "with_retries",
+                                   lambda fn, **k: fn()), \
+                 mock.patch.object(osv_client.urllib.request, "urlopen",
+                                   side_effect=OSError("no network")):
+                with contextlib.suppress(Exception):
+                    osv_client.download_ecosystem("Go")
+            self.assertEqual(calls["n"], 1, "a cold fetch skipped the lock")
+
+
+class TestADecompressionBombIsBounded(unittest.TestCase):
+    """MAX_BULK_BYTES capped the download; zf.read() decompresses without a
+    limit, so one hostile member could inflate to arbitrary size in memory
+    -- in a module whose own header states a hostile-response threat
+    model."""
+
+    def test_an_oversized_member_is_skipped_not_inflated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Bomb.zip")
+            # Both members are VALID advisories. If the only difference
+            # were that one is malformed, the per-record handler would skip
+            # it anyway and this test would pass with the bound removed.
+            small = dict(OSV_GHSA, id="GHSA-small", summary="small")
+            huge = dict(OSV_GHSA, id="GHSA-huge",
+                        summary="x" * 4096, details="y" * 4096)
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("huge.json", json.dumps(huge))
+                zf.writestr("fine.json", json.dumps(small))
+
+            # A member whose declared inflated size is over the cap.
+            with mock.patch.object(osv_client, "MAX_MEMBER_BYTES", 1024), \
+                 mock.patch.object(osv_client, "download_ecosystem",
+                                   lambda eco, force=False: path):
+                records = osv_client._load_records_locked("maven", "Maven", False)
+        ids = [r.get("advisory_id") or r.get("ghsa_id") for r in records]
+        self.assertIn("GHSA-small", ids, "the legitimate record was lost too")
+        self.assertNotIn("GHSA-huge", ids,
+                         "the oversized member was inflated and parsed")
+        self.assertEqual(len(records), 1)
 
 
 if __name__ == "__main__":

@@ -8,34 +8,34 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                     592   Flask routes, request guards, response headers
+app.py                     632   Flask routes, request guards, response headers
 modules/
   config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py        879   the pipeline: parse -> fetch -> merge -> sort -> enrich
-  query_filters.py         149   one filter vocabulary, applied after the merge
+  search_service.py        965   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  query_filters.py         167   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
   http_retry.py            181   one retry/backoff policy for all four upstreams
   cwe_categories.py        763   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py           348   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py            500   bulk export download, parse, CWE + keyword filters
-  epss_client.py           125   FIRST EPSS scores, batched
+  ghsa_client.py           369   `gh api /advisories`, cursor pagination, normalize()
+  nvd_client.py            477   NVD API v2, 120-day windowing, rate-limit sleeps
+  osv_client.py            584   bulk export download, parse, CWE + keyword filters
+  epss_client.py           159   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py                 488   SQLite: advisories + verdicts, jobs, migrations
-  jobs.py                  223   submit/poll queue for searches too slow to hold open
-  ai_classifier.py        1109   provider client, prompt, verdict cache, key rotation
+  cache.py                 503   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py                  268   submit/poll queue for searches too slow to hold open
+  ai_classifier.py        1221   provider client, prompt, verdict cache, key rotation
   openapi.py               572   the OpenAPI description of /api/v1
-  security.py              458   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html       379   page shell -- HTML and Jinja only
-static/app.js             1837   all UI logic; server data arrives via window.BOOT
-static/style.css          1875   design tokens + components, light and dark
+  security.py              467   bind/exposure checks, CSRF origin check, rate limiter
+templates/index.html       388   page shell -- HTML and Jinja only
+static/app.js             1884   all UI logic; server data arrives via window.BOOT
+static/style.css          1936   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           211   finds tests that can no longer fail
-  design_audit.py          388   measures contrast/targets/focus in a real browser
+  design_audit.py          466   measures contrast/targets/focus in a real browser
   generate_cwe_catalog.py  229   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     193   rewrites the revert-check figures and their index
+  sync_check_counts.py     194   rewrites the revert-check figures and their index
   revert_checks.py         231   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
   sync_module_map.py       126   rewrites the line counts in this very table

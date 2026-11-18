@@ -459,5 +459,40 @@ class TestDocsHygiene(unittest.TestCase):
             self.assertIsNone(hit, f"{name}: possible credential {hit.group(0) if hit else ''}")
 
 
+class TestAnEmptyTokenFileSaysWhatIsWrong(unittest.TestCase):
+    """An existing-but-empty token file fell through the `if existing:`
+    guard into the create path, O_EXCL raised FileExistsError, the re-read
+    was still empty, and the bare `raise` sent it out of create_app. Every
+    boot then died with a traceback saying "file exists" when the actual
+    problem is "file is empty" -- and nothing told the operator that
+    deleting a zero-byte file is the fix. A volume provisioned with
+    `touch`, or a write truncated by a full disk, gets here."""
+
+    def test_it_exits_with_a_reason_rather_than_an_errno(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            open(path, "w").close()          # exists, empty
+            with self.assertRaises(SystemExit) as caught:
+                security._load_or_create_token(path)
+        message = str(caught.exception)
+        self.assertIn("empty", message)
+        self.assertIn(path, message)
+        self.assertIn("Delete it", message)
+
+    def test_a_file_with_a_token_in_it_is_still_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("a-real-token\n")
+            self.assertEqual(security._load_or_create_token(path), "a-real-token")
+
+    def test_a_missing_file_is_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            token = security._load_or_create_token(path)
+            self.assertTrue(token)
+            self.assertEqual(oct(os.stat(path).st_mode)[-3:], "600")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

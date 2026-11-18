@@ -15,7 +15,7 @@ import os
 import secrets
 import sys
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, make_response, render_template, request
 
 from modules import (
     ai_classifier,
@@ -105,6 +105,46 @@ def _run_search_job(request_body: dict) -> dict:
     except search_service.SearchError as e:
         raise jobs.JobFailure(e.public_message, e.status) from e
     return _search_payload(q, outcome)
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """RFC 9110 S13.1.2 If-None-Match, not a string equality.
+
+    `== etag` rejected both legal forms a caller may send: a comma-separated
+    tag list, and `*`. That matters more than a style nit on /openapi.json,
+    which is unauthenticated and exempt from the rate limiter precisely
+    because the 304 is supposed to be the cheap path -- so a caller sending
+    a tag list walked straight past the control and re-serialised the whole
+    document every time. Comparison is weak, which is correct for the weak
+    validators both endpoints emit.
+    """
+    if not header:
+        return False
+    header = header.strip()
+    if header == "*":
+        return True
+    wanted = etag[2:] if etag.startswith("W/") else etag
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate and candidate == wanted:
+            return True
+    return False
+
+
+def _not_modified(etag: str, cache_control: str):
+    """A 304 that still carries its validators.
+
+    RFC 9110 S15.4.5 says a 304 SHOULD send the headers a 200 would have
+    sent for caching; dropping ETag and Cache-Control makes the next
+    request unconditional, so the 304 saves one round trip and then stops
+    saving anything.
+    """
+    response = make_response("", 304)
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = cache_control
+    return response
 
 
 def create_app():
@@ -393,8 +433,8 @@ def create_app():
         """
         payload = _cwe_payload()
         etag = f'W/"cwe-{payload["version"]}"'
-        if request.headers.get("If-None-Match") == etag:
-            return "", 304
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
+            return _not_modified(etag, "private, max-age=86400")
         response = jsonify(payload)
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = "private, max-age=86400"
@@ -430,8 +470,8 @@ def create_app():
         # made rebuilding and re-serialising a 449-line document per request
         # the cheapest CPU on the box to burn remotely.
         etag = f'W/"openapi-{openapi.API_VERSION}"'
-        if request.headers.get("If-None-Match") == etag:
-            return "", 304
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
+            return _not_modified(etag, "private, max-age=3600")
         response = jsonify(openapi.build_spec())
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = "private, max-age=3600"

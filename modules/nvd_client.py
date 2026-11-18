@@ -156,6 +156,47 @@ def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
         raise NvdError(f"Could not parse NVD response: {e}") from e
 
 
+def _vulnerabilities(body: object) -> list[dict]:
+    """The `vulnerabilities` array, or an empty list.
+
+    `body.get("vulnerabilities") or []` trusted two things the NVD schema
+    does not promise: that the value is a list, and that each entry is an
+    object. `{"vulnerabilities": [None]}` reached `item.get` in the sort key
+    and raised AttributeError, and an object instead of a list raised on
+    `.sort`. Neither is an NvdError, so neither was caught by fetch_nvd's
+    handler or by run_search's per-source degradation -- they surfaced from
+    app.py as a 500 that discarded the GHSA and OSV results already paid for
+    in the same request. The guard added for this covered `normalize`, which
+    runs later.
+    """
+    if not isinstance(body, dict):
+        return []
+    items = body.get("vulnerabilities")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _total_results(body: object) -> int:
+    """`totalResults`, or 0. A non-numeric value used to raise ValueError."""
+    if not isinstance(body, dict):
+        return 0
+    try:
+        return max(0, int(body.get("totalResults") or 0))
+    except (TypeError, ValueError):
+        logger.warning("NVD: totalResults was %r, not a number",
+                       body.get("totalResults"))
+        return 0
+
+
+def _sleep_bounded(seconds: float, deadline: float | None = None) -> None:
+    """Sleep, but never past a deadline the caller is still holding open."""
+    if deadline is None:
+        time.sleep(seconds)
+        return
+    time.sleep(min(seconds, max(0.0, deadline - time.monotonic())))
+
+
 def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     """Fetch all CVEs matching a single CWE, paginating as needed."""
     base_q: dict[str, str] = {
@@ -188,17 +229,30 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
         # locally to the caller's much smaller result budget.
         page_size = min(max(params.results_per_page, remaining), 2000)
         query = dict(base_q, **window, startIndex="0", resultsPerPage=str(page_size))
-        body = _fetch_page(query)
-        vulns = body.get("vulnerabilities") or []
-        total = int(body.get("totalResults") or len(vulns))
 
-        # NVD returns publish-date ascending. Fetch the tail page so a bounded
-        # "newest first" search does not return the oldest CVEs in the range.
-        if total > page_size:
-            time.sleep(delay)
+        # A one-row probe, not a full page. This used to fetch `page_size`
+        # rows here and then throw every one of them away when a tail page
+        # was needed -- two 2,000-row responses to return 100 rows, doubling
+        # the request count against the tightest rate limit in the app
+        # (4.6 req/30s against NVD's documented 5/30s, where a 403 is not
+        # retryable and cascades into the next CWE). The probe costs one
+        # request either way and tells us the same `totalResults`.
+        probe = _fetch_page(dict(query, resultsPerPage="1"))
+        total = _total_results(probe)
+
+        if total <= page_size:
+            # Everything fits in one page; fetch it.
+            _sleep_bounded(delay)
+            vulns = _vulnerabilities(_fetch_page(query))
+        else:
+            # NVD returns publish-date ascending, so the newest rows are at
+            # the end. tail_index is read from this window's own probe
+            # rather than from a response fetched earlier, so records
+            # published between the two calls cannot shift the window out
+            # from under us.
+            _sleep_bounded(delay)
             tail_index = max(0, total - page_size)
-            body = _fetch_page(dict(query, startIndex=str(tail_index)))
-            vulns = body.get("vulnerabilities") or []
+            vulns = _vulnerabilities(_fetch_page(dict(query, startIndex=str(tail_index))))
 
         vulns.sort(
             key=lambda item: ((item.get("cve") or {}).get("published") or ""),
@@ -213,6 +267,11 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     return results[: params.max_results]
 
 
+# How long a whole NVD fetch may take. Chosen below gunicorn's --timeout
+# (180s in the shipped Dockerfile) so the worker reports a partial result
+# rather than being killed mid-request.
+FETCH_DEADLINE_SECONDS = 150.0
+
 def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]:
     """Fetch CVEs for all requested CWEs, deduplicate, and normalize.
 
@@ -226,6 +285,16 @@ def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]
     if report is not None:
         report["failed_cwes"] = 0
         report["total_cwes"] = len(params.cwes)
+        report["timed_out"] = False
+
+    # ghsa_client has had a deadline for exactly this; NVD had none, and it
+    # is the source that sleeps between every request. Selecting every bug
+    # class resolves to 158 CWEs, and without NVD_API_KEY _request_delay()
+    # is 6.5s -- 1027 seconds of mandatory sleep before a single round trip,
+    # against a gunicorn `--timeout 180` with one worker and eight threads.
+    # The worker is killed and takes all eight threads with it, so one click
+    # on "select all" aborted every other search in flight.
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
 
     seen_ids: set[str] = set()
     raw_all: list[dict] = []
@@ -234,8 +303,20 @@ def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]
     successful_queries = 0
 
     for i, cwe in enumerate(params.cwes):
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "NVD: stopping after %d of %d CWE(s); the %.0fs budget is "
+                "spent. Narrow the class selection or set NVD_API_KEY.",
+                i, len(params.cwes), FETCH_DEADLINE_SECONDS)
+            if report is not None:
+                report["timed_out"] = True
+                report["fetched_cwes"] = i
+            break
         if i > 0:
-            time.sleep(delay)
+            # Never sleep past the deadline: the sleep itself is most of the
+            # budget here, so waiting 6.5s to then give up wastes the time
+            # the caller is still holding a request open for.
+            time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
 
         per_cwe = NvdSearchParams(
             cwes=[cwe],

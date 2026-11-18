@@ -53,14 +53,30 @@ def _cve_sort_key(value: object) -> tuple[int, int, str]:
     """(year, sequence, raw) so CVE-2026-100 sorts above CVE-2026-9.
 
     Anything that is not a CVE id sorts below every real one in ascending
-    order, which keeps records without a CVE out of the way rather than
-    interleaved.
+    order. That is only half the job: `direction` defaults to `desc`, which
+    reverses the whole key, so CVE-less records sorted to the *top* of the
+    default "newest CVE first" view. An osv-native search, where most
+    records have no CVE at all, opened on a page of nothing else.
+    `_cve_last` does the other half after the sort.
     """
     text = value if isinstance(value, str) else ""
     match = _CVE_ID_RE.match(text.strip())
     if not match:
         return (-1, -1, text)
     return (int(match.group(1)), int(match.group(2)), text)
+
+
+def _cve_last(records: list[dict]) -> list[dict]:
+    """Move records with no CVE id to the end, keeping their order.
+
+    Applied after the sort, because `reverse=` flips every component of a
+    sort key and "always last" is not a thing a reversible key can express.
+    """
+    with_cve, without = [], []
+    for record in records:
+        (with_cve if _CVE_ID_RE.match(str(record.get("cve_id") or "").strip())
+         else without).append(record)
+    return with_cve + without
 
 
 class SearchError(RuntimeError):
@@ -324,9 +340,43 @@ def _unique_dicts(items: list[dict]) -> list[dict]:
     return out
 
 
+def _vector_for_score(records: list[dict], score: float | None) -> str | None:
+    """The CVSS vector belonging to the source that supplied *score*.
+
+    Falls back to any vector when no source matches, because a vector with
+    no score beside it is still better than nothing -- but it never pairs a
+    vector with a score it does not describe.
+    """
+    if score is not None:
+        for record in records:
+            vector = record.get("cvss_vector")
+            if not vector:
+                continue
+            candidate = record.get("cvss_score")
+            if candidate is None:
+                continue
+            try:
+                if abs(float(candidate) - float(score)) < 1e-9:
+                    return vector
+            except (TypeError, ValueError):
+                continue
+    return next((record.get("cvss_vector") for record in records
+                 if record.get("cvss_vector")), None)
+
+
 def _merge_group(records: list[dict]) -> dict:
+    # A total order, so the base is the same record whichever order the
+    # upstream APIs paginated in. `min` returns the FIRST minimum, and two
+    # records of one source in a group is the case this function exists for
+    # -- GitHub's own "Duplicate Advisory" pairs share a CVE. The base
+    # decided advisory_id, published_at, html_url, summary and description,
+    # so `direction=desc` and `direction=asc` produced two different primary
+    # keys for one advisory, cache.upsert_advisories stored both, and a
+    # classify call on the second was a cache miss that re-spent tokens.
     base = min(records,
-               key=lambda item: _SOURCE_PRIORITY.get(item.get("source") or "", 99))
+               key=lambda item: (_SOURCE_PRIORITY.get(item.get("source") or "", 99),
+                                 str(item.get("advisory_id") or ""),
+                                 str(item.get("cve_id") or "")))
     merged = copy.deepcopy(base)
     sources = sorted({record.get("source", "?") for record in records})
     merged["sources"] = sources
@@ -476,10 +526,12 @@ def _merge_group(records: list[dict]) -> dict:
     # GHSA+OSV row inherited a base that has no such key and silently dropped
     # the vector. That is the one field a v4-only advisory has instead of a
     # score, so losing it left `cvss_score: null` with nothing to look up.
-    merged["cvss_vector"] = next(
-        (record.get("cvss_vector") for record in records if record.get("cvss_vector")),
-        None,
-    )
+    # From whichever source supplied the winning score, not first-wins. The
+    # score is the max across sources and the vector was the first one
+    # found, so a row could ship cvss_score 9.8 beside a vector that
+    # recomputes to 5.5 -- and unlike severity there is no
+    # cvss_vector_by_source for an auditor to fall back on.
+    merged["cvss_vector"] = _vector_for_score(records, merged.get("cvss_score"))
     # The descriptive fields are not in the merge whitelist above, so they
     # came from the base record even when the base's copy was empty: a GHSA
     # base with description "" merged with an NVD record carrying a full one
@@ -595,7 +647,20 @@ def run_search(q: SearchQuery) -> SearchOutcome:
 
     # --- GHSA (server-side CWE filter) ---
     if "ghsa" in q.sources:
-        ghsa_sort = q.sort if q.sort in ("published", "updated") else "published"
+        # GHSA sorts by cve_id natively (see ghsa_client.SearchParams), and
+        # throwing that away meant the pool was cut to max_results by
+        # *published* and only then re-sorted by the field asked for.
+        ghsa_sort = q.sort if q.sort in ("published", "updated", "cve_id") else "published"
+        if ghsa_sort != q.sort:
+            # The remaining case is the EPSS sorts, which no source can
+            # order upstream. The candidate set is therefore the newest N by
+            # publication, re-ranked locally -- so a 2021 CVE with EPSS 0.97
+            # is never a candidate. Saying so is the honest minimum; the
+            # alternative is fetching the whole corpus.
+            warnings.append(
+                f"GHSA cannot sort by {q.sort}, so these results are the "
+                f"newest {q.max_results} by publication, re-ranked locally. "
+                f"An older advisory with a higher score may be missing.")
         params = ghsa.SearchParams(
             ecosystem=q.ecosystem, cwes=q.cwes, affects=q.affects, severity=q.severity,
             type=q.adv_type, published=q.published, sort=ghsa_sort, direction=q.direction,
@@ -795,6 +860,8 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     if numeric:
         enriched = _enrich_epss(results)
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
+        if sort_field == "cve_id":
+            results = _cve_last(results)
         results = results[:q.max_results]
         # fetch_epss swallows every failure and returns {}, and _sort_key maps
         # a missing score to 0.0 -- so an EPSS outage silently handed the user
@@ -808,6 +875,8 @@ def run_search(q: SearchQuery) -> SearchOutcome:
             )
     else:
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
+        if sort_field == "cve_id":
+            results = _cve_last(results)
         results = results[:q.max_results]
         _enrich_epss(results)
 
@@ -819,7 +888,16 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         for rec in results:
             rec.pop("source_records", None)
 
-    cache.upsert_advisories(results)
+    # The cache is optional -- modules/cache.py says so in its own docstring
+    # -- but this call was unguarded, so a database locked past the busy
+    # timeout by a concurrent classify, a full volume, or a read-only
+    # VULNSIGHT_DATA_DIR turned a completed multi-source search into a 500.
+    # Minutes of rate-limited NVD fetching, discarded at the last step.
+    try:
+        cache.upsert_advisories(results)
+    except Exception:
+        logger.warning("cache write failed; returning results uncached",
+                       exc_info=True)
 
     # Attach CWE labels for the UI.
     for rec in results:
@@ -839,11 +917,19 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 )
                 for rec in results
             }
-            cached_by_category[category] = cache.get_classifications(
-                list(fingerprints),
-                category,
-                expected_fingerprints=fingerprints,
-            )
+            # Same reasoning as the write above: a cached verdict is an
+            # optimisation, and failing to read one must cost the verdict,
+            # not the search that has already been paid for.
+            try:
+                cached_by_category[category] = cache.get_classifications(
+                    list(fingerprints),
+                    category,
+                    expected_fingerprints=fingerprints,
+                )
+            except Exception:
+                logger.warning("cache read failed for %s; results will show "
+                               "no cached verdict", category, exc_info=True)
+                cached_by_category[category] = {}
         for rec in results:
             aid = rec["advisory_id"]
             category_verdicts = {

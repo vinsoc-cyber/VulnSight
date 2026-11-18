@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,14 @@ logger = logging.getLogger(__name__)
 EPSS_BASE = "https://api.first.org/data/v1/epss"
 USER_AGENT = "vulnsight/1.0 (+epss)"
 BATCH_SIZE = 100  # API-imposed maximum CVEs per request
+
+
+# Enrichment is optional, so its whole budget sits well under the worker
+# timeout: a slow or dead FIRST must cost some scores, never the search.
+FETCH_DEADLINE_SECONDS = 45.0
+# A dead endpoint looks identical to a slow one batch by batch. Three in a
+# row is an outage, not bad luck.
+MAX_CONSECUTIVE_FAILURES = 3
 
 
 def fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
@@ -46,17 +55,42 @@ def fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
     # drop blanks: a record with no CVE id reaches here as "" (merge keeps
     # whatever the source gave), and `?cve=,,` is a paid round trip that
     # can only come back empty.
-    unique: list[str] = [c for c in dict.fromkeys(cve_ids) if c and c.strip()]
+    # Normalised BEFORE dedup. _fetch_batch upper-cases on the way out, but
+    # dict.fromkeys ran first, so ["CVE-2024-1", "cve-2024-1"] survived as
+    # two entries and went out twice in the same ?cve= list -- a 100-id
+    # batch carrying fewer than 100 distinct CVEs.
+    unique: list[str] = list(dict.fromkeys(
+        c.strip().upper() for c in cve_ids if c and c.strip()))
     if not unique:
         return {}
 
     results: dict[str, dict] = {}
-    for batch in _batches(unique, BATCH_SIZE):
+    # A deadline and a consecutive-failure brake. Each batch retried
+    # independently (attempts=2, timeout=30) and failures were swallowed per
+    # batch, so a FIRST outage cost the FULL budget rather than failing
+    # fast: sort=epss_percentage with max_results=500 enriches up to 2,000
+    # CVEs in 20 batches, which is ~1240s inside one request against a 180s
+    # worker timeout. Enrichment is an optimisation; it must never be the
+    # reason a search dies.
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
+    consecutive_failures = 0
+    for index, batch in enumerate(_batches(unique, BATCH_SIZE)):
+        if time.monotonic() >= deadline:
+            logger.warning("EPSS: %.0fs budget spent; %d of %d CVEs scored",
+                           FETCH_DEADLINE_SECONDS, len(results), len(unique))
+            break
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            logger.warning("EPSS: %d batches failed in a row; giving up with "
+                           "%d of %d CVEs scored", consecutive_failures,
+                           len(results), len(unique))
+            break
         try:
-            batch_results = _fetch_batch(batch)
-            results.update(batch_results)
+            results.update(_fetch_batch(batch))
+            consecutive_failures = 0
         except Exception:
-            logger.warning("EPSS batch request failed for %d CVEs", len(batch), exc_info=True)
+            consecutive_failures += 1
+            logger.warning("EPSS batch %d failed for %d CVEs", index,
+                           len(batch), exc_info=True)
 
     return results
 

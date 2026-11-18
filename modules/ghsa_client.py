@@ -207,18 +207,39 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
 # GitHub answers through the `gh` CLI, so a transient failure arrives as a
 # subprocess result rather than an HTTPError. These are the ones worth another
 # attempt; anything else (a bad query, no credentials) will fail identically.
-_TRANSIENT_GH_MARKERS = (
-    "timed out", "502", "503", "504", "bad gateway", "service unavailable",
+# Phrases, matched anywhere in the message.
+_TRANSIENT_GH_PHRASES = (
+    "timed out", "bad gateway", "service unavailable",
     "gateway timeout", "connection reset", "connection refused",
-    "temporary failure", "eof", "tls handshake", "rate limit",
+    "temporary failure", "tls handshake",
 )
+# Short tokens that must match as whole words. As bare substrings these were
+# false positives waiting to happen: "502"/"503"/"504" sit inside any GHSA id
+# or CVE number containing those digits, and "eof" inside words. A permanent
+# `HTTP 404: ... GHSA-xxxx-1503-xxxx` was retried three times.
+_TRANSIENT_GH_TOKENS = ("502", "503", "504", "eof")
+_TRANSIENT_TOKEN_RE = re.compile(
+    r"(?<![0-9a-z])(?:" + "|".join(_TRANSIENT_GH_TOKENS) + r")(?![0-9a-z])")
+
+# Deliberately NOT transient: a rate limit is not a "try again in 1.5
+# seconds" condition. GitHub's primary limit resets up to an hour out and
+# its secondary-limit guidance says to stop rather than retry; retry_after_of
+# cannot help because a GhCliError is not an HTTPError, so the reset time in
+# the response was never read. Three futile retries per page, across five
+# pages and four sources, is ~15 extra authenticated calls against the same
+# exhausted budget -- which is what abuse detection looks for.
+_PERMANENT_GH_PHRASES = ("rate limit", "secondary rate limit")
 
 
 def _is_transient_gh_error(exc: BaseException) -> bool:
     if not isinstance(exc, GhCliError):
         return False
     text = str(exc).lower()
-    return any(marker in text for marker in _TRANSIENT_GH_MARKERS)
+    if any(phrase in text for phrase in _PERMANENT_GH_PHRASES):
+        return False
+    if any(phrase in text for phrase in _TRANSIENT_GH_PHRASES):
+        return True
+    return bool(_TRANSIENT_TOKEN_RE.search(text))
 
 
 # A whole fetch, pagination included, may not outlast this. The 50-page guard

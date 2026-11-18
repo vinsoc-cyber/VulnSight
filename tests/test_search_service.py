@@ -1006,5 +1006,101 @@ class TestTheUserIsToldWhatWasNotHonoured(TempCacheDB, unittest.TestCase):
         self.assertEqual([w for w in out.warnings if "merge order" in w], [])
 
 
+class TestAnAdvisoryCannotGetTwoPrimaryKeys(unittest.TestCase):
+    """`min` returns the first minimum, so when a group held two records of
+    one source the base was decided by upstream pagination order. GitHub's
+    own "Duplicate Advisory" pairs share a CVE, so the same advisory merged
+    to GHSA-AAAA under direction=desc and GHSA-BBBB under asc -- and
+    cache.upsert_advisories then held two rows for it, making a classify
+    call on the second a cache miss that re-spends tokens."""
+
+    def _group(self):
+        return [
+            {"source": "ghsa", "advisory_id": "GHSA-bbbb", "cve_id": "CVE-2026-1",
+             "published_at": "2026-02-01T00:00:00Z", "summary": "b"},
+            {"source": "ghsa", "advisory_id": "GHSA-aaaa", "cve_id": "CVE-2026-1",
+             "published_at": "2026-01-01T00:00:00Z", "summary": "a"},
+        ]
+
+    def test_the_base_is_the_same_whichever_order_the_api_paginated(self):
+        forward = search_service._merge_group(self._group())
+        backward = search_service._merge_group(list(reversed(self._group())))
+        for field in ("advisory_id", "published_at", "summary"):
+            with self.subTest(field=field):
+                self.assertEqual(forward[field], backward[field],
+                                 f"{field} depends on fetch order")
+
+    def test_the_winner_is_decided_by_identifier_not_by_position(self):
+        merged = search_service._merge_group(self._group())
+        self.assertEqual(merged["advisory_id"], "GHSA-aaaa")
+
+
+class TestTheVectorDescribesTheScoreBesideIt(unittest.TestCase):
+    """cvss_score is the worst across sources and cvss_vector was first-wins,
+    so a row could ship 9.8 next to a vector that recomputes to 5.5 -- and
+    unlike severity there is no cvss_vector_by_source to audit against."""
+
+    def test_the_vector_comes_from_the_source_that_supplied_the_score(self):
+        merged = search_service._merge_group([
+            {"source": "osv", "advisory_id": "A", "cvss_score": 5.5,
+             "cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"},
+            {"source": "nvd", "advisory_id": "A", "cvss_score": 9.8,
+             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
+        ])
+        self.assertEqual(merged["cvss_score"], 9.8)
+        self.assertEqual(merged["cvss_vector"],
+                         "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+
+    def test_a_vector_with_no_matching_score_is_still_kept(self):
+        """A v4-only advisory has a vector and no score; losing it leaves
+        cvss_score null with nothing to look up."""
+        merged = search_service._merge_group([
+            {"source": "osv", "advisory_id": "A", "cvss_vector": "CVSS:4.0/AV:N"},
+        ])
+        self.assertEqual(merged["cvss_vector"], "CVSS:4.0/AV:N")
+
+
+class TestRecordsWithoutACveStayOutOfTheWay(unittest.TestCase):
+    """_cve_sort_key sorts them below every real CVE ascending, exactly as
+    documented -- and `direction` defaults to desc, which reverses the whole
+    key and put them at the top. An osv-native search, where most records
+    have no CVE, opened on a page of nothing else."""
+
+    def test_they_are_last_in_both_directions(self):
+        rows = [{"cve_id": "CVE-2026-2"}, {"cve_id": None},
+                {"cve_id": "CVE-2026-1"}, {"cve_id": "GO-2021-0001"}]
+        out = search_service._cve_last(rows)
+        self.assertEqual([r["cve_id"] for r in out[:2]],
+                         ["CVE-2026-2", "CVE-2026-1"])
+        self.assertEqual({r["cve_id"] for r in out[2:]}, {None, "GO-2021-0001"})
+
+    def test_their_relative_order_is_preserved(self):
+        rows = [{"cve_id": "GO-1"}, {"cve_id": "CVE-2026-1"}, {"cve_id": "GO-2"}]
+        self.assertEqual([r["cve_id"] for r in search_service._cve_last(rows)],
+                         ["CVE-2026-1", "GO-1", "GO-2"])
+
+
+class TestAFailedCacheWriteDoesNotDiscardTheSearch(unittest.TestCase):
+    """modules/cache.py's own docstring says the cache is optional. The
+    write was unguarded, so a locked database threw away minutes of
+    rate-limited fetching as a 500 at the very last step."""
+
+    def test_the_results_survive_a_database_that_refuses_to_write(self):
+        import sqlite3
+
+        def boom(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+        with mock.patch.object(search_service.cache, "upsert_advisories", boom), \
+             mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=[SAMPLE]), \
+             mock.patch.object(search_service.cache, "get_classifications",
+                               return_value={}):
+            outcome = search_service.run_search(
+                search_service.parse_search_query(
+                    {"categories": ["bac"], "sources": ["ghsa"]}))
+        self.assertTrue(outcome.results, "a cache failure emptied the search")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

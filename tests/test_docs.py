@@ -401,7 +401,8 @@ class TestDocsMatchTheCode(unittest.TestCase):
         from tools import design_audit
 
         words = {7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
-                 12: "twelve"}
+                 12: "twelve", 13: "thirteen", 14: "fourteen",
+                 15: "fifteen", 16: "sixteen"}
         count = len(design_audit.STATES)
         self.assertIn(count, words, "add the number word for a larger table")
         doc = _read(os.path.join(DOCS, "design.md"))

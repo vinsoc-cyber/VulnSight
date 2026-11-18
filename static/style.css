@@ -95,6 +95,15 @@
   --sev-critical-ink: light-dark(#ffffff, #16181c);
   --sev-low-ink:      light-dark(#ffffff, #14181d);
   --sev-high:         light-dark(#d2600f, #ff9348);
+  /* TEXT colours for the severity word, which now sits on a 16% tint of
+     its own band rather than on a saturated fill. A fill's own hue is
+     chosen to be legible BEHIND ink; these have to be legible AS ink, so
+     they are a separate family -- the same distinction this sheet already
+     draws between --sev-* and --warn/--bad. */
+  --sev-critical-text: light-dark(#a8102c, #ff8ea1);
+  --sev-high-text:     light-dark(#8a4708, #ffa864);
+  --sev-medium-text:   light-dark(#74520a, #e8bc6a);
+  --sev-low-text:      light-dark(#2f5578, #94bde0);
   --sev-medium:       light-dark(#cf9426, #e8b65a);
   --sev-low:          light-dark(#3e6e9e, #7fafd8);
 
@@ -860,8 +869,10 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
 .chips-empty { color: var(--faint); font-size: var(--text-sm); }
 
 .section-action {
-  min-height: 0;
-  padding: 2px 6px;
+  /* 24px, not 18: this is a real control ("Clear" wipes the search
+     history) and it was the smallest hit area on the page. */
+  min-height: 24px;
+  padding: 2px 8px;
   color: var(--accent);
   background: transparent;
   border: 0;
@@ -1278,19 +1289,31 @@ button.warn-btn:disabled {
   flex: 0 0 auto;
   min-width: 72px;
   padding: 5px 8px;
-  color: var(--sev-ink);
-  border: 0;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: .06em;
   font-weight: 800;
   border-radius: var(--radius-sm);
 }
-.sev.low { color: var(--sev-low-ink); background: var(--sev-low); }
-.sev.medium { background: var(--sev-medium); }
-.sev.high { background: var(--sev-high); }
-.sev.critical { color: var(--sev-critical-ink); background: var(--sev-critical); }
-.sev.unknown { color: var(--ink); background: var(--panel-3); border: 1px solid var(--line-bright); }
+/* Severity is already the card's left spine, which is the half that reads
+   down a column -- the eye follows one edge instead of re-entering each
+   card. A saturated filled block at the opposite corner said the same
+   thing a second time, louder, and pulled the glance away from the title
+   on every row. The word stays (colour alone is not a signal), carried by
+   the same hue as the spine on a tinted ground rather than a fill. */
+.sev {
+  color: var(--severity-ink, var(--ink));
+  background: color-mix(in srgb, var(--severity-fill) 16%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--severity-fill) 45%, transparent);
+}
+.sev.low { --severity-fill: var(--sev-low); --severity-ink: var(--sev-low-text); }
+.sev.medium { --severity-fill: var(--sev-medium); --severity-ink: var(--sev-medium-text); }
+.sev.high { --severity-fill: var(--sev-high); --severity-ink: var(--sev-high-text); }
+.sev.critical { --severity-fill: var(--sev-critical); --severity-ink: var(--sev-critical-text); }
+.sev.unknown {
+  --severity-fill: var(--line-bright);
+  --severity-ink: var(--muted);
+}
 /* The badge carries the id *and* the name now, so the id keeps the mono
    treatment and the name is a quieter second field behind a hairline divider.
    Several of these can sit on one row, hence the cap and the ellipsis. */
@@ -1329,15 +1352,27 @@ button.warn-btn:disabled {
 .muted { color: var(--faint); }
 .meta {
   display: flex;
-  gap: 10px 18px;
+  gap: 4px 18px;
   flex-wrap: wrap;
+  align-items: center;
   margin-top: 12px;
-  padding-top: 11px;
+  padding-top: 7px;
   color: var(--faint);
   border-top: 1px solid var(--line);
   font: 550 var(--text-sm) var(--mono);
 }
-.meta a { color: var(--ink); font-weight: 700; }
+/* The advisory id and the CVE id are the way out of this page, and at
+   12.5px their hit area was 17px tall -- under the 24px floor, on the
+   surface where a phone user spends the whole session. The pseudo-element
+   grows the touch target without moving anything: padding here would
+   reflow a dense wrapping meta row, and the row is measured at 320px. */
+.meta a {
+  display: inline-block;
+  padding-block: 5px;
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1.15;
+}
 /* These label real values (advisory, cve, published, cvss, epss), so they
    stay -- but as quiet sentence case, not tracked-out caps competing with
    the data beside them. */
@@ -1555,7 +1590,33 @@ code {
   .cache-pill { display: none; }
   .layout { grid-template-columns: 300px minmax(0, 1fr); }
   .workspace-intro { grid-template-columns: 1fr minmax(260px, 360px); }
-  .result-command { align-items: flex-start; flex-direction: column; gap: 10px; }
+ /* Search warnings. These were emitted as error toasts, so a persistent
+   statement about the results ("NVD cannot filter by ecosystem, so its rows
+   were filtered locally") floated over the bottom-right of the list,
+   covering the title of whichever advisory happened to be there -- a
+   warning about the results, hiding them. They belong with the summary
+   they qualify, where they stay readable and scroll with the content. */
+.summary-order { color: var(--faint); }
+
+.search-warnings {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.search-warnings li {
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+ .result-command { align-items: flex-start; flex-direction: column; gap: 10px; }
   .result-summary { width: 100%; flex: 0 1 auto; }
   .toolbar-actions { width: 100%; justify-content: flex-start; }
 }

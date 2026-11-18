@@ -70,6 +70,9 @@ _MEM_MAX = 5      # max ecosystems kept in memory at once
 # the damage from a runaway or hostile response bounded -- the cap is what
 # stops a response that never ends from filling the disk.
 MAX_BULK_BYTES = 512 << 20
+# Per-member inflated cap. One advisory JSON is kilobytes; 64 MB is four
+# orders of magnitude of headroom and still bounds a decompression bomb.
+MAX_MEMBER_BYTES = 64 << 20
 _DOWNLOAD_LOCK = threading.Lock()
 # _MEM is read and mutated from every request thread. It used to be touched
 # unguarded, which gave two real races: a check-then-get that could read an
@@ -113,23 +116,76 @@ def _introduced_range(ranges: list) -> str | None:
 
     `vulnerable_version_range` sat hard-coded None next to a raw copy of
     `ranges` that nothing read. This is the part of it a reader wants.
+
+    OSV expresses several vulnerable branches as repeated
+    introduced/fixed pairs inside one range, and folding the whole event
+    list into a single pair kept only the last of each. Measured against
+    this repo's own osv_cache/Go.zip: 928 of 15,341 affected entries (6.0%)
+    carry more than one `introduced`, and 906 rendered a range that
+    contradicted the `first_patched_version` printed beside it.
+    GO-2021-0068 showed ">= 1.15.0-0, < 1.15.7" next to
+    "first_patched_version: 1.14.14" when the truth is
+    [0, 1.14.14) U [1.15.0-0, 1.15.7) -- so an operator on Go 1.13 read it
+    and concluded they were unaffected. That is an under-report, which is
+    the expensive direction for a triage tool.
+
+    Each introduced/fixed pair is now its own interval, joined with " or ".
     """
+    parts: list[str] = []
     for rng in ranges or []:
-        introduced = fixed = None
-        for event in rng.get("events") or []:
-            introduced = event.get("introduced") or introduced
-            fixed = event.get("fixed") or fixed
-        # OSV writes introduced "0" for "since the beginning", which is not
-        # a bound worth rendering.
-        if introduced == "0":
-            introduced = None
-        if introduced and fixed:
-            return f">= {introduced}, < {fixed}"
-        if introduced:
-            return f">= {introduced}"
-        if fixed:
-            return f"< {fixed}"
+        for introduced, fixed in _intervals(rng.get("events") or []):
+            # OSV writes introduced "0" for "since the beginning", which is
+            # not a bound worth rendering.
+            lower = None if introduced == "0" else introduced
+            if lower and fixed:
+                parts.append(f">= {lower}, < {fixed}")
+            elif lower:
+                parts.append(f">= {lower}")
+            elif fixed:
+                parts.append(f"< {fixed}")
+        if parts:
+            return " or ".join(parts)
     return None
+
+
+def _intervals(events: list) -> list[tuple[str | None, str | None]]:
+    """OSV's flat event list, paired into (introduced, fixed) intervals.
+
+    Events are ordered; an `introduced` opens an interval and the next
+    `fixed` (or `last_affected`) closes it. An interval left open at the end
+    of the list is still vulnerable and is returned with no upper bound.
+    """
+    out: list[tuple[str | None, str | None]] = []
+    current: str | None = None
+    open_interval = False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("introduced") is not None:
+            if open_interval:
+                out.append((current, None))      # unbounded, still vulnerable
+            current = event.get("introduced")
+            open_interval = True
+        elif event.get("fixed") is not None:
+            out.append((current, event.get("fixed")))
+            current, open_interval = None, False
+        elif event.get("last_affected") is not None:
+            out.append((current, None))
+            current, open_interval = None, False
+    if open_interval:
+        out.append((current, None))
+    return out
+
+
+def _is_fresh(path: str, force: bool, max_age: int) -> bool:
+    """True when the cached zip exists, is non-empty and is young enough."""
+    if force:
+        return False
+    try:
+        return (os.path.getsize(path) > 0
+                and (time.time() - os.path.getmtime(path)) < max_age)
+    except OSError:
+        return False
 
 
 def _zip_path(osv_eco: str) -> str:
@@ -152,12 +208,22 @@ def _zip_path(osv_eco: str) -> str:
 def download_ecosystem(osv_eco: str, force: bool = False,
                        max_age: int = DEFAULT_MAX_AGE, timeout: int = 120) -> str:
     """Ensure the ecosystem's all.zip is cached locally; return its path."""
+    path = _zip_path(osv_eco)
+
+    # Checked BEFORE the lock. _DOWNLOAD_LOCK is process-wide, not
+    # per-ecosystem, and taking it first meant a search for `go` -- whose
+    # zip was on disk and fresh -- blocked behind an in-flight 221 MB `npm`
+    # download (timeout=120, attempts=2, so up to ~240s) for a file it was
+    # never going to fetch, and then died at gunicorn's 180s.
+    if _is_fresh(path, force, max_age):
+        return path
+
     with _DOWNLOAD_LOCK:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        path = _zip_path(osv_eco)
-        if (not force and os.path.exists(path)
-                and (time.time() - os.path.getmtime(path)) < max_age
-                and os.path.getsize(path) > 0):
+        # Re-checked inside the lock: another thread may have downloaded it
+        # while this one waited, and paying for the same 221 MB twice is the
+        # thing the lock exists to prevent.
+        if _is_fresh(path, force, max_age):
             return path
 
         # quote(): several OSV ecosystem names contain a space ("GitHub
@@ -377,6 +443,19 @@ def _load_records_locked(ghsa_ecosystem: str, osv_eco: str, force: bool) -> list
                 if not name.endswith(".json"):
                     continue
                 try:
+                    # Bounded on the INFLATED size. MAX_BULK_BYTES capped the
+                    # download, but zf.read() decompresses without a limit,
+                    # so a hostile or corrupt export could inflate one member
+                    # to arbitrary size in memory -- in a module whose own
+                    # header states a hostile-response threat model.
+                    info = zf.getinfo(name)
+                    if info.file_size > MAX_MEMBER_BYTES:
+                        logger.warning(
+                            "OSV: skipping %s, inflates to %d MB (cap %d MB)",
+                            name, info.file_size >> 20,
+                            MAX_MEMBER_BYTES >> 20)
+                        skipped += 1
+                        continue
                     rec = json.loads(zf.read(name))
                     records.append(normalize_osv(rec))
                 except Exception:
@@ -461,7 +540,12 @@ def fetch_osv_native(
 
     out = []
     for r in records:
-        if str(r.get("ghsa_id", "")).startswith("GHSA"):
+        # Case-insensitive, to match _GHSA_RE (re.I) which set the field.
+        # A lowercase "ghsa-..." id got ghsa_id populated by the regex and
+        # was then NOT excluded here, so it came back from fetch_osv_native
+        # as native=True *and* from fetch_osv -- and was queued for an AI
+        # classification it did not need.
+        if str(r.get("ghsa_id", "")).upper().startswith("GHSA"):
             continue  # GHSA-sourced -> already covered by the CWE path
         if r.get("cwes"):
             continue  # CWE-tagged -> already reachable via the CWE filter

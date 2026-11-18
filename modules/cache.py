@@ -436,13 +436,28 @@ def fail_orphaned_jobs(message: str, path: str | None = None) -> int:
         if not orphans:
             return 0
         placeholders = ",".join("?" * len(orphans))
+        # The status guard is not redundant with the SELECT above: the rows
+        # were read, then _owner_is_alive did work, and a live worker can
+        # finish a job in between. Without it this UPDATE could flip a row
+        # that had already reached `done` back to `failed` -- one job, two
+        # terminal states, which is the case migration v6 exists for.
         cursor = conn.execute(
             f"""UPDATE jobs
                    SET status='failed', error=?, error_status=503, finished_at=?
-                 WHERE job_id IN ({placeholders})""",
+                 WHERE job_id IN ({placeholders})
+                   AND status IN ('queued','running')""",
             (message, now, *orphans),
         )
         return cursor.rowcount or 0
+
+
+def count_unfinished_jobs(path: str | None = None) -> int:
+    """How many jobs are queued or running. Used for backpressure."""
+    with _db(path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running')"
+        ).fetchone()
+    return int(row["n"] if row else 0)
 
 
 def prune_jobs(max_age_seconds: float, path: str | None = None) -> int:

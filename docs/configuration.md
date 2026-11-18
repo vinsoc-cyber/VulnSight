@@ -95,6 +95,7 @@ means the client supplied all of it.
 | Variable | Default | Meaning |
 |---|---|---|
 | `VULNSIGHT_JOB_WORKERS` | `1` | Jobs run concurrently, clamped to 1–8. One by default because the sources are rate limited per *account*, not per request, so concurrency spends the same GitHub and NVD budget faster without finishing anything sooner |
+| `VULNSIGHT_MAX_QUEUED_JOBS` | `50` | How many searches may be queued or running before a submission is refused with `503`. The pool is one worker by design, so past this depth a poll URL would not resolve for hours |
 | `VULNSIGHT_JOB_RETENTION` | `86400` s | How long a finished job's row is kept. Unfinished jobs are never pruned |
 
 ## Fixed limits (code, not environment)

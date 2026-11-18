@@ -4,6 +4,7 @@ _call_messages is mocked everywhere; AIConfig is built by hand (no .env read).
 """
 
 import json
+import time
 import os
 import sys
 
@@ -1300,6 +1301,206 @@ class TestAReplyThatDoesNotAnswerIsNotAVerdict(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertIs(
                     ai_classifier._parse_verdict(body)["is_match"], expected)
+
+
+class TestTheFingerprintIgnoresMergeOrder(unittest.TestCase):
+    """merged["packages"] and ["cwes"] preserve insertion order across
+    source records (unlike "ecosystems", which is sorted), and the prompt
+    joins them in that order. So one search where NVD timed out and the
+    next where it answered produced different fingerprints for a
+    semantically identical prompt, and every cached verdict for that
+    advisory missed and was re-paid."""
+
+    def _cfg(self):
+        return ai_classifier.AIConfig(
+            provider="glm", base_url="https://x", tokens=["k"], model="m")
+
+    def test_reordering_packages_does_not_change_the_fingerprint(self):
+        cfg = self._cfg()
+        a = advisory(packages=[{"name": "b"}, {"name": "a"}])
+        b = advisory(packages=[{"name": "a"}, {"name": "b"}])
+        self.assertEqual(
+            ai_classifier.classification_fingerprint(cfg, a, "bac"),
+            ai_classifier.classification_fingerprint(cfg, b, "bac"))
+
+    def test_reordering_cwes_does_not_change_it_either(self):
+        cfg = self._cfg()
+        self.assertEqual(
+            ai_classifier.classification_fingerprint(
+                cfg, advisory(cwes=["89", "79"]), "bac"),
+            ai_classifier.classification_fingerprint(
+                cfg, advisory(cwes=["79", "89"]), "bac"))
+
+    def test_a_genuinely_different_advisory_still_differs(self):
+        """Otherwise the fix would be a cache that never invalidates."""
+        cfg = self._cfg()
+        self.assertNotEqual(
+            ai_classifier.classification_fingerprint(
+                cfg, advisory(packages=[{"name": "a"}]), "bac"),
+            ai_classifier.classification_fingerprint(
+                cfg, advisory(packages=[{"name": "z"}]), "bac"))
+
+    def test_the_prompt_the_model_sees_is_unchanged(self):
+        """Sorting is for the fingerprint only; it must not reorder the
+        evidence block the model reads."""
+        adv = advisory(packages=[{"name": "zebra"}, {"name": "alpha"}])
+        prompt = ai_classifier._build_user_prompt(adv, "bac")
+        # Distinctive names, and compared on the packages line only: bare
+        # "a"/"b" match inside ordinary words anywhere in the prompt, so the
+        # first version of this assertion could pass whatever the order was.
+        line = next(ln for ln in prompt.splitlines() if "zebra" in ln)
+        self.assertLess(line.index("zebra"), line.index("alpha"))
+
+
+class TestAThrottleIsNotASpentKey(unittest.TestCase):
+    """_QUOTA_MARKERS carries the bare word "quota" and was tested before
+    _RATE_MARKERS, so "Rate limit reached for requests; your quota resets in
+    20s" parked the key for six hours and persisted that to disk. On a
+    single-key install the rest of the batch failed as "AI quota exhausted",
+    and the restart that would have cleared it did not, because it had been
+    written down."""
+
+    def test_a_rate_limit_mentioning_quota_is_still_a_rate_limit(self):
+        for body in (
+            '{"message":"Rate limit reached for requests; your quota resets in 20s"}',
+            '{"error":{"message":"rate_limit: quota window"}}',
+            '{"message":"Too many requests - quota replenishes shortly"}',
+        ):
+            with self.subTest(body=body):
+                retryable, _exhausted, skip = ai_classifier._classify_http_error(429, body)
+                self.assertTrue(retryable, "a throttle must stay retryable")
+                self.assertLessEqual(skip, ai_classifier._MAX_RATE_PAUSE)
+
+    def test_a_genuinely_spent_quota_still_parks_the_key(self):
+        retryable, exhausted, skip = ai_classifier._classify_http_error(
+            429, '{"message":"insufficient_quota"}')
+        self.assertFalse(retryable)
+        self.assertTrue(exhausted)
+        self.assertGreater(skip, ai_classifier._MAX_RATE_PAUSE)
+
+
+class TestTheAnswerIsReadNotThePreamble(unittest.TestCase):
+    """`text[find("{"):rfind("}")+1]` spans everything between the first
+    brace and the last, so a model echoing the schema before answering
+    produced a slice covering both objects. json.loads failed, and that
+    AIError is retryable -- so the whole budget was spent per advisory
+    before surfacing as "AI returned an unreadable reply"."""
+
+    def test_a_model_that_echoes_the_schema_first_still_parses(self):
+        reply = ('Here is the schema I was given: '
+                 '{"is_match": "true|false", "confidence": 0.0} '
+                 'and my answer: {"is_match": true, "confidence": 0.9}')
+        self.assertIs(ai_classifier._parse_verdict(reply)["is_match"], True)
+
+    def test_a_brace_inside_a_string_does_not_break_the_scan(self):
+        reply = '{"is_match": true, "reason": "matches {this} pattern", "confidence": 0.5}'
+        self.assertEqual(ai_classifier._parse_verdict(reply)["reason"],
+                         "matches {this} pattern")
+
+    def test_a_fenced_reply_still_parses(self):
+        self.assertIs(
+            ai_classifier._parse_verdict(
+                '```json\n{"is_match": false, "confidence": 0.2}\n```')["is_match"],
+            False)
+
+
+class TestTwoWorkersCannotLoseEveryCooldown(unittest.TestCase):
+    """The temp path was a fixed COOLDOWN_PATH + ".tmp", shared by every
+    process writing to DATA_DIR, and the in-process lock does not serialise
+    across processes. Interleaved writes published invalid JSON,
+    _read_cooldown_file returned {}, and every recorded cooldown vanished --
+    so each process re-learned which keys were spent by paying for one
+    request per key."""
+
+    def test_the_temp_file_is_unique_per_writer(self):
+        """Asserted by watching the path it writes, not by grepping the
+        source: the old expression now appears in the docstring that
+        explains why it is gone."""
+        seen = []
+        real_replace = ai_classifier.os.replace
+
+        def spy(src, dst):
+            seen.append(src)
+            return real_replace(src, dst)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cooldown.json")
+            with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path), \
+                 mock.patch.object(ai_classifier.os, "replace", spy):
+                ai_classifier._write_cooldown_file({"a": time.time() + 60})
+                ai_classifier._write_cooldown_file({"b": time.time() + 60})
+        self.assertEqual(len(seen), 2)
+        self.assertNotEqual(seen[0], seen[1],
+                            "two writers shared one temp path")
+        for src in seen:
+            self.assertNotEqual(src, path + ".tmp")
+
+    def test_concurrent_writers_leave_a_readable_file(self):
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cooldown.json")
+            with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path):
+                def writer(n):
+                    for _ in range(25):
+                        ai_classifier._write_cooldown_file(
+                            {f"k{n}": time.time() + 3600})
+
+                threads = [threading.Thread(target=writer, args=(n,))
+                           for n in range(4)]
+                for th in threads:
+                    th.start()
+                for th in threads:
+                    th.join()
+                # Whatever the interleaving, the published file parses.
+                with open(path, encoding="utf-8") as fh:
+                    self.assertIsInstance(json.load(fh), dict)
+            leftovers = [n for n in os.listdir(tmp) if n.endswith(".tmp")]
+            self.assertEqual(leftovers, [], "temp files were left behind")
+
+
+class TestAnImpossibleRequestIsNotRetriedOnEveryKey(unittest.TestCase):
+    """A wrong AI_MODEL is HTTP 400: retryable=False, key_exhausted=False.
+    The guard was `nkeys <= 1`, so with eight keys configured one impossible
+    request became eight paid calls per advisory, with no backoff. A request
+    the cost cap approved as 500 calls issued 4,000."""
+
+    def test_a_request_level_error_fails_once_however_many_keys_exist(self):
+        calls = {"n": 0}
+
+        def always_400(*a, **k):
+            calls["n"] += 1
+            raise ai_classifier.AIError("bad model", retryable=False,
+                                        key_exhausted=False,
+                                        public_message="bad request")
+
+        cfg = ai_classifier.AIConfig(
+            provider="glm", base_url="https://x",
+            tokens=[f"k{n}" for n in range(8)], model="nope")
+        with mock.patch.object(ai_classifier, "_call_messages", always_400), \
+             self.assertRaises(ai_classifier.AIError):
+            ai_classifier.classify_one(cfg, advisory(), "bac")
+        self.assertEqual(calls["n"], 1,
+                         f"one impossible request cost {calls['n']} calls")
+
+    def test_a_spent_key_still_rotates(self):
+        calls = {"n": 0}
+
+        def exhausted_then_ok(*a, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ai_classifier.AIError("spent", retryable=False,
+                                            key_exhausted=True,
+                                            public_message="quota")
+            return '{"is_match": true, "confidence": 0.9}'
+
+        cfg = ai_classifier.AIConfig(
+            provider="glm", base_url="https://x",
+            tokens=["k1", "k2", "k3"], model="m")
+        with mock.patch.object(ai_classifier, "_call_messages", exhausted_then_ok):
+            verdict = ai_classifier.classify_one(cfg, advisory(), "bac")
+        self.assertTrue(verdict["is_match"])
+        self.assertEqual(calls["n"], 3)
 
 
 if __name__ == "__main__":

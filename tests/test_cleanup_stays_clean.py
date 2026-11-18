@@ -62,9 +62,17 @@ class TestDeadCodeStaysDeleted(unittest.TestCase):
         # nothing at all (the real line is a kwarg, `resultsPerPage=...`,
         # not an assignment statement) and so passed at zero -- the same
         # defect this test exists to catch, in the test itself.
+        # Two mentions now, both in the request builder: the page itself,
+        # and the one-row probe that replaced a full page which was fetched
+        # and then discarded. What this test is really guarding is that
+        # there is no *default assignment* read by nothing.
         self.assertEqual(
-            src.count("resultsPerPage"), 1,
-            "resultsPerPage should be set once, where the request is built")
+            src.count("resultsPerPage"), 2,
+            "resultsPerPage should only appear where a request is built")
+        self.assertNotRegex(
+            src, r"^\s*resultsPerPage\s*[:=]",
+            "a default resultsPerPage assignment is back, and every call "
+            "site overrides it")
 
     def test_there_is_one_key_rotation_implementation(self):
         """Two existed: a `rotate_token` method and the cooling-aware picker

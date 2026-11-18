@@ -248,6 +248,9 @@
           </div>
           <div class="field">
             <label for="direction">Order</label>
+            <!-- The option text is rewritten by app.js to match the chosen
+                 sort field: "Newest first" is meaningless for CVE ID and
+                 wrong for EPSS, where desc means highest. -->
             <select id="direction">
               <option value="desc" selected>Newest first</option>
               <option value="asc">Oldest first</option>
@@ -281,7 +284,12 @@
       <section class="workspace-intro" aria-labelledby="workspace-title">
         <div class="workspace-heading">
           <h2 id="workspace-title">Advisory queue</h2>
-          <p>Merged records from GHSA, NVD and OSV, ranked for triage. Confirm with AI when CWE tags are too broad.</p>
+          <!-- "ranked for triage" was not true: the default order is
+               publication date, so a LOW advisory with 1% EPSS sits above a
+               CRITICAL one that is being exploited. The order is a control
+               in the rail and is now also stated on the result line, which
+               is where someone reading the list will look. -->
+          <p>Merged records from GHSA, NVD and OSV, deduplicated across sources. Confirm with AI when CWE tags are too broad.</p>
         </div>
         <div class="threat-key" role="group" aria-label="Severity key">
           <div class="threat-key-head"><span>Severity</span><span>CVSS</span></div>
@@ -300,6 +308,7 @@
       <section class="result-command" aria-label="Result controls">
         <div class="result-summary">
           <div class="summary" id="summary" role="status" aria-live="polite">Select a bug class, then run a search.</div>
+          <ul class="search-warnings" id="search-warnings" aria-label="Search warnings" hidden></ul>
         </div>
         <div class="toolbar-actions">
           <span id="needs-search-hint" class="sr-only">Run a search first</span>

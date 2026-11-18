@@ -24,12 +24,12 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 770 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 828 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **142/142 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **167/167 caught** |
 
 The `caught` figure is read from `docs/revert-results.json`, which
 `tools/revert_checks.py` writes when it runs the whole battery.
@@ -46,7 +46,7 @@ module unpatched first now and reports `BASELINE RED` instead.
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 142 named bugs in the working tree, runs the test module that is
+each of 167 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -295,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 142 checks, by area
+## The 167 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -467,5 +467,35 @@ codebase and the test module that now refuses to let it back in.
 | gh is invoked by bare name again | `tests/test_cleanup_stays_clean.py` |
 | the picker goes back to asking the DOM per option | `tests/test_cleanup_stays_clean.py` |
 | a generator binds the name g again | `tests/test_cleanup_stays_clean.py` |
+
+### Availability, cost and correctness from the whole-tree review (25)
+
+| Reverting this | is caught by |
+|---|---|
+| an NVD search can outlive the worker again | `tests/test_nvd_client.py` |
+| NVD fetches a full page and throws it away again | `tests/test_nvd_client.py` |
+| the NVD paging dereferences shapes the API does not promise | `tests/test_nvd_client.py` |
+| a non-numeric totalResults raises again | `tests/test_nvd_client.py` |
+| EPSS enrichment runs without a deadline again | `tests/test_epss_client.py` |
+| a dead EPSS endpoint costs the whole batch budget | `tests/test_epss_client.py` |
+| the OSV freshness check goes back behind the download lock | `tests/test_osv_client.py` |
+| a zip member inflates without a bound again | `tests/test_osv_client.py` |
+| jobs queue without backpressure again | `tests/test_jobs.py` |
+| a successful search dies on an optional cache write | `tests/test_search_service.py` |
+| a merged advisory gets two primary keys again | `tests/test_search_service.py` |
+| the CVSS vector stops describing the score beside it | `tests/test_search_service.py` |
+| records without a CVE sort to the top again | `tests/test_search_service.py` |
+| affects silently deletes every NVD-only row again | `tests/test_query_filters.py` |
+| OSV renders only the last vulnerable branch again | `tests/test_osv_client.py` |
+| a throttle is misread as a spent key again | `tests/test_ai_classifier.py` |
+| the verdict parser spans two JSON objects again | `tests/test_ai_classifier.py` |
+| two workers share one cooldown temp path again | `tests/test_ai_classifier.py` |
+| an impossible AI request is retried on every key again | `tests/test_ai_classifier.py` |
+| source availability churns the verdict cache again | `tests/test_ai_classifier.py` |
+| a GHSA rate limit is retried blindly again | `tests/test_ghsa_client.py` |
+| short GHSA markers match inside identifiers again | `tests/test_ghsa_client.py` |
+| a conditional request with a tag list re-serves the whole body | `tests/test_app.py` |
+| a 304 drops the validators that make the next request conditional | `tests/test_app.py` |
+| an empty token file crashes startup with the wrong reason | `tests/test_security.py` |
 
 <!-- end generated check index -->

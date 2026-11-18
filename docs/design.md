@@ -5,7 +5,7 @@ and the measurements that check it. Written so the next person can disagree
 with a decision on its merits rather than guess at the intent.
 
 Numbers quoted here are produced by `python tools/design_audit.py`, which
-drives a real browser across ten viewport/theme states. `tests/test_docs.py`
+drives a real browser across fourteen viewport/theme states. `tests/test_docs.py`
 fails if this page drifts from the stylesheet.
 
 ## The subject
@@ -307,18 +307,54 @@ against the known tells of a generated page, done by measuring the sheet.
 
 ## What is measured, and where
 
-`python tools/design_audit.py --out shots/` drives Chromium across ten
+`python tools/design_audit.py --out shots/` drives Chromium across fourteen
 states and fails on any of:
 
 | | Viewport | Themes |
 |---|---|---|
-| `/` | 1440×900, 390×844, 320×844, 820×1180, 1920×1080 | light and dark |
+| `/` empty | 1440×900, 390×844, 320×844, 820×1180, 1920×1080 | light and dark |
+| `/` with results | 1440×900, 390×844, 320×844 | light and dark |
 | `/api/docs` | 1440×900, 390×844 | light and dark |
 
-The second page is listed because it was outside every earlier audit, which
-is how a stylesheet with no scale tokens survived on it (see **The second
-page**). The figure here is checked against `design_audit.STATES`, so it
-cannot drift the way "seven" did when the API page was added.
+The figure here is checked against `design_audit.STATES`, so it cannot
+drift the way "seven" did when the API page was added.
+
+**The populated states are the point of the second row.** For as long as
+this tool has existed it opened the page and measured whatever was visible,
+which is the empty landing screen — so the results surface, where the
+operator spends the entire session, had never been measured at any width in
+either theme. It is also where almost all of the interface lives: the
+severity badge, the EPSS meter, the per-card meta row, the source badges
+and the warnings. The audit now stubs a search at the network boundary and
+waits for the first card.
+
+The first run against it failed, and what it found was not cosmetic:
+
+- Every advisory-id and CVE link had a **17px** hit area, under the 24px
+  floor, on the surface a phone user spends the whole session in — and
+  those links are the way out of this page. The history **Clear** button
+  was 18px. Half of the interactive elements at 390px were under-size.
+- An empty CWE list still rendered `· CWEs:` and an empty `<code>`, which
+  paints as a stray 6px box after the count.
+- Severity was encoded **twice**: the card's left spine, and a saturated
+  filled badge at the opposite corner. The spine is the half that reads
+  down a column — the eye follows one edge instead of re-entering every
+  card — so the badge was repeating it, louder, and pulling the glance off
+  the title on every row. The word stays, because colour alone is not a
+  signal; it now sits on a 16% tint of its own band instead of a fill.
+- Search warnings were emitted as error toasts, so a persistent statement
+  about the result set floated over the bottom-right of the list and
+  covered the title of whichever advisory was there. A warning about the
+  results, hiding the results. They render with the summary they qualify.
+
+Two copy defects came out of the same pass. The workspace said results were
+"ranked for triage" when the default order is publication date — which is
+why a LOW advisory at 1% EPSS sits above a CRITICAL one being actively
+exploited. And the direction control offered "Newest first / Oldest first"
+whatever the sort field, so ordering by CVE id offered an age for something
+that has none, and ordering by EPSS called the highest probability
+"newest". The direction words follow the field now, and the active order is
+stated on the result line, which is where someone reading the list looks.
 
 
 - **Contrast** below the WCAG AA threshold for that element's own size and

@@ -245,7 +245,16 @@ def _load_or_create_token(path: str) -> str:
         if existing:
             logger.info("Using API token from %s", path)
             return existing
-        raise
+        # The file exists and is empty, which is not a race -- a volume
+        # provisioned with `touch`, or a write truncated by a full disk.
+        # The bare `raise` re-raised FileExistsError out of create_app, so
+        # every boot died with a traceback saying "file exists" when the
+        # actual problem is "file is empty", and nothing told the operator
+        # that deleting a zero-byte file is the fix.
+        raise SystemExit(
+            f"{path} exists but is empty, so there is no API token to use. "
+            f"Delete it and start again; a new token will be generated."
+        ) from None
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token + "\n")
     # The token is a credential, so it is shown only on a terminal a human is

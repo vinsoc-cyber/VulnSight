@@ -45,6 +45,7 @@ TITLES = {
     "search": "Search pipeline and source clients",
     "frontend": "CWE taxonomy and the browser code",
     "cleanup": "Removals, extractions and caches (property-asserted)",
+    "hardening": "Availability, cost and correctness from the whole-tree review",
 }
 
 

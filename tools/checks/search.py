@@ -21,9 +21,15 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     ),
     (
         "a typo in a transient-error marker stops GHSA retrying",
+        # Typo the phrases that nothing else covers. "bad gateway" has a
+        # "502" token behind it, so misspelling that one alone still
+        # retried and the check reported NOT CAUGHT -- correctly.
         [("modules/ghsa_client.py",
-          '    "timed out", "502", "503", "504", "bad gateway", "service unavailable",',
-          '    "timed out", "5O2", "503", "504", "bad gatway", "service unavailable",')],
+          '    "temporary failure", "tls handshake",',
+          '    "temprary failure", "tls handshak",'),
+         ("modules/ghsa_client.py",
+          '    "gateway timeout", "connection reset", "connection refused",',
+          '    "gateway timeout", "connection rest", "connection refused",')],
         "test_ghsa_client",
     ),
     (
@@ -71,10 +77,7 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "cvss_vector is dropped when the base record has none",
         [("modules/search_service.py",
-          '    merged["cvss_vector"] = next(\n'
-          '        (record.get("cvss_vector") for record in records if record.get("cvss_vector")),\n'
-          "        None,\n"
-          "    )\n",
+          '    merged["cvss_vector"] = _vector_for_score(records, merged.get("cvss_score"))\n',
           "")],
         "test_search_service",
     ),
@@ -305,9 +308,18 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     # ----------------------------------------------------------- EPSS client
     (
         "EPSS is queried with the publisher's casing",
+        # Two edits: fetch_epss upper-cases before dedup now (so the same
+        # CVE in two casings is one entry), and _fetch_batch upper-cases on
+        # the way out. Reverting either alone leaves the other normalising,
+        # which is the false-pass shape tools/checks/__init__.py warns about.
         [("modules/epss_client.py",
           "    cve_ids = [c.upper() for c in cve_ids]",
-          "    cve_ids = list(cve_ids)")],
+          "    cve_ids = list(cve_ids)"),
+         ("modules/epss_client.py",
+          "    unique: list[str] = list(dict.fromkeys(\n"
+          "        c.strip().upper() for c in cve_ids if c and c.strip()))",
+          "    unique: list[str] = list(dict.fromkeys(\n"
+          "        c.strip() for c in cve_ids if c and c.strip()))")],
         "test_epss_client",
     ),
 ]

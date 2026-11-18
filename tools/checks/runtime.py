@@ -186,8 +186,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "finished jobs are pruned only at process start",
         [("modules/jobs.py",
-          "    cache.create_job(job_id, kind, request, path=path)\n    _prune(path)\n",
-          "    cache.create_job(job_id, kind, request, path=path)\n")],
+          "    _prune(path)\n    depth = cache.count_unfinished_jobs(path)",
+          "    depth = cache.count_unfinished_jobs(path)")],
         "test_jobs",
     ),
     (
@@ -411,8 +411,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
         "the OpenAPI document is rebuilt for every unauthenticated request",
         [("app.py",
           "        etag = f'W/\"openapi-{openapi.API_VERSION}\"'\n"
-          '        if request.headers.get("If-None-Match") == etag:\n'
-          '            return "", 304\n'
+          '        if _etag_matches(request.headers.get("If-None-Match"), etag):\n'
+          '            return _not_modified(etag, "private, max-age=3600")\n'
           "        response = jsonify(openapi.build_spec())",
           "        response = jsonify(openapi.build_spec())\n"
           "        etag = f'W/\"openapi-{openapi.API_VERSION}\"'")],
