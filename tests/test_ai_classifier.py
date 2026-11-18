@@ -508,9 +508,24 @@ class TestClassify(unittest.TestCase):
     def test_classify_workers_follow_key_count(self):
         eight = ai_classifier.AIConfig("glm", "https://x", ["k"] * 8, "m")
         one = ai_classifier.AIConfig("glm", "https://x", ["k"], "m")
-        self.assertEqual(ai_classifier._classify_workers(eight, None), 8)
-        self.assertEqual(ai_classifier._classify_workers(one, None), 2)
-        self.assertEqual(ai_classifier._classify_workers(eight, 3), 3)
+        # AI_CLASSIFY_WORKERS is read here, so without clearing it this
+        # asserted the default while inheriting whatever the operator had
+        # exported: `AI_CLASSIFY_WORKERS=5 python -m unittest` failed.
+        with mock.patch.dict(os.environ, {"AI_CLASSIFY_WORKERS": ""}, clear=False):
+            self.assertEqual(ai_classifier._classify_workers(eight, None), 8)
+            self.assertEqual(ai_classifier._classify_workers(one, None), 2)
+            self.assertEqual(ai_classifier._classify_workers(eight, 3), 3)
+
+    def test_the_worker_count_can_be_set_from_the_environment(self):
+        """The env branch, its clamp and its fallback were all uncovered."""
+        eight = ai_classifier.AIConfig("glm", "https://x", ["k"] * 8, "m")
+        for value, expected in (("5", 5), ("1", 1), ("99", 16), ("0", 1),
+                                ("not-a-number", 8), ("", 8)):
+            with self.subTest(AI_CLASSIFY_WORKERS=value), \
+                    mock.patch.dict(os.environ,
+                                    {"AI_CLASSIFY_WORKERS": value}, clear=False):
+                self.assertEqual(
+                    ai_classifier._classify_workers(eight, None), expected)
 
 
 
@@ -918,7 +933,13 @@ class TestKeyRotationCost(unittest.TestCase):
                   f"your limit will reset at {soon}")
         seconds = ai_classifier._quota_skip_seconds(detail)
         self.assertLess(seconds, 5 * 3600)
-        self.assertGreater(seconds, 3600)
+        # Not `> 3600`: the parser reads the timestamp against both UTC and
+        # local time and takes the nearer, so the exact figure depends on
+        # the host's offset. At UTC-1 the UTC reading is 3600 to the second
+        # and the old bound failed -- a test that passed in Hanoi and failed
+        # in the Azores. What matters is that the stated reset beat the
+        # 5-hour heuristic, not the precise number of seconds.
+        self.assertGreater(seconds, 60)
 
     def test_a_stated_reset_is_never_trusted_beyond_the_heuristic(self):
         far = (datetime.now() + timedelta(days=6)).strftime("%Y-%m-%d %H:%M:%S")

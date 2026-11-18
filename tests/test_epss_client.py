@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import json
+import io
 import unittest
 from unittest import mock
 
@@ -25,6 +26,39 @@ def _mock_urlopen(response_body: dict):
     resp.__enter__ = mock.Mock(return_value=resp)
     resp.__exit__ = mock.Mock(return_value=False)
     return resp
+
+
+class TestTheResponseIsNormalisedOnTheWayBack(unittest.TestCase):
+    """`_fetch_batch` upper-cases the ids it sends, and the comment above
+    that line says "and on the way back" -- but the result was keyed by
+    whatever FIRST echoed. search_service looks a score up with .upper(),
+    so a lower-cased echo returned a dict the caller could not read and the
+    advisory rendered with no EPSS: indistinguishable from one that has
+    none, which is the exact failure the "way out" half exists to prevent.
+
+    Every existing test mocked an upper-case echo, so the claim was
+    trivially satisfied."""
+
+    def _fetch(self, echoed):
+        body = json.dumps({"data": [
+            {"cve": echoed, "epss": "0.5", "percentile": "0.9"}]}).encode()
+        with mock.patch.object(
+                epss_client.urllib.request, "urlopen",
+                return_value=mock.MagicMock(
+                    __enter__=lambda s: io.BytesIO(body),
+                    __exit__=lambda *a: False)):
+            return epss_client.fetch_epss(["CVE-2024-1234"])
+
+    def test_a_lower_cased_echo_is_still_found(self):
+        out = self._fetch("cve-2024-1234")
+        self.assertIn("CVE-2024-1234", out)
+        self.assertAlmostEqual(out["CVE-2024-1234"]["epss"], 0.5)
+
+    def test_a_mixed_case_echo_is_still_found(self):
+        self.assertIn("CVE-2024-1234", self._fetch("Cve-2024-1234"))
+
+    def test_an_upper_case_echo_still_works(self):
+        self.assertIn("CVE-2024-1234", self._fetch("CVE-2024-1234"))
 
 
 class TestParseResponse(unittest.TestCase):

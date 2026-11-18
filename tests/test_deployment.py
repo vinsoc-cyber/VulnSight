@@ -87,7 +87,9 @@ class TestTheEntrypointAndLauncher(unittest.TestCase):
             with self.subTest(script=name):
                 head = _read(name).splitlines()[:5]
                 self.assertTrue(
-                    any(re.match(r"set -[eu]+o?\s*\w*", line.strip()) for line in head),
+                    # `set -u` alone matched the old pattern, so a script
+                    # that does not fail fast passed a test named for it.
+                    any(re.match(r"set -[a-z]*e", line.strip()) for line in head),
                     f"{name} does not set -e")
 
     def test_the_entrypoint_execs_rather_than_forking(self):

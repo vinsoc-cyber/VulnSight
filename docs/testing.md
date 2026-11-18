@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 701 tests: 653 offline + 48 browser
+.venv/bin/python -m unittest discover -s tests        # 705 tests: 657 offline + 48 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -14,7 +14,7 @@ OSV and the AI provider are all mocked.
 | File | Tests | Covers |
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
-| `test_ai_classifier.py` | 74 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_ai_classifier.py` | 75 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
 | `test_app.py` | 73 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
 | `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
@@ -32,7 +32,7 @@ OSV and the AI provider are all mocked.
 | `test_cleanup_stays_clean.py` | 24 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
-| `test_epss_client.py` | 13 | batching, malformed responses |
+| `test_epss_client.py` | 16 | batching, malformed responses |
 | `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
 | `test_config.py` | 8 | `.env` parsing, `DATA_DIR`, numeric knobs |
 | `test_query_filters.py` | 5 | shared published/affects/severity predicates |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 701 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 705 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -207,7 +207,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 114 named bugs it re-introduces the bug in the working tree, runs the
+For each of 116 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

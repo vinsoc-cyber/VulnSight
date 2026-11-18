@@ -10,6 +10,7 @@ times with backoff.
 
 import io
 import os
+import pathlib
 import sys
 import time
 import unittest
@@ -252,6 +253,16 @@ class TestClientsShareThePolicy(unittest.TestCase):
         for name in ("ghsa_client", "nvd_client", "osv_client", "epss_client",
                      "ai_classifier"):
             module = importlib.import_module(f"modules.{name}")
+            # Imported *and* called: binding the name proves nothing about
+            # whether the module routes its requests through the policy.
+            # __file__ is Optional on a module object; a namespace package
+            # has none, and these are all real modules.
+            module_file = module.__file__
+            self.assertIsNotNone(module_file, f"{name} has no source file")
+            assert module_file is not None
+            source = pathlib.Path(module_file).read_text(encoding="utf-8")
+            self.assertIn("with_retries(", source,
+                          f"{name} imports the shared policy but never calls it")
             self.assertTrue(hasattr(module, "http_retry"),
                             f"modules.{name} does not use the shared retry policy")
 

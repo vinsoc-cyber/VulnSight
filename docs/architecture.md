@@ -20,9 +20,9 @@ modules/
   ghsa_client.py           326   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            500   bulk export download, parse, CWE + keyword filters
-  epss_client.py           113   FIRST EPSS scores, batched
+  epss_client.py           120   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py                 483   SQLite: advisories + verdicts, jobs, migrations
+  cache.py                 488   SQLite: advisories + verdicts, jobs, migrations
   jobs.py                  223   submit/poll queue for searches too slow to hold open
   ai_classifier.py        1051   provider client, prompt, verdict cache, key rotation
   openapi.py               572   the OpenAPI description of /api/v1

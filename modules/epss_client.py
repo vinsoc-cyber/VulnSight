@@ -103,7 +103,14 @@ def _fetch_batch(cve_ids: list[str], timeout: int = 30) -> dict[str, dict]:
         if not cve:
             continue
         try:
-            results[cve] = {
+            # .upper() here is the "way back" half the comment above
+            # promises and this did not do: the key was whatever FIRST
+            # echoed. search_service looks the score up with .upper(), so a
+            # lower-cased echo returned a dict the caller could not read and
+            # the advisory showed no EPSS at all -- indistinguishable from
+            # one that genuinely has none, which is the exact failure the
+            # "way out" half was added to prevent.
+            results[cve.upper()] = {
                 "epss": float(entry["epss"]),
                 "percentile": float(entry["percentile"]),
             }

@@ -82,7 +82,7 @@ class TestFrontendJavaScript(unittest.TestCase):
                 # in clamp()/calc(): `font-size: clamp(22px, 2.4vw, 30px)`
                 # is three hard-coded sizes, and the first version of this
                 # test only looked for a px immediately after the colon.
-                sizes = {px for decl in re.findall(r"font-size:\s*([^;]+);", css)
+                sizes = {px for decl in re.findall(r"font-size:\s*([^;}]+)[;}]", css)
                          for px in re.findall(r"([\d.]+)px", decl)}
                 sizes |= set(re.findall(r"font:[^;]*?\b([\d.]+)px(?=[/ ])", css))
                 self.assertEqual(sizes, set(),
@@ -132,7 +132,12 @@ class TestFrontendJavaScript(unittest.TestCase):
         self.assertEqual(sizes, set(),
                          f"hard-coded font sizes outside the scale: {sorted(sizes)}")
 
-        radii = {v.strip() for v in re.findall(r"border-radius:\s*([^;]+);", css)}
+        # `[^;}]+[;}]`: the last declaration in a block may carry no
+        # semicolon -- legal CSS that this stylelint config allows -- and the
+        # `;`-only form missed exactly that position, which is where a stray
+        # `border-radius: 999px` would sit.
+        radii = {v.strip() for v in
+                 re.findall(r"border-radius:\s*([^;}]+)[;}]", css)}
         # 0 and 50% are not steps on a scale: one is "no corner", the other
         # is "a circle", and neither has a smaller or larger sibling.
         radii -= {"0", "50%"}

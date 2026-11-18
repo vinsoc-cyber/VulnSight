@@ -248,7 +248,7 @@ class TestAJobAlwaysReachesATerminalState(unittest.TestCase):
         self.assertEqual(row["error_status"], 503)
         self.assertEqual(ran, [], "the runner must not have executed")
 
-    def test_a_failure_to_record_success_does_not_strand_the_job(self):
+    def test_a_failure_to_record_success_does_not_raise_out_of_the_worker(self):
         job_id = jobs.new_job_id()
         cache.create_job(job_id, "search", {}, path=self.db)
         with mock.patch.object(cache, "finish_job",
@@ -290,6 +290,12 @@ class TestFinishedJobsArePruned(unittest.TestCase):
         jobs._last_prune = float("-inf")
 
     def tearDown(self):
+        # Shut the pool down first: without this the worker thread outlived
+        # the class, still holding the database file tearDown then unlinked,
+        # and it was alive during the next class's global clock patch --
+        # where a stray time.monotonic() raises StopIteration off a
+        # side_effect list.
+        jobs.shutdown(wait=True)
         jobs._last_prune = float("-inf")
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(self.db + suffix):
@@ -305,7 +311,10 @@ class TestFinishedJobsArePruned(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"VULNSIGHT_JOB_RETENTION": "3600"}):
             jobs.submit("search", {}, lambda req: {"count": 1}, path=self.db)
-        time.sleep(0.3)
+        # No sleep: _prune runs synchronously inside submit(), before the
+        # work reaches the pool, so the row is already gone when submit
+        # returns. The 0.3s wait was pure latency pretending to be a
+        # synchronisation point.
         self.assertIsNone(cache.get_job(stale, path=self.db))
 
     def test_pruning_is_rate_limited_not_run_on_every_submission(self):

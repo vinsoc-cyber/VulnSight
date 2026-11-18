@@ -12,6 +12,22 @@ from __future__ import annotations
 Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
+    (
+        "EPSS keys are not normalised on the way back",
+        [("modules/epss_client.py",
+          "            results[cve.upper()] = {",
+          "            results[cve] = {")],
+        "test_epss_client",
+    ),
+    (
+        "the advisory batch is sent in one oversized statement",
+        [("modules/cache.py",
+          "        for start in range(0, len(ids), 500):\n"
+          "            chunk = ids[start:start + 500]",
+          "        for start in range(0, len(ids), 100000):\n"
+          "            chunk = ids[start:start + 100000]")],
+        "test_cache",
+    ),
     # ---------------------------------------------------------------- merge
     (
         "an empty base record erases another source's description",

@@ -907,7 +907,11 @@ class TestTopbarLayoutHolds(UITestCase):
         for width in (320, 360, 390, 414, 460, 480, 700, 900, 1400):
             page = self._at(width)
             try:
-                hits, _boxes = self._overlaps(page)
+                hits, boxes = self._overlaps(page)
+                # Either list being empty makes `hits` empty too, so hiding
+                # the brand entirely would satisfy "it never overlaps".
+                self.assertTrue(boxes["brand"], f"no brand painted at {width}px")
+                self.assertTrue(boxes["status"], f"no status pills at {width}px")
                 self.assertEqual(
                     hits, [],
                     f"at {width}px the brand overlaps the status pills: {hits}")

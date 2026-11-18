@@ -1,6 +1,7 @@
 """Tests for cache: SQLite persistence, upserts, classification storage and
 the connection-lifecycle fix (no leaked WAL/SHM sidecar files)."""
 
+import contextlib
 import os
 import sqlite3
 import sys
@@ -252,10 +253,40 @@ class TestBatchedAdvisoryReads(unittest.TestCase):
         self.assertEqual(list(found), ["GHSA-00001"])
 
     def test_a_batch_larger_than_the_sqlite_parameter_limit_works(self):
-        """SQLite's default limit is 999 bound parameters."""
+        """The chunking itself, not just that a big batch returns.
+
+        The old version used 1,620 ids and asserted only the result. That
+        limit was 999 until SQLite 3.32 (2020) and is 32766 here, so the
+        whole batch fit in one statement and removing the chunk loop left
+        this green -- a test named for a limit it never reached.
+        """
         ids = [f"GHSA-{i:05d}" for i in range(120)] + [f"missing-{i}" for i in range(1500)]
-        found = cache.get_advisories(ids, path=self.db)
+
+        selects = []
+        real_db = cache._db
+
+        # set_trace_callback, not a patched Connection.execute:
+        # sqlite3.Connection is an immutable type and its methods cannot be
+        # replaced.
+        @contextlib.contextmanager
+        def tracing_db(path):
+            with real_db(path) as conn:
+                conn.set_trace_callback(
+                    lambda sql: selects.append(sql.count("?"))
+                    if "FROM advisories" in sql and " IN (" in sql else None)
+                try:
+                    yield conn
+                finally:
+                    conn.set_trace_callback(None)
+
+        with mock.patch.object(cache, "_db", tracing_db):
+            found = cache.get_advisories(ids, path=self.db)
+
         self.assertEqual(len(found), 120)
+        self.assertGreater(len(selects), 1,
+                           "1620 ids were sent in one statement; the chunking is gone")
+        self.assertTrue(all(n <= 999 for n in selects),
+                        f"a chunk exceeded the oldest supported limit: {selects}")
 
     def test_one_unreadable_row_does_not_sink_the_batch(self):
         with sqlite3.connect(self.db) as conn:

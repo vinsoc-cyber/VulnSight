@@ -233,8 +233,13 @@ def get_advisories(advisory_ids, path: str | None = None) -> dict[str, dict]:
         return {}
     found: dict[str, dict] = {}
     with _db(path) as conn:
-        # SQLite's default parameter limit is 999; chunk so a large batch
-        # cannot trip it.
+        # Chunked so a large batch cannot trip SQLITE_LIMIT_VARIABLE_NUMBER.
+        # That limit was 999 until SQLite 3.32 (2020) and is 32766 on
+        # anything current -- the old comment said 999 flatly, which is the
+        # number people then write tests against, and a 1,500-id test
+        # "proving" the chunking passed with the chunking removed. The
+        # chunk stays at 500 because the floor is what has to be safe: a
+        # build may still be compiled with the old limit.
         for start in range(0, len(ids), 500):
             chunk = ids[start:start + 500]
             placeholders = ",".join("?" * len(chunk))

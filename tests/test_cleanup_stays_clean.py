@@ -20,7 +20,6 @@ import ast
 import hashlib
 import inspect
 import os
-import re
 import subprocess
 import pathlib
 import sys
@@ -56,11 +55,13 @@ class TestDeadCodeStaysDeleted(unittest.TestCase):
         assignment was read by nothing and said something untrue about the
         page size."""
         src = _source("modules/nvd_client.py")
-        assigns = re.findall(r'^\s*(?:params\[)?["\']?resultsPerPage["\']?\]?\s*=',
-                             src, re.M)
-        self.assertLessEqual(
-            len(assigns), 1,
-            "resultsPerPage is assigned more than once; one of them is dead")
+        # Exactly one mention, not "at most one": the earlier form matched
+        # nothing at all (the real line is a kwarg, `resultsPerPage=...`,
+        # not an assignment statement) and so passed at zero -- the same
+        # defect this test exists to catch, in the test itself.
+        self.assertEqual(
+            src.count("resultsPerPage"), 1,
+            "resultsPerPage should be set once, where the request is built")
 
     def test_there_is_one_key_rotation_implementation(self):
         """Two existed: a `rotate_token` method and the cooling-aware picker
@@ -73,9 +74,16 @@ class TestDeadCodeStaysDeleted(unittest.TestCase):
     def test_there_is_one_advisory_id_length_limit(self):
         """Two different maxima guarded the same field; the second could
         never be reached, so it documented a limit that did not apply."""
-        src = _source("modules/search_service.py")
-        limits = set(re.findall(r"MAX_ADVISORY_ID\w*", src))
-        self.assertLessEqual(len(limits), 1, f"competing id limits: {limits}")
+        # The surviving limit lives in app.py, where the request is
+        # validated. The earlier form looked for a MAX_ADVISORY_ID constant
+        # in search_service that has never existed, so it asserted "at most
+        # one of nothing" and could not fail.
+        caps = [line for line in _source("app.py").splitlines()
+                if "len(gid)" in line and "128" in line]
+        self.assertEqual(len(caps), 1,
+                         f"expected exactly one advisory-id length cap, got {caps}")
+        self.assertNotIn("128", _source("modules/search_service.py"),
+                         "a second id-length limit came back")
 
     def test_the_tree_has_no_unused_noqa(self):
         """RUF100 catches these, but only on a full `ruff check .` -- a
@@ -107,9 +115,15 @@ class TestExtractionsStayExtracted(unittest.TestCase):
         """The document hand-copied the batch and call-cap numbers. They
         were already one revision behind the code when this was found."""
         spec = openapi.build_spec("/")
-        text = str(spec)
-        self.assertIn(str(MAX_AI_BATCH), text)
-        self.assertIn(str(MAX_AI_CALLS_PER_REQUEST), text)
+        # At the path, not anywhere in the blob: assertIn("100", str(spec))
+        # and assertIn("500", str(spec)) were both satisfied by the
+        # unrelated max_results schema ('maximum': 500, 'default': 100), so
+        # the document could publish maxItems: 7 and stay green.
+        body = (spec["paths"]["/api/v1/ai/classify"]["post"]["requestBody"]
+                ["content"]["application/json"]["schema"])
+        self.assertEqual(body["properties"]["advisory_ids"]["maxItems"],
+                         MAX_AI_BATCH)
+        self.assertIn(f"{MAX_AI_CALLS_PER_REQUEST} per request", str(spec))
         # And the module reads them rather than restating them.
         src = _source("modules/openapi.py")
         self.assertIn("MAX_AI_BATCH", src)
