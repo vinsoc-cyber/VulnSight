@@ -159,12 +159,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "EPSS failure fabricates a ranking",
         [("modules/search_service.py",
-          "        if results and not enriched:\n"
-          "            warnings.append(\n"
-          '                "EPSS scores are unavailable, so these results are in merge "\n'
-          '                "order, not EPSS order."\n'
-          "            )",
-          "        if False:\n            pass")],
+          "        if results and not enriched:",
+          "        if False:")],
         "test_search_service",
     ),
     (

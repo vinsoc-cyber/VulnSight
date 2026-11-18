@@ -136,6 +136,11 @@
   --text-lg:      17px;     /* card and panel titles */
   --text-xl:      22px;     /* section and dialog headings */
   --text-display: clamp(28px, 3.4vw, 40px);   /* the page heading, once */
+  /* A seventh step, used by exactly one thing: the funnel figures. It
+     exists because the funnel is the page's single loud element, and at
+     --text-display it would be two things claiming the same rank. If
+     anything else ever uses it, it has stopped being the loud thing. */
+  --text-figure:  clamp(30px, 4.2vw, 52px);
 
   --weight-normal: 400;
   --weight-medium: 500;
@@ -437,7 +442,10 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
 
 .control-rail {
   min-width: 0;
-  background: var(--rail-bg);
+  /* One vertical rule, which is a column separator rather than a panel
+     edge. The fill went with it: a rail that is a different colour from
+     the workspace is two surfaces, and this is one page. */
+  background: none;
   border-right: 1px solid var(--line);
   /* The rail owns its scroll so the action footer can be a real footer.
      `position: sticky; bottom: 0` on a ~1700px column reserves no space --
@@ -467,7 +475,10 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
   line-height: 1.45;
 }
 
-.control-section { padding: 18px 20px 16px; border-bottom: 1px solid var(--line); }
+/* Space, not a rule, between sections. Six stacked bordered blocks gave
+   the rail one flat rhythm in which nothing was more important than
+   anything else; the headings carry the structure now. */
+.control-section { padding: 22px 20px 6px; border-bottom: 0; }
 .section-heading {
   display: flex;
   align-items: baseline;
@@ -542,7 +553,11 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   gap: 10px;
   padding: 9px 10px;
   cursor: pointer;
-  background: var(--panel);
+  /* No fill and no border until it is picked or hovered. Twenty-nine
+     filled rows made the list one flat block in which the checked state
+     had to fight the fill it sat on; unfilled, a selection is simply the
+     one that is coloured. */
+  background: none;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
 }
@@ -629,9 +644,9 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
 .check { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; color: var(--muted); font-size: var(--text-sm); }
 .check-title { display: block; color: var(--ink); font-size: var(--text-sm); font-weight: 650; }
 .check .hint { display: block; margin-top: 1px; }
-.advanced-check { margin-top: 10px; padding: 9px; background: var(--surface-inset); border: 1px dashed var(--line); border-radius: var(--radius-sm); }
+.advanced-check { margin-top: 10px; padding: 9px 0 0; background: none; border: 0; border-top: 1px dashed var(--line); }
 .compact-field { margin-top: 10px; }
-.switch-check { align-items: center; padding: 9px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.switch-check { align-items: center; padding: 9px 0; background: none; border: 0; }
 
 .row { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .row .field { min-width: 0; }
@@ -1068,13 +1083,24 @@ kbd {
 
 .workspace { min-width: 0; padding: 0 clamp(18px, 2.5vw, 40px) 48px; }
 
+/* One column, not two. The funnel was forced into a 240px cell beside the
+   severity key, so it wrapped and orphaned its last figure on a line of
+   its own while the key floated at a different baseline. The key belongs
+   with the thing it explains -- the coloured edge on each entry -- so it
+   sits at the end of the funnel row, bottom-aligned. */
 .workspace-intro {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(280px, 420px);
-  align-items: end;
-  gap: clamp(24px, 5vw, 64px);
+  gap: 4px;
   padding: 28px 0 22px;
   border-bottom: 1px solid var(--line);
+}
+.workspace-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: clamp(18px, 4vw, 48px);
+  margin-top: 18px;
 }
 .workspace-heading h2 {
   margin: 8px 0 8px;
@@ -1083,6 +1109,54 @@ kbd {
   letter-spacing: -.04em;
 }
 .workspace-heading p { max-width: 520px; margin: 0; color: var(--muted); font-size: var(--text-base); }
+
+/* The funnel: 944 CWEs -> 29 classes -> what you picked -> what came back.
+   No box, no border, no fill — the moment it gets one it becomes the
+   three-stat card row this design deleted from the rail, which is the
+   brief's named default hero treatment. It earns its size by being
+   derived from the live query and by being the only loud thing here. */
+.funnel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px clamp(20px, 4vw, 44px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.funnel li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.funnel b {
+  color: var(--ink);
+  font-size: var(--text-figure);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.045em;
+  font-variant-numeric: tabular-nums;
+}
+.funnel span {
+  color: var(--faint);
+  font-size: var(--text-sm);
+}
+/* The stage you are at. Not a colour change -- the accent is spoken for by
+   focus and the primary action -- but weight: the figure that is still
+   waiting is quiet until it has an answer. */
+/* A figure that has no answer yet is quieter AND smaller. An em dash set
+   at 52px bold is a horizontal rule, not a placeholder -- it read as a
+   divider under the figures beside it. --meta-dim rather than
+   --line-bright because the first attempt measured 2.04:1 against the
+   ground, under the 3:1 floor for large text: a figure nobody can read is
+   not a quiet figure, it is a missing one. */
+/* Full size, so it keeps the row's baseline, and a middot rather than an
+   em dash. At 52px an em dash is a horizontal rule -- it read as a divider
+   under the figures beside it -- and shrinking it instead pushed its label
+   off the shared baseline. A dot is obviously a placeholder at any size.
+   --meta-dim rather than --line-bright: the first attempt measured 2.04:1
+   against the ground, under the 3:1 floor for large text, which the design
+   audit caught. A figure nobody can read is not a quiet figure. */
+.funnel li.is-pending b { color: var(--meta-dim); }
 
 .threat-key { min-width: 0; }
 .threat-key-head, .threat-key-foot {
@@ -1226,17 +1300,31 @@ button.warn-btn:disabled {
 }
 
 .results { min-width: 0; padding-top: 16px; }
+/* An entry, not a card.
+
+   The page was built out of nested boxes: a bordered rail holding bordered
+   sections holding bordered controls, beside a bordered workspace holding
+   bordered cards holding bordered badges. Five levels of container on
+   content that is already hierarchical. Every border was defensible alone,
+   and together they are why the page read as chrome rather than evidence.
+
+   So the default way to group is space, and a border is kept only where
+   something genuinely needs an edge: an input, a popover, a modal. Here
+   the severity edge is the container -- it starts the entry, runs its full
+   height, and is the thing the eye follows down a triage queue instead of
+   re-entering a box per row. */
 .card {
   --severity: var(--line-bright);
   position: relative;
   min-width: 0;
-  margin-bottom: 10px;
-  padding: 18px 18px 16px 20px;
+  margin-bottom: 4px;
+  padding: 16px 18px 18px 20px;
   overflow: hidden;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  background: none;
+  border: 0;
+  border-radius: 0;
 }
+.card:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 .card::before {
   position: absolute;
   inset: 0 auto 0 0;
@@ -1244,7 +1332,7 @@ button.warn-btn:disabled {
   content: "";
   background: var(--severity);
 }
-.card:hover { border-color: var(--line-strong); box-shadow: 0 10px 28px var(--card-shadow); }
+
 .card.sevbar-critical { --severity: var(--sev-critical); }
 .card.sevbar-high { --severity: var(--sev-high); }
 .card.sevbar-medium { --severity: var(--sev-medium); }
@@ -1467,15 +1555,20 @@ button.warn-btn:disabled {
 .partial .conf-bar::-moz-progress-bar { background: var(--warn); }
 .error .conf-bar::-moz-progress-bar { background: var(--warn); }
 
+/* `.empty` keeps its panel: it is a short message in a large space and
+   needs an edge to sit against. `.empty-onboarding` does not -- it is the
+   whole opening screen, so a border round it is a border round the page,
+   and it contains a class field this design already unboxed. */
 .empty, .loading {
   color: var(--muted);
   background: var(--empty-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
+
 .empty:not(.empty-onboarding), .loading { padding: 48px 24px; text-align: center; }
 .empty b { color: var(--ink); }
-.empty-onboarding { padding: 36px 32px; }
+.empty-onboarding { padding: 34px 0 32px; background: none; border: 0; border-radius: 0; }
 
 .spinner {
   display: inline-block;

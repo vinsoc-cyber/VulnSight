@@ -11,7 +11,7 @@ able to read end to end before pointing it at their credentials.
 app.py                     632   Flask routes, request guards, response headers
 modules/
   config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py       1056   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  search_service.py       1097   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py         167   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
   http_retry.py            181   one retry/backoff policy for all four upstreams
@@ -25,11 +25,11 @@ modules/
   cache.py                 525   SQLite: advisories + verdicts, jobs, migrations
   jobs.py                  268   submit/poll queue for searches too slow to hold open
   ai_classifier.py        1239   provider client, prompt, verdict cache, key rotation
-  openapi.py               649   the OpenAPI description of /api/v1
+  openapi.py               657   the OpenAPI description of /api/v1
   security.py              467   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html       388   page shell -- HTML and Jinja only
-static/app.js             1884   all UI logic; server data arrives via window.BOOT
-static/style.css          1936   design tokens + components, light and dark
+templates/index.html       410   page shell -- HTML and Jinja only
+static/app.js             1905   all UI logic; server data arrives via window.BOOT
+static/style.css          2029   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           341   finds tests that can no longer fail

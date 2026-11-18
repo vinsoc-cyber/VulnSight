@@ -101,10 +101,17 @@ sizes, and `tests/test_frontend_js.py` fails if one appears.
 | `--text-lg` | 17px | card and panel titles | 1.21 |
 | `--text-xl` | 22px | section and dialog headings | 1.29 |
 | `--text-display` | `clamp(28px, 3.4vw, 40px)` | the page heading, once | ~1.36 |
+| `--text-figure` | `clamp(30px, 4.2vw, 52px)` | the funnel figures, once | ~1.30 |
 
 Ratios widen as they climb, so a step up is legible as a change of **rank**
 rather than merely a change of size. The scale is also enforced to keep
 steps at least 1.10× apart.
+
+`--text-figure` is the seventh step and has exactly one user: the funnel.
+It exists because the funnel is the page's single loud element, and at
+`--text-display` the masthead and the figures would be two things claiming
+the same rank. If anything else ever takes this step, the funnel has
+stopped being the loud thing and the step should go.
 
 This replaced a genuine defect rather than a matter of taste. The sheet used
 to declare nine tokens, reference three of them, and then set **14
@@ -275,6 +282,85 @@ rather than silently kept, so the next reviewer can disagree.
 5. **Say what the user gets, not what the system does.** Source descriptions
    answer "what do I get if I tick this?" — *"GitHub, filtered by CWE at the
    source"*, not *"GHSA · CWE filter"*.
+
+## What was wrong with the page as a whole
+
+Not any one region. The page is a competent dark admin console, and that
+is the problem: nothing about it could only be this product. Three
+structural facts produce that:
+
+**Everything is in a box, and the boxes nest.** A bordered rail inside the
+shell, bordered sections inside the rail, bordered controls inside the
+sections; a bordered workspace, bordered cards, bordered badges inside the
+cards. Five levels of container on a page whose content is already
+hierarchical. Each border is defensible alone; together they are why the
+page reads as chrome rather than evidence.
+
+**Structure is carried by borders rather than by space and type.** Because
+every group is drawn, none of them need to be *placed*, so the whole page
+sits at one rhythm. There is no silence anywhere.
+
+**The masthead says nothing.** "Advisory queue" at 40px over a paragraph,
+with the severity key floated opposite. It is a title, not a statement of
+where you are in a funnel of 944 CWEs → 29 classes → your selection → the
+handful AI confirms. That funnel is the product, and the page never shows
+it.
+
+
+Unchanged, and that is a decision rather than an omission. The palette is
+measured, documented and accessible, and severity owns the chroma. Re-picking
+it would be motion, not design — and the one axis the brief leaves free is
+where this page is generic, which is structure, not hue.
+
+| Token | Light | Dark | Job |
+|---|---|---|---|
+| `--bg` | `#f7f8f9` | `#15181d` | the ground |
+| `--ink` | `#14181d` | `#e9ebef` | body text |
+| `--accent` | `#334e68` | `#8fb3d9` | focus, selection, the one filled control |
+| `--sev-critical` | `#c8102e` | `#ff5a74` | severity edge |
+| `--sev-high` | `#d2600f` | `#ff9348` | severity edge |
+| `--ok` | `#1a6b4a` | `#4fc08d` | AI confirmed, and source reachable |
+
+What changes is how much of it is *drawn*: `--line` stops being the
+default way to group things.
+
+## Critique, before building
+
+Working the brief from scratch for "a security dashboard" lands on: dark
+ground, left rail, cards, a coloured severity pill, a stat row at the top.
+That is close to what this page already is, which is the evidence that it
+was never designed — it was defaulted into.
+
+So, against each free axis:
+
+- **The funnel as the hero.** A row of big numbers is the brief's named
+  default hero treatment, and I am proposing big numbers. The difference
+  has to be real or this fails its own test: these are not vanity stats
+  (users, uptime, "99.9%"), they are the four stages of the query the user
+  is building, in order, and the fourth changes when they search. If they
+  were decorative I would be reproducing the tell exactly. **Revised:** the
+  figures are *derived from the live query*, the fourth is empty until a
+  search runs, and there is no card, border or gradient behind them — the
+  moment they get a box they become the stat row and must go.
+
+- **Removing borders.** The risk is landing on the broadsheet tell —
+  hairlines, zero radius, dense columns. **Revised:** radii stay on the
+  things that remain boxes (inputs, modals, badges), entry density goes
+  *down* not up, and the one vertical rule is a column separator, not a
+  grid. Airy, not newspaper.
+
+- **The severity edge.** Already present as a 3px card border-left; making
+  it the entry's only container is a change of role, not a new device. It
+  reads down a column, which is what a triage queue is scanned as.
+
+- **Not changing the palette.** Tempting to prove effort by re-picking it.
+  The doc already argues this and the argument is right: the palette is
+  the one part that was designed rather than defaulted.
+
+- **`--text-figure`.** A seventh step on a scale the docs defend as six.
+  Justified only if the funnel is genuinely the page's one loud thing — and
+  if it is, 40px display type next to 40px figures would be two things
+  claiming the same rank. It earns the step by being the only user of it.
 
 ## Every region, judged
 

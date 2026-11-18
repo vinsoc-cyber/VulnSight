@@ -47,6 +47,8 @@ VALID_DIRECTIONS = ("asc", "desc")
 VALID_SOURCES = ("ghsa", "nvd", "osv", "osv-native")
 VALID_TYPES = ("reviewed", "unreviewed", "malware")
 _SORT_FIELD = {
+    # "risk" has no single field behind it; _sort_key handles it.
+    "risk": "",
     "published": "published_at",
     "updated": "updated_at",
     "cve_id": "cve_id",
@@ -58,6 +60,40 @@ MAX_CATEGORY_INPUTS = 100
 
 
 _CVE_ID_RE = re.compile(r"^CVE-(\d{4})-(\d+)$", re.I)
+
+# "What should I look at next?" as an ordering.
+#
+# Every other sort answers a different question -- when was it published,
+# what is its id -- and this tool's stated job is to decide what to read
+# next. Ordered by publication date, a LOW advisory at 1% EPSS sits above a
+# CRITICAL one that CISA lists as actively exploited, which is the opposite
+# of triage.
+#
+# The four terms, in order of how much they should move a decision:
+#   KEV         someone is being attacked with this right now
+#   severity    how bad it is if it lands
+#   EPSS        how likely it is to be exploited in the next 30 days
+#   CVSS        the score, as a tie-break within a severity band
+#
+# This is NOT the API default. `published` stays the default for
+# /api/v1/search so no existing client's results change; the UI asks for
+# `risk` explicitly, because a person opening the page is triaging and a
+# script calling the API has already decided what it wants.
+def _risk_sort_key(record: dict) -> tuple[int, int, float, float]:
+    severity = canonical_severity(record.get("severity"))
+    return (
+        1 if record.get("kev") else 0,
+        _SEVERITY_RANK.get(severity, 0),
+        _as_float(record.get("epss_percentage")),
+        _as_float(record.get("cvss_score")),
+    )
+
+
+def _as_float(value: object) -> float:
+    try:
+        return float(value)       # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _cve_sort_key(value: object) -> tuple[int, int, str]:
@@ -920,6 +956,8 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 return float(value)
             except ValueError:
                 return 0.0
+        if q.sort == "risk":
+            return _risk_sort_key(record)
         if sort_field == "cve_id":
             # A CVE id is a year and a sequence number, not a word. Sorted as
             # text, "newest CVE first" silently meant "highest ASCII first" --
@@ -948,7 +986,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     # Sorting by EPSS needs every candidate scored first; every other sort mode
     # can truncate first, which keeps EPSS to one batched request instead of one
     # per 100 merged records (up to 4x max_results before truncation).
-    if numeric:
+    if numeric or q.sort == "risk":
         enriched = _enrich_epss(results)
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
         if sort_field == "cve_id":
@@ -961,6 +999,9 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         # measured zero; the ordering has to keep the same promise.
         if results and not enriched:
             warnings.append(
+                "EPSS scores are unavailable, so these results are ordered "
+                "by KEV, severity and CVSS only."
+                if q.sort == "risk" else
                 "EPSS scores are unavailable, so these results are in merge "
                 "order, not EPSS order."
             )

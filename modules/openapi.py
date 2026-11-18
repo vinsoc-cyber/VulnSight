@@ -23,7 +23,8 @@ import functools
 from .config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 from .cwe_categories import CATEGORIES, ECOSYSTEMS, SEVERITIES
 from .search_service import (DEFAULT_MAX_RESULTS, MAX_AFFECTS_LENGTH,
-                              MAX_CATEGORY_INPUTS, MAX_RESULTS_CAP)
+                              MAX_CATEGORY_INPUTS, MAX_RESULTS_CAP,
+                              VALID_SORTS)
 
 API_VERSION = "1.0.0"
 
@@ -101,10 +102,17 @@ _SEARCH_REQUEST = {
         },
         "sort": {
             "type": "string",
-            "enum": ["published", "updated", "cve_id",
-                     "epss_percentage", "epss_percentile"],
+            # Derived, so adding a sort cannot leave the contract behind.
+            # The list was retyped here and the description was wrong: an
+            # unrecognised value is a 400, not a silent fallback.
+            "enum": list(VALID_SORTS),
             "default": "published",
-            "description": "An unrecognised value falls back to `published` silently.",
+            "description": (
+                "`risk` orders by KEV, then severity, then EPSS, then CVSS "
+                "— what to look at next. It is the default in the web UI; "
+                "`published` stays the default here so existing clients are "
+                "unaffected. An unrecognised value is a 400."
+            ),
         },
         "direction": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
         "max_results": {

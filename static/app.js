@@ -768,6 +768,7 @@
             aria-label="Remove CWE-${safeAttr(id)}">×</button>
         </span>`;
       }));
+      renderFunnel();
       $('#selected-chips').innerHTML = chips.length
         ? chips.join('')
         : '<span class="chips-empty">Nothing selected — search above or tick a class.</span>';
@@ -1207,6 +1208,7 @@
       const cweText = shownCwes
         ? ` · CWEs: <code>${esc(shownCwes)}</code>${more}`
         : '';
+      renderFunnel();
       $('#summary').innerHTML = head + orderText + unscoredNote + psText + capped + cweText
         + (m.cached ? ` · <span class="summary-cached">${m.cached} already AI-scored</span>` : '');
     }
@@ -1216,6 +1218,7 @@
     // age, and ordering by EPSS called the highest probability "newest" --
     // the control described a different query than the one it ran.
     const DIRECTION_WORDS = {
+      risk: ['Most urgent first', 'Least urgent first'],
       published: ['Newest first', 'Oldest first'],
       updated: ['Most recently updated', 'Least recently updated'],
       cve_id: ['Highest CVE id first', 'Lowest CVE id first'],
@@ -1235,6 +1238,24 @@
       for (const option of select.options) {
         option.textContent = option.value === 'asc' ? asc : desc;
       }
+    }
+
+    // The funnel's live half. "selected" follows the rail; "advisories"
+    // stays an em dash until a search has run, because 0 and "not asked
+    // yet" are different answers and a triage tool must not render the
+    // second as the first.
+    function renderFunnel() {
+      const selected = $$('input[name=category]:checked').length + PICKED.size;
+      const found = SEARCH_META ? SEARCH_META.count : null;
+      const set = (id, value, pending) => {
+        const slot = $('#' + id);
+        if (!slot) return;
+        slot.textContent = value;
+        const item = slot.closest('li');
+        if (item) item.classList.toggle('is-pending', Boolean(pending));
+      };
+      set('funnel-selected', String(selected), selected === 0);
+      set('funnel-found', found === null ? '\u00b7' : String(found), found === null);
     }
 
     function renderWarnings(list) {
