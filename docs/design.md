@@ -119,6 +119,51 @@ Previously five tokens were declared, two referenced, and the rest written
 raw, including both `99px` and `999px` for the same pill: two answers to one
 question.
 
+## The opening screen
+
+The workspace used to open on a centred card: a headline, a paragraph,
+three numbered steps and a tip telling you to go and tick a class in the
+rail. Below it, nothing — at 1440×900 roughly 60% of the reading surface
+was empty, and the card's whole job was to point at a control somewhere
+else.
+
+It opens on the taxonomy now. All 29 bug classes, under their families,
+each with its code and the size of its CWE set, and picking one is a click
+rather than a hunt. The hero is the most characteristic thing in this
+subject's world — the set of weakness classes — rendered as the real thing
+rather than described.
+
+```
+ Search by how the bug
+ works, not by the title.          ← the claim, at display size
+ Pick a class to start — or type a CWE id…
+
+ Access control & auth ─────────────────────────────────────────
+ ┌──────────────────┬──────────────────┬──────────────────┐
+ ┃BAC Broken Access │CSRF Cross-Site   │CORS CORS / Origin│   ┃ = the spine,
+ ┃    Control       │     Request…     │     Validation   │       filled when
+ ┃    17 CWEs       │     2 CWEs       │     3 CWEs       │       picked
+ └──────────────────┴──────────────────┴──────────────────┘
+ Injection ─────────────────────────────────────────────────────
+ ┌──────────────────┬──────────────────┬──────────────────┐
+ │SQLI SQL Injection│XSS  Cross-Site…  │SSTI Server-Side… │
+```
+
+Two structural devices, both carrying information rather than decorating:
+the hairline that runs out from each family name, so a family reads as a
+band across the grid instead of a label floating above it; and a left spine
+on each tile that fills with the accent when the class is picked. No card
+shadows — these are 29 equal things, and elevation would imply a hierarchy
+that does not exist.
+
+The map and the rail's checkbox list are two views of the same checkboxes,
+so they cannot disagree; a browser test asserts exactly that, because if
+they ever drift the page shows one selection and searches another. Clicking
+a picked class removes it, so the map is a toggle rather than a one-way
+door. Focus stays on the tile you clicked: the shared `pickEntry()` hands
+focus to the rail's search box, which is right when you arrived by typing
+and wrong when you arrived by clicking.
+
 ## Layout
 
 A fixed command surface on the left, a reading surface on the right. The

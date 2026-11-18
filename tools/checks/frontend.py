@@ -14,6 +14,35 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the opening screen stops offering the classes",
+        [("static/app.js",
+          "      const map = $('#class-map');\n      if (!map) return;",
+          "      const map = null;\n      if (!map) return;")],
+        "test_ui_e2e",
+    ),
+    (
+        "the map stops following the rail",
+        [("static/app.js",
+          "    function renderSelection() {\n      renderClassMap();",
+          "    function renderSelection() {")],
+        "test_ui_e2e",
+    ),
+    (
+        "picking a class throws focus back to the rail",
+        [("static/app.js",
+          "      const again = $('#class-map .map-class[data-class=\"' + CSS.escape(key) + '\"]');\n"
+          "      if (again) again.focus();",
+          "")],
+        "test_ui_e2e",
+    ),
+    (
+        "a hard-coded size hides inside clamp()",
+        [("static/style.css",
+          "  font-size: var(--text-display);\n  line-height: 1.1;",
+          "  font-size: clamp(22px, 2.4vw, 30px);\n  line-height: 1.1;")],
+        "test_frontend_js",
+    ),
+    (
         "the API page goes back to its own ad-hoc sizes",
         [("static/apidocs.css",
           "  font: var(--text-base)/1.6 ui-sans-serif",

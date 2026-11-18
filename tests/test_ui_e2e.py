@@ -968,5 +968,109 @@ class TestNothingLeaksToTheWindow(UITestCase):
             "window.BOOT is the server->client contract and must stay")
 
 
+class TestTheOpeningScreenIsTheTaxonomy(UITestCase):
+    """The workspace used to open on a centred card of instructions -- a
+    headline, a paragraph, three numbered steps and a tip telling you to go
+    and tick a class in a 320px rail you then had to scroll -- with the rest
+    of the pane empty. It opens on the classes themselves now, and picking
+    one is a click.
+
+    These assert the behaviour, not the look: every class is offered, the
+    map and the rail cannot disagree, and the thing is operable by keyboard.
+    """
+
+    def _map(self):
+        return self.page.evaluate("""() => ({
+          tiles: [...document.querySelectorAll('.map-class')].map(b => b.dataset.class),
+          picked: [...document.querySelectorAll('.map-class.is-picked')]
+            .map(b => b.dataset.class).sort(),
+          pressed: [...document.querySelectorAll('.map-class[aria-pressed="true"]')]
+            .map(b => b.dataset.class).sort(),
+          boxes: [...document.querySelectorAll('input[name=category]:checked')]
+            .map(c => c.value).sort(),
+          groups: [...document.querySelectorAll('.map-group-name')]
+            .map(h => h.textContent.trim()),
+        })""")
+
+    def test_every_bug_class_is_on_the_opening_screen(self):
+        self.open()
+        state = self._map()
+        count = self.page.evaluate("() => window.BOOT.CLASSES.length")
+        self.assertEqual(len(state["tiles"]), count,
+                         "the map does not offer every class")
+        self.assertEqual(len(set(state["tiles"])), count, "a class is listed twice")
+        self.assertTrue(state["groups"], "classes are not grouped by family")
+
+    def test_the_map_and_the_rail_can_never_disagree(self):
+        """Both are views of the same checkboxes. If they drift, the page
+        shows one selection and searches another."""
+        self.open()
+        for key in ("xss", "sqli", "ssrf"):
+            self.page.click(f'.map-class[data-class="{key}"]')
+            self.page.wait_for_timeout(150)
+            state = self._map()
+            with self.subTest(after=key):
+                self.assertEqual(state["picked"], state["boxes"])
+                self.assertEqual(state["pressed"], state["boxes"])
+                self.assertIn(key, state["boxes"])
+
+    def test_a_second_click_removes_the_class(self):
+        """A one-way door with no visible way back is not a toggle."""
+        self.open()
+        self.page.click('.map-class[data-class="xss"]')
+        self.page.wait_for_timeout(150)
+        self.assertIn("xss", self._map()["boxes"])
+        self.page.click('.map-class[data-class="xss"]')
+        self.page.wait_for_timeout(150)
+        self.assertNotIn("xss", self._map()["boxes"])
+
+    def test_picking_a_class_leaves_focus_where_it_was_clicked(self):
+        """pickEntry() hands focus to the rail's search box, which is right
+        when you got there by typing and wrong when you got there by
+        clicking a tile -- it throws a keyboard user across the page."""
+        self.open()
+        self.page.click('.map-class[data-class="sqli"]')
+        self.page.wait_for_timeout(200)
+        self.assertEqual(
+            self.page.evaluate("() => document.activeElement.dataset.class"), "sqli")
+
+    def test_the_map_is_operable_from_the_keyboard(self):
+        self.open()
+        picked = self.page.evaluate("""() => {
+          const tile = document.querySelector('.map-class[data-class="xss"]');
+          tile.focus();
+          return document.activeElement === tile;
+        }""")
+        self.assertTrue(picked, "a tile cannot take focus")
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(200)
+        self.assertIn("xss", self._map()["boxes"])
+
+    def test_each_class_states_how_many_cwes_it_covers(self):
+        """The number is the reason to pick one class over another."""
+        self.open()
+        counts = self.page.evaluate(
+            "() => [...document.querySelectorAll('.map-count')].map(e => e.textContent.trim())")
+        self.assertTrue(counts)
+        for text in counts:
+            self.assertRegex(text, r"^\d+ CWEs?$", f"unreadable count: {text!r}")
+
+    def test_running_a_search_replaces_the_map_with_results(self):
+        """The map is the opening screen, not a permanent fixture."""
+        self.open()
+        self.page.evaluate("""() => {
+          document.querySelector('#results').innerHTML = '<div class="card"></div>';
+        }""")
+        self.assertEqual(
+            self.page.evaluate("() => document.querySelectorAll('.map-class').length"), 0)
+        # And re-rendering the selection must not crash with the map gone.
+        self.page.evaluate("""() => {
+          const box = document.querySelector('input[name=category]');
+          box.checked = !box.checked;
+          box.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(150)
+
+
 if __name__ == "__main__":
     unittest.main()

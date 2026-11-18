@@ -78,8 +78,13 @@ class TestFrontendJavaScript(unittest.TestCase):
         for name in self.STYLESHEETS:
             with self.subTest(sheet=name):
                 css = self._stylesheet(name)
-                sizes = set(re.findall(r"font-size:\s*([\d.]+px)", css))
-                sizes |= set(re.findall(r"font:[^;]*?\b([\d.]+px)(?=[/ ])", css))
+                # Every px inside a font-size, including the ones wrapped
+                # in clamp()/calc(): `font-size: clamp(22px, 2.4vw, 30px)`
+                # is three hard-coded sizes, and the first version of this
+                # test only looked for a px immediately after the colon.
+                sizes = {px for decl in re.findall(r"font-size:\s*([^;]+);", css)
+                         for px in re.findall(r"([\d.]+)px", decl)}
+                sizes |= set(re.findall(r"font:[^;]*?\b([\d.]+)px(?=[/ ])", css))
                 self.assertEqual(sizes, set(),
                                  f"{name} sets sizes outside the scale: {sorted(sizes)}")
 

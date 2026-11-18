@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 680 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 687 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **101/101 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **105/105 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 101 named bugs in the working tree, runs the test module that is
+each of 105 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 101 checks, by area
+## The 105 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -372,10 +372,14 @@ codebase and the test module that now refuses to let it back in.
 | a failing later page discards the advisories already fetched | `tests/test_ghsa_client.py` |
 | EPSS is queried with the publisher's casing | `tests/test_epss_client.py` |
 
-### CWE taxonomy and the browser code (14)
+### CWE taxonomy and the browser code (18)
 
 | Reverting this | is caught by |
 |---|---|
+| the opening screen stops offering the classes | `tests/test_ui_e2e.py` |
+| the map stops following the rail | `tests/test_ui_e2e.py` |
+| picking a class throws focus back to the rail | `tests/test_ui_e2e.py` |
+| a hard-coded size hides inside clamp() | `tests/test_frontend_js.py` |
 | the API page goes back to its own ad-hoc sizes | `tests/test_frontend_js.py` |
 | the two stylesheets disagree about the scale | `tests/test_frontend_js.py` |
 | CWE-436 separated from its own child again | `tests/test_cwe_categories.py` |

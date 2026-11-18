@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 680 tests: 641 offline + 39 browser
+.venv/bin/python -m unittest discover -s tests        # 687 tests: 641 offline + 46 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -21,7 +21,7 @@ OSV and the AI provider are all mocked.
 | `test_nvd_client.py` | 36 | date windowing, normalisation, rate-limit and 403 handling |
 | `test_http_retry.py` | 27 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
 | `test_osv_client.py` | 32 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
-| `test_ui_e2e.py` | 39 | the real UI in a browser — *optional*, see below |
+| `test_ui_e2e.py` | 46 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
 | `test_jobs.py` | 23 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 680 tests` / `OK (skipped=39)`, and every other test still runs.
+`Ran 687 tests` / `OK (skipped=46)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -207,7 +207,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 101 named bugs it re-introduces the bug in the working tree, runs the
+For each of 105 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It writes to tracked files — it restores

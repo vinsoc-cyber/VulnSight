@@ -691,7 +691,44 @@
       return ENTRIES.find(e => e.kind === 'cwe' && e.id === id);
     }
 
+    // === Opening screen: the taxonomy as a map ===
+    // The workspace used to open on a card of instructions with the rest of
+    // it empty. The bug classes are what this tool is for, so they are what
+    // it opens with: every class, under its family, with the size of its CWE
+    // set, and one click to pick one. Built from BOOT.CLASSES -- the same
+    // data the rail's checkbox list uses, so the two cannot disagree.
+    function renderClassMap() {
+      const map = $('#class-map');
+      if (!map) return;                       // replaced by results already
+      const checked = checkedClassKeys();
+      const groups = [];
+      CLASSES.forEach(c => {
+        let group = groups.find(g => g.name === c.group);
+        if (!group) groups.push(group = { name: c.group, items: [] });
+        group.items.push(c);
+      });
+      map.innerHTML = groups.map(group => `
+        <section class="map-group">
+          <h4 class="map-group-name">${esc(group.name)}</h4>
+          <div class="map-grid">
+            ${group.items.map(c => {
+              const n = (c.cwes || []).length;
+              const on = checked.has(c.key);
+              return `<button type="button" class="map-class${on ? ' is-picked' : ''}"
+                data-class="${safeAttr(c.key)}"
+                aria-pressed="${on}"
+                title="${safeAttr(c.description || c.label)}">
+                <span class="map-code">${esc(c.code || c.key.toUpperCase())}</span>
+                <span class="map-label">${esc(c.label)}</span>
+                <span class="map-count">${n} CWE${n === 1 ? '' : 's'}</span>
+              </button>`;
+            }).join('')}
+          </div>
+        </section>`).join('');
+    }
+
     function renderSelection() {
+      renderClassMap();
       const classBoxes = $$('input[name=category]:checked');
       const ids = Array.from(PICKED).sort((a, b) => Number(a) - Number(b));
       const chips = classBoxes.map(box => {
@@ -1537,6 +1574,36 @@
     $('#retry-btn').addEventListener('click', retryFailed);
     // Per-card retry: the toolbar button can be scrolled far out of view by the
     // time the user reads the error on a card.
+    // Picking a class from the opening map. Delegated, because #results is
+    // rewritten in one innerHTML write and a bound listener would not
+    // survive it. Selection only -- it ticks the same checkbox the rail
+    // does and leaves running the search to the button that says so, so a
+    // stray click never spends anything.
+    $('#results').addEventListener('click', (e) => {
+      const hit = e.target.closest('.map-class');
+      if (!hit) return;
+      const key = hit.dataset.class;
+      const cls = CLASSES.find(c => c.key === key);
+      if (!cls) return;
+      const box = $$('input[name=category]').find(c => c.value === key);
+      if (box && box.checked) {
+        // Second click removes it, so the map is a toggle rather than a
+        // one-way door with no visible way back.
+        box.checked = false;
+        announceSelection(cls.label + ' class removed');
+        renderSelection();
+      } else {
+        pickEntry({ kind: 'class', key: cls.key, label: cls.label });
+      }
+      // pickEntry() hands focus to the rail's search box, which is right
+      // when you got there by typing and wrong when you got there by
+      // clicking a tile: it throws a keyboard user back across the page.
+      // The map is re-rendered by renderSelection(), so the tile is a new
+      // element and has to be found again by key.
+      const again = $('#class-map .map-class[data-class="' + CSS.escape(key) + '"]');
+      if (again) again.focus();
+    });
+
     $('#results').addEventListener('click', async (e) => {
       const button = e.target.closest('.verdict-retry');
       if (!button) return;

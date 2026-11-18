@@ -320,17 +320,21 @@
       <p class="stale-banner" id="stale-banner" role="status" hidden></p>
 
       <section id="results" class="results" aria-label="Advisory results" aria-busy="false">
+        <!-- The opening screen is the taxonomy itself, not instructions
+             about it. This used to be a bordered card holding a headline, a
+             paragraph and three numbered steps, with the rest of the
+             workspace empty -- it told you to go and tick a class in a
+             320px rail you then had to scroll. The thing this tool is for
+             is the set of bug classes, so that is what the page opens with,
+             and picking one is a click rather than a search for the
+             control. Filled by renderClassMap() from window.BOOT.CLASSES. -->
         <div class="empty empty-onboarding">
-          <div class="empty-copy">
+          <div class="onboarding-head">
             <h3>Search by how the bug works, not by the title.</h3>
-            <p>Type a CWE ID or a bug name — “639”, “IDOR”, “SQL injection” — or tick a class. VulnSight merges sources, then you can score the queue with AI.</p>
-            <ol class="workflow" aria-label="Analysis workflow">
-              <li><span>1</span><b>Search</b><small>Collect by CWE</small></li>
-              <li><span>2</span><b>Refine</b><small>Score with AI</small></li>
-              <li><span>3</span><b>Isolate</b><small>Keep true matches</small></li>
-            </ol>
-            <p class="empty-tip">BAC + Maven is preselected. “Run intelligent scan” runs the full flow.</p>
+            <p>Pick a class to start — or type a CWE id, a bug name or an alias in the rail.</p>
           </div>
+          <div class="class-map" id="class-map" role="group"
+               aria-label="Bug classes"></div>
         </div>
       </section>
     </main>

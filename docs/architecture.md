@@ -27,9 +27,9 @@ modules/
   ai_classifier.py        1051   provider client, prompt, verdict cache, key rotation
   openapi.py               572   the OpenAPI description of /api/v1
   security.py              439   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html       372   page shell -- HTML and Jinja only
-static/app.js             1751   all UI logic; server data arrives via window.BOOT
-static/style.css          1774   design tokens + components, light and dark
+templates/index.html       376   page shell -- HTML and Jinja only
+static/app.js             1818   all UI logic; server data arrives via window.BOOT
+static/style.css          1835   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   design_audit.py          359   measures contrast/targets/focus in a real browser
