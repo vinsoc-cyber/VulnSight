@@ -23,9 +23,11 @@ import os
 import subprocess
 import pathlib
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -288,10 +290,15 @@ class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):
                    "modules/search_service.py"]
         before = {f: hashlib.sha256(_source(f).encode()).hexdigest() for f in watched}
 
-        # Checks that rewrite exactly those three files.
+        # Checks that rewrite exactly those three files, chosen so that the
+        # modules they route to are cheap. This used to name "opening screen
+        # stops", which routes to test_ui_e2e -- so proving the harness does
+        # not touch the checkout cost a full Chromium run, 16 times over,
+        # inside every battery. "app.js loses its scope wrapper" rewrites the
+        # same file and is caught by test_frontend_js in milliseconds.
         proc = subprocess.run(
             [sys.executable, os.path.join(ROOT, "tools", "revert_checks.py"),
-             "compose publishes", "opening screen stops", "one bad record"],
+             "compose publishes", "loses its scope wrapper", "one bad record"],
             cwd=ROOT, capture_output=True, text=True, timeout=900)
         self.assertIn("reverts caught", proc.stdout, proc.stdout + proc.stderr)
 
@@ -315,6 +322,118 @@ class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):
         self.assertIn("editing the checkout", source)
         # The default path must build a sandbox.
         self.assertIn("tree = sandbox(REPO)", source)
+
+
+class TestTheHarnessCannotReportAnUnmeasuredPass(unittest.TestCase):
+    """`129/129 reverts caught` is the strongest claim this repo makes, and
+    two separate mechanisms let it be printed without anything being
+    measured.
+
+    The harness only ever observed "red after the revert", which is also
+    what an already-failing module looks like -- so every check routed to a
+    red module reported `caught`. A revert whose replacement breaks an
+    import does the same thing: every test errors, the suite is red, the
+    harness calls it a pass. And `sync_check_counts.py` wrote
+    `**N/N caught**` unconditionally, so the document's evidence row was
+    generated to read as a perfect score by a tool that runs no checks."""
+
+    def _toy_tree(self):
+        """run_checks writes to the tree it is given, so it gets a scratch
+        one. Pointing it at ROOT would have this test doing the single thing
+        the harness exists not to do."""
+        tmp = tempfile.mkdtemp(prefix="revert-harness-test-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tree = pathlib.Path(tmp)
+        (tree / "subject.py").write_text("VALUE = 1\n", encoding="utf-8")
+        return tree
+
+    def test_a_module_that_is_already_red_is_not_counted_as_caught(self):
+        from tools import revert_checks
+
+        tree = self._toy_tree()
+        with mock.patch.object(revert_checks, "suite_is_green",
+                               lambda module, t: False):
+            results, unrestored = revert_checks.run_checks(
+                [("a label", [("subject.py", "VALUE = 1", "VALUE = 2")],
+                  "test_subject")], tree)
+        self.assertEqual([status for _, status, _ in results], ["BASELINE RED"],
+                         "a red module must not launder into 'caught'")
+        self.assertEqual(unrestored, [])
+        self.assertEqual((tree / "subject.py").read_text(encoding="utf-8"),
+                         "VALUE = 1\n", "the revert was applied anyway")
+
+    def test_the_baseline_is_measured_once_per_module_not_once_per_check(self):
+        from tools import revert_checks
+
+        tree = self._toy_tree()
+        seen = []
+
+        def green(module, _tree):
+            seen.append(module)
+            return len(seen) == 1       # green on the baseline, red after
+
+        checks = [(f"check {n}",
+                   [("subject.py", "VALUE = 1", f"VALUE = {n + 2}")],
+                   "test_subject")
+                  for n in range(3)]
+        with mock.patch.object(revert_checks, "suite_is_green", green):
+            results, _ = revert_checks.run_checks(checks, tree)
+        self.assertEqual([s for _, s, _ in results], ["caught"] * 3)
+        self.assertEqual(seen.count("test_subject"), 4,
+                         "expected 1 baseline run plus 3 patched runs")
+
+    def test_the_sandbox_copy_leaves_the_operators_credentials_behind(self):
+        """copytree preserved the 0600 mode, so this was never a
+        world-readable leak -- but it put live GitHub and AI credentials in
+        /tmp on every run, cleaned up only by a `finally` a SIGKILL skips,
+        and ran the deliberately-broken suite with the real keys in
+        os.environ because modules/config.py calls load_dotenv at import."""
+        from tools.revert_checks import _ignore
+
+        names = [".env", ".env.local", ".env.production", ".vulnsight_api_token",
+                 ".ai_key_cooldown.json", "advisories.db", "advisories.db-wal",
+                 "app.py", "modules"]
+        skipped = _ignore(".", names)
+        for secret in (".env", ".env.local", ".env.production",
+                       ".vulnsight_api_token", ".ai_key_cooldown.json"):
+            with self.subTest(name=secret):
+                self.assertIn(secret, skipped, f"{secret} is copied to /tmp")
+        # And the exclusions that were already right stay right.
+        self.assertIn("advisories.db", skipped)
+        self.assertEqual({"app.py", "modules"}, set(names) - skipped)
+
+    def test_the_caught_figure_is_a_measurement_and_not_a_literal(self):
+        """sync_check_counts.py must refuse to write a figure when no run
+        has published one, rather than invent a perfect score."""
+        import json as _json
+
+        from tools import sync_check_counts
+
+        # Asserted as behaviour, not by grepping for the old line: that
+        # string now appears in the comment explaining why it is gone.
+        body = inspect.getsource(sync_check_counts.main)
+        self.assertIn("read_results()", body,
+                      "fix_caught no longer consults the recorded run")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = pathlib.Path(tmp) / "nope.json"
+            with mock.patch.object(sync_check_counts, "RESULTS_PATH", missing):
+                self.assertIsNone(sync_check_counts.read_results())
+            partial = pathlib.Path(tmp) / "r.json"
+            partial.write_text(_json.dumps({"checked": 3, "caught": 2}),
+                               encoding="utf-8")
+            with mock.patch.object(sync_check_counts, "RESULTS_PATH", partial):
+                recorded = sync_check_counts.read_results()
+            self.assertIsNotNone(recorded)
+            assert recorded is not None
+            self.assertEqual(recorded["caught"], 2)
+
+    # The "did the last run actually measure everything?" gate deliberately
+    # does NOT live here. Fifteen checks route to this module, so the harness
+    # runs it -- and an assertion that the recorded run had no gaps would be
+    # red on exactly the run that closes them, which makes this module red,
+    # which produces the gap. It lives in tests/test_records.py, which no
+    # check targets, so it cannot be its own fixed point.
 
 
 class TestTheGeneratorsCannotTruncateWhatTheyRewrite(unittest.TestCase):

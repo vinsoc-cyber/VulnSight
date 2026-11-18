@@ -368,9 +368,15 @@ class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
         future catalog release can introduce one without anyone editing
         this repo.
         """
+        # "resource" and friends are here because they were not: the sweep
+        # asserted "no trap exists today across all ~940 catalog ids" while
+        # "rce" was whitelisted and sat inside five of these words. A decoy
+        # list is only as good as the words somebody thought to put in it.
         decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
                   "medieval", "obstacle", "tentacle", "reevaluated",
-                  "php", "association", "classification", "serialisation")
+                  "php", "association", "classification", "serialisation",
+                  "resource", "source", "enforce", "forced", "coerce",
+                  "reinforced", "outsourced")
         ids = [row[0] for row in cwe.picker_catalog()["rows"]]
         self.assertGreater(len(ids), 500, "the catalog looks truncated")
 

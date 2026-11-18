@@ -451,23 +451,12 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
 .rail-intro { position: relative; padding: 22px 20px 18px; border-bottom: 1px solid var(--line); }
 .rail-intro h2 { margin: 8px 0 6px; font-size: var(--text-xl); letter-spacing: -.03em; }
 .rail-intro p { margin: 0; color: var(--muted); font-size: var(--text-sm); }
-.rail-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-top: 16px;
-}
-.rail-stats span {
-  padding: 8px 8px 7px;
+.rail-reach {
+  margin: 14px 0 0;
   color: var(--faint);
-  background: var(--surface-deep);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  text-align: center;
-  font: var(--weight-medium) var(--text-xs)/1.35 var(--sans);
-  letter-spacing: var(--tracking-flat);
+  font-size: var(--text-xs);
+  line-height: 1.45;
 }
-.rail-stats b { display: block; margin-bottom: 2px; color: var(--ink); font-size: var(--text-base); }
 
 .control-section { padding: 18px 20px 16px; border-bottom: 1px solid var(--line); }
 .section-heading {
@@ -1094,20 +1083,24 @@ kbd {
   letter-spacing: .08em;
 }
 .threat-key-head { padding-bottom: 8px; }
-.threat-scale { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+/* A key, not a panel. These were four more bordered cards in a page already
+   built out of them, and a legend has no business carrying the same visual
+   weight as the thing it explains. The swatch and the words are all a key
+   needs; the boxes were holding nothing. */
+.threat-scale { display: flex; flex-wrap: wrap; gap: 7px 13px; }
 .threat-level {
   min-width: 0;
-  display: grid;
-  grid-template-columns: 4px 1fr;
-  column-gap: 8px;
-  padding: 10px 8px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
 }
-.threat-level i { grid-row: 1 / 3; width: 4px; min-height: 24px; border-radius: var(--radius-pill); background: var(--signal); }
+.threat-level i { flex: 0 0 3px; width: 3px; height: 14px; border-radius: var(--radius-pill); background: var(--signal); }
 .threat-level b { font: 700 var(--text-xs)/1.2 var(--sans); }
-.threat-level small { margin-top: 2px; color: var(--faint); font: 500 var(--text-xs) var(--mono); }
+.threat-level small { color: var(--faint); font: 500 var(--text-xs) var(--mono); }
 .threat-level.critical { --signal: var(--sev-critical); }
 .threat-level.high { --signal: var(--sev-high); }
 .threat-level.medium { --signal: var(--sev-medium); }
@@ -1701,7 +1694,6 @@ code {
   }
   .filters-toggle { width: 36px; min-height: 32px; padding: 0; font-size: 0; }
   .toolbar-actions { grid-template-columns: 1fr; }
-  .threat-scale { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .card-top { flex-direction: column; gap: 8px; }
   .meta { grid-template-columns: 1fr; }
   .verdict-head { flex-wrap: wrap; }
@@ -1820,34 +1812,52 @@ code {
   background: var(--line);
 }
 
+/* Twenty-nine bordered rectangles of equal size said "these are
+   twenty-nine equal things". They are not. BAC casts a net over 17 CWEs and
+   CLICK over 1, and which net you are about to cast is the first thing you
+   need to know when you pick one. That number was always on the tile, as
+   text, in a form you cannot compare without reading all twenty-nine.
+
+   So the box goes and the number becomes a length. The track doubles as the
+   entry's own baseline, which is why losing the border costs no separation:
+   the rule that would otherwise be decoration is the measurement. */
 .map-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  gap: 8px;
+  gap: 2px 18px;
 }
 
 .map-class {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas: "code label" "code count";
-  align-content: center;
+  grid-template-areas: "code label" "code count" "track track";
+  align-content: start;
   gap: 2px 10px;
   min-height: 58px;
-  padding: 10px 12px;
+  padding: 9px 10px 0;
   text-align: left;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: none;
+  border: 0;
   /* The spine. Transparent until picked, so the grid does not shift. */
   border-left: 3px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   cursor: pointer;
 }
-.map-class:hover:not(:disabled) { border-color: var(--line-bright); }
+.map-track {
+  grid-area: track;
+  margin-top: 9px;
+  height: 2px;
+  background: var(--line);
+}
+.map-track > i { display: block; height: 100%; background: var(--line-bright); }
+.map-class:hover:not(:disabled) { background: var(--panel-2); }
+.map-class:hover:not(:disabled) .map-track > i { background: var(--muted); }
 .map-class.is-picked {
-  border-color: var(--line-strong);
   border-left-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
 }
+.map-class.is-picked .map-track { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); }
+.map-class.is-picked .map-track > i { background: var(--accent); }
 .map-code {
   grid-area: code;
   align-self: center;

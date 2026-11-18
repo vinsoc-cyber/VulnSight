@@ -128,5 +128,58 @@ class TestIdentify(unittest.TestCase):
         self.assertEqual(records.identify({"id": "x"}), "")
 
 
+class TestTheRevertBatteryActuallyMeasuredEverything(unittest.TestCase):
+    """`N/M caught` is only evidence if all M were measured.
+
+    This lives in test_records.py for one reason: no revert check routes to
+    this module. The gate belongs somewhere the harness does not run,
+    because an assertion that the last battery had no gaps would otherwise
+    make its own module red, and a red module is precisely what produces a
+    gap -- a fixed point that can never be reached.
+
+    Two shapes of unmeasured pass are counted here. `BASELINE RED` means the
+    module was already failing before the revert, so "red afterwards" proved
+    nothing; the harness could not tell the two apart at all until it began
+    running each module unpatched first. `ANCHOR MISSING` means the text a
+    check edits has moved, so the check has silently stopped checking.
+    """
+
+    def _measured(self):
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        from tools import sync_check_counts
+        return sync_check_counts.read_results()
+
+    def test_a_measurement_exists_at_all(self):
+        measured = self._measured()
+        self.assertIsNotNone(
+            measured,
+            "docs/revert-results.json is missing. Run "
+            "`python tools/revert_checks.py` and commit what it writes; the "
+            "docs quote it rather than asserting a score.")
+
+    def test_the_recorded_run_covers_the_checks_that_exist_today(self):
+        from tools.checks import GROUPS
+
+        measured = self._measured()
+        assert measured is not None
+        self.assertEqual(
+            measured["checked"], sum(len(c) for c in GROUPS.values()),
+            "checks were added or removed since the last recorded run")
+
+    def test_no_check_was_scored_without_being_measured(self):
+        measured = self._measured()
+        assert measured is not None
+        self.assertEqual(
+            measured.get("baseline_red", 0), 0,
+            "a module was already red before its revert, so every check "
+            "routed to it was scored without being measured")
+        self.assertEqual(
+            measured.get("anchor_missing", 0), 0,
+            "a check's anchor text has moved, so it silently stopped "
+            "checking anything")
+
+
 if __name__ == "__main__":
     unittest.main()

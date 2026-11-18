@@ -290,9 +290,26 @@ class TestDocsMatchTheCode(unittest.TestCase):
             for a, b in re.findall(r"\*\*(\d+)/(\d+) caught\*\*", text):
                 stated += 1
                 with self.subTest(doc=name):
+                    # Against the recorded run, not against (total, total).
+                    # Asserting a perfect score was the third copy of the
+                    # same assumption: the generator wrote N/N whatever had
+                    # happened, the harness scored a red module as caught,
+                    # and this test could only pass if the doc claimed 100%.
+                    # A real gap has to be able to show up here.
+                    measured = sync_check_counts.read_results()
+                    self.assertIsNotNone(
+                        measured,
+                        "docs/revert-results.json is missing: run "
+                        "`python tools/revert_checks.py` and commit it")
+                    assert measured is not None
                     self.assertEqual(
-                        (int(a), int(b)), (total, total),
-                        f"{name} claims {a}/{b}; CHECKS has {total}")
+                        measured["checked"], total,
+                        f"the recorded run covered {measured['checked']} "
+                        f"check(s); CHECKS has {total}. Re-run the battery.")
+                    self.assertEqual(
+                        (int(a), int(b)), (measured["caught"], total),
+                        f"{name} claims {a}/{b}; the run measured "
+                        f"{measured['caught']}/{total}")
         self.assertGreater(
             stated, 0,
             "no doc states the revert-check tally any more; this check is "

@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 744 tests: 696 offline + 48 browser
+.venv/bin/python -m unittest discover -s tests        # 770 tests: 719 offline + 51 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -14,23 +14,23 @@ OSV and the AI provider are all mocked.
 | File | Tests | Covers |
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
-| `test_ai_classifier.py` | 87 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_ai_classifier.py` | 93 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
 | `test_app.py` | 77 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 44 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
-| `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
+| `test_security.py` | 46 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
 | `test_nvd_client.py` | 39 | date windowing, normalisation, rate-limit and 403 handling |
-| `test_http_retry.py` | 29 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
+| `test_http_retry.py` | 32 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
 | `test_osv_client.py` | 32 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
-| `test_ui_e2e.py` | 48 | the real UI in a browser — *optional*, see below |
+| `test_ui_e2e.py` | 51 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
 | `test_jobs.py` | 23 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
-| `test_ghsa_client.py` | 26 | `gh` invocation, cursor pagination, `Link` parsing |
+| `test_ghsa_client.py` | 29 | `gh` invocation, cursor pagination, `Link` parsing |
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
 | `test_docs.py` | 21 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_deployment.py` | 16 | Dockerfile, compose, entrypoint and run.sh: the bind the image declares, the user it drops to, head parity |
-| `test_cleanup_stays_clean.py` | 26 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
-| `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
+| `test_cleanup_stays_clean.py` | 30 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
+| `test_records.py` | 16 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 19 | batching, malformed responses |
 | `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
@@ -60,11 +60,11 @@ a third-party dependency and it **skips itself** unless both pieces are present:
 ```bash
 pip install -r requirements-dev.txt
 playwright install chromium          # or rely on a system Chrome
-.venv/bin/python -m unittest discover -s tests    # the 48 e2e tests join in
+.venv/bin/python -m unittest discover -s tests    # the 51 e2e tests join in
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 744 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 770 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -85,6 +85,7 @@ test corresponds to a defect that actually shipped:
 | `TestTheComboboxSaysWhatEnterWillDo` | a match is highlighted before any key is pressed, and the "no matches" row is not announced as an option |
 | `TestToastsShareOneLiveRegion` | every toast lands in one named live region, so two at once do not compete |
 | `TestTheOpeningScreenIsTheTaxonomy` | every class is offered, the map and the rail cannot disagree, and picking one keeps focus on the tile |
+| `TestTheClassMeasureIsReal` | each class entry's track is painted, is proportional to its CWE count, and the widest class fills it — a style attribute would be dropped by the CSP and render every one of them empty |
 
 ### Assert on what is rendered
 
@@ -217,7 +218,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 129 named bugs it re-introduces the bug in the working tree, runs the
+For each of 142 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

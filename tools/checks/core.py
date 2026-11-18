@@ -49,7 +49,11 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "prompt fence removed",
         [("modules/ai_classifier.py",
-          '    text = text.replace(_FENCE_OPEN, "").replace(_FENCE_CLOSE, "")',
+          "    while True:\n"
+          '        stripped = _FENCE_MARKER_RE.sub("", text)\n'
+          "        if stripped == text:\n"
+          "            break\n"
+          "        text = stripped",
           "    pass")],
         "test_ai_classifier",
     ),

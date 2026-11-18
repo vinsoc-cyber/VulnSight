@@ -6,6 +6,12 @@ frontend. This records what happened to each finding, including the ones
 deliberately left alone and why — so "it was reviewed" is checkable rather
 than asserted.
 
+**This page only covers findings that were acted on.** A later whole-tree
+pass found defects that are verified and still open; they are listed in
+[open findings](open-findings.md), including several this page's own
+structure would otherwise have hidden. Read that page before concluding
+anything from this one.
+
 `fixed` means the behaviour changed and a test covers it. `kept` means the
 finding was real and the behaviour is unchanged on purpose. `doc` means the
 code was right and the documentation was wrong.
@@ -18,17 +24,29 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 744 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 770 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **129/129 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **142/142 caught** |
+
+The `caught` figure is read from `docs/revert-results.json`, which
+`tools/revert_checks.py` writes when it runs the whole battery.
+`tools/sync_check_counts.py` used to write `**N/N caught**` unconditionally
+— the strongest evidence row in this document was generated to read as a
+perfect score, by a tool that runs no checks. It now refuses to write the
+figure at all when no run has published one.
+
+The harness itself had the matching flaw: it only ever observed "red after
+the revert", which is also what an already-failing module looks like, so
+every check routed to a red module reported `caught`. It measures each
+module unpatched first now and reports `BASELINE RED` instead.
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 129 named bugs in the working tree, runs the test module that is
+each of 142 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 129 checks, by area
+## The 142 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -317,7 +335,7 @@ codebase and the test module that now refuses to let it back in.
 | app.js loses its scope wrapper | `tests/test_frontend_js.py` |
 | module-map drift test stops deriving | `tests/test_docs.py` |
 
-### HTTP layer, jobs, cache, config, AI classifier (31)
+### HTTP layer, jobs, cache, config, AI classifier (44)
 
 | Reverting this | is caught by |
 |---|---|
@@ -352,6 +370,19 @@ codebase and the test module that now refuses to let it back in.
 | the rate limiter matches the path, so /api/v1 is unlimited | `tests/test_app.py` |
 | the OpenAPI document is rebuilt for every unauthenticated request | `tests/test_openapi.py` |
 | the AI endpoints are missing from the OpenAPI document | `tests/test_openapi.py` |
+| an advisory can close its own evidence fence again | `tests/test_ai_classifier.py` |
+| a reply that never answers is a confident no again | `tests/test_ai_classifier.py` |
+| a duplicated API key is kept and can never be cooled | `tests/test_ai_classifier.py` |
+| the rate-limit bucket trusts the leftmost X-Forwarded-For entry | `tests/test_security.py` |
+| an advised Retry-After of zero cancels the backoff again | `tests/test_http_retry.py` |
+| a bad later GHSA page discards the pages already fetched | `tests/test_ghsa_client.py` |
+| the rce prefilter trap comes back | `tests/test_cwe_categories.py` |
+| the revert harness stops checking a green baseline | `tests/test_cleanup_stays_clean.py` |
+| the sandbox copies the operator's .env into /tmp again | `tests/test_cleanup_stays_clean.py` |
+| the caught figure goes back to being asserted, not measured | `tests/test_cleanup_stays_clean.py` |
+| the class measure stops being proportional | `tests/test_ui_e2e.py` |
+| the status pill state is unannounced at 480px again | `tests/test_frontend_js.py` |
+| the unreachable-source dot differs only by colour again | `tests/test_frontend_js.py` |
 
 ### Search pipeline and source clients (30)
 

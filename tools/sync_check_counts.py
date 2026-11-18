@@ -17,6 +17,7 @@ executable checks beside it is something a reader can run.
 from __future__ import annotations
 
 import pathlib
+import json
 import re
 import sys
 
@@ -30,6 +31,9 @@ from tools.checks import GROUPS  # noqa: E402  (needs the path above)
 DISPOSITIONS = ROOT / "docs" / "review-dispositions.md"
 TESTING = ROOT / "docs" / "testing.md"
 TESTS = ROOT / "tests"
+# What the last whole-battery revert run measured. Written by
+# tools/revert_checks.py; this tool quotes it and refuses to invent it.
+RESULTS_PATH = ROOT / "docs" / "revert-results.json"
 
 BEGIN = "<!-- begin generated check index -->"
 END = "<!-- end generated check index -->"
@@ -42,6 +46,23 @@ TITLES = {
     "frontend": "CWE taxonomy and the browser code",
     "cleanup": "Removals, extractions and caches (property-asserted)",
 }
+
+
+def read_results() -> dict | None:
+    """What `tools/revert_checks.py` recorded on its last whole-battery run.
+
+    None when there is no such record, which is not the same as zero: the
+    caller must refuse to write a figure rather than invent one.
+    """
+    try:
+        data = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not all(isinstance(data.get(k), int) for k in ("checked", "caught")):
+        return None
+    return data
 
 
 def suite_size() -> int:
@@ -92,10 +113,33 @@ def main(argv: list[str]) -> int:
             return f"{total} named bugs"
 
         def fix_caught(match: re.Match[str]) -> str:
-            if (int(match.group(1)), int(match.group(2))) != (total, total):
+            """Write what the last whole-battery run measured.
+
+            This used to return f"**{total}/{total} caught**" whatever the
+            document said and whatever had happened -- so the strongest
+            evidence row in docs/review-dispositions.md was generated to
+            read as a perfect score, by a tool that has never run a single
+            check. Three checks could start failing and `--check` would stay
+            green on a figure the generator itself had invented.
+            """
+            measured = read_results()
+            if measured is None:
+                drift.append(
+                    f"{name}: no measurement to quote. Run "
+                    "`python tools/revert_checks.py` (whole battery, no "
+                    "label filter) and commit docs/revert-results.json.")
+                return match.group(0)
+            if measured["checked"] != total:
+                drift.append(
+                    f"{name}: the recorded run covered {measured['checked']} "
+                    f"check(s), there are now {total}. Re-run the battery.")
+                return match.group(0)
+            caught = measured["caught"]
+            if (int(match.group(1)), int(match.group(2))) != (caught, total):
                 drift.append(f"{name}: claims {match.group(1)}/"
-                             f"{match.group(2)} caught, there are {total} checks")
-            return f"**{total}/{total} caught**"
+                             f"{match.group(2)} caught, the run measured "
+                             f"{caught}/{total}")
+            return f"**{caught}/{total} caught**"
 
         def fix_pass(match: re.Match[str]) -> str:
             if int(match.group(1)) != tests:
@@ -103,9 +147,18 @@ def main(argv: list[str]) -> int:
                              f"the suite has {tests}")
             return f"| {tests} pass |"
 
-        text = re.sub(r"(\d+) named bugs", fix_named, text)
-        text = re.sub(r"\*\*(\d+)/(\d+) caught\*\*", fix_caught, text)
-        return re.sub(r"\| (\d+) pass \|", fix_pass, text)
+        # subn, not sub: an anchor that has been reworded or deleted used to
+        # match nothing, leave `drift` empty, and make --check report success
+        # on a document that no longer carries any derived figure at all.
+        for pattern, repl, what in (
+            (r"(\d+) named bugs", fix_named, "'N named bugs'"),
+            (r"\*\*(\d+)/(\d+) caught\*\*", fix_caught, "'**N/N caught**'"),
+            (r"\| (\d+) pass \|", fix_pass, "'| N pass |'"),
+        ):
+            text, hits = re.subn(pattern, repl, text)
+            if not hits and name == DISPOSITIONS.name:
+                drift.append(f"{name}: no {what} figure left to update")
+        return text
 
     for path in (DISPOSITIONS, TESTING):
         original = path.read_text(encoding="utf-8")

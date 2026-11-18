@@ -534,13 +534,22 @@ _PARENTHESISED = re.compile(r"\(([^)]{3,})\)")
 # PHP advisory; CWE-1192 gave "soc", CWE-462 gave "alist", and CWE-79's
 # alternate terms include "css".
 _USEFUL_SHORT_TERMS = frozenset({
-    "xss", "csrf", "ssrf", "xxe", "rce", "idor", "bola", "bfla", "sqli",
+    # "rce" is NOT here. Terms in this set are matched as bare substrings of
+    # advisory text, and "rce" sits inside resource, source, enforce, forced
+    # and coerce. Measured against the repo's own osv_cache/Go.zip: 901 of
+    # 4,841 CWE-less records contain "rce" and only 30 contain "remote code
+    # execution" -- so selecting CWE-78 or CWE-94 filled the pool with
+    # "consumption of significant system resources", at one paid AI call
+    # each, crowding out the real matches before max_results. Same shape as
+    # the CWE-616 "(PHP)" trap. The long form survives as its own term.
+    "xss", "csrf", "ssrf", "xxe", "idor", "bola", "bfla", "sqli",
     "ssti", "lfi", "rfi", "xpath", "ldap", "dos", "prng", "toctou", "uaf",
     "smtp", "crlf", "http", "json", "yaml", "xml", "jwt", "cors", "redos",
 })
 # Matched as a substring of advisory text, so a term also has to be a word
 # that does not live inside unrelated ones.
-_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl")
+_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl",
+                     "resource", "source", "enforce", "forced", "coerce")
 
 
 def _is_useful_prefilter_term(term: str) -> bool:

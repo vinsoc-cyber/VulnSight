@@ -423,4 +423,117 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
         [("modules/openapi.py", _AI_PATHS, "")],
         "test_openapi",
     ),
+    (
+        "an advisory can close its own evidence fence again",
+        [("modules/ai_classifier.py",
+          "    while True:\n"
+          "        stripped = _FENCE_MARKER_RE.sub(\"\", text)\n"
+          "        if stripped == text:\n"
+          "            break\n"
+          "        text = stripped",
+          "    text = text.replace(_FENCE_OPEN, \"\").replace(_FENCE_CLOSE, \"\")")],
+        "test_ai_classifier",
+    ),
+    (
+        "a reply that never answers is a confident no again",
+        [("modules/ai_classifier.py",
+          "    answer = _coerce_bool(obj.get(\"is_match\"))\n"
+          "    if answer is None:",
+          "    answer = _coerce_bool(obj.get(\"is_match\")) or False\n"
+          "    if False:")],
+        "test_ai_classifier",
+    ),
+    (
+        "a duplicated API key is kept and can never be cooled",
+        [("modules/ai_classifier.py",
+          "    tokens = (list(dict.fromkeys(t.strip() for t in raw_token.split(\",\") if t.strip()))\n"
+          "              if raw_token else [])",
+          "    tokens = [t.strip() for t in raw_token.split(\",\") if t.strip()] if raw_token else []")],
+        "test_ai_classifier",
+    ),
+    (
+        "the rate-limit bucket trusts the leftmost X-Forwarded-For entry",
+        [("modules/security.py",
+          "        chain = [part.strip() for part in forwarded_for.split(\",\") if part.strip()]",
+          "        chain = list(reversed([part.strip() for part in forwarded_for.split(\",\") if part.strip()]))")],
+        "test_security",
+    ),
+    (
+        "an advised Retry-After of zero cancels the backoff again",
+        [("modules/http_retry.py",
+          "            delay = backoff_delay(attempt, base_delay)\n"
+          "            if advised is not None and advised > delay:\n"
+          "                delay = advised",
+          "            delay = advised if advised is not None else backoff_delay(attempt, base_delay)")],
+        "test_http_retry",
+    ),
+    (
+        "a bad later GHSA page discards the pages already fetched",
+        [("modules/ghsa_client.py",
+          "        if not isinstance(batch, list):\n"
+          "            if not results:\n"
+          "                raise GhCliError(\"unexpected GHSA response shape (expected a list)\")",
+          "        if not isinstance(batch, list):\n"
+          "            if True:\n"
+          "                raise GhCliError(\"unexpected GHSA response shape (expected a list)\")")],
+        "test_ghsa_client",
+    ),
+    (
+        "the rce prefilter trap comes back",
+        [("modules/cwe_categories.py",
+          '    "xss", "csrf", "ssrf", "xxe", "idor", "bola", "bfla", "sqli",',
+          '    "xss", "csrf", "ssrf", "xxe", "rce", "idor", "bola", "bfla", "sqli",')],
+        "test_cwe_categories",
+    ),
+    (
+        "the revert harness stops checking a green baseline",
+        [("tools/revert_checks.py",
+          "        if module not in baseline:\n"
+          "            baseline[module] = suite_is_green(module, tree)\n"
+          "        if not baseline[module]:",
+          "        if module not in baseline:\n"
+          "            baseline[module] = True\n"
+          "        if not baseline[module]:")],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "the sandbox copies the operator's .env into /tmp again",
+        [("tools/revert_checks.py",
+          '        ".env", ".vulnsight_api_token", ".ai_key_cooldown.json"}',
+          "        }")],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "the caught figure goes back to being asserted, not measured",
+        [("tools/sync_check_counts.py",
+          "            measured = read_results()\n"
+          "            if measured is None:",
+          "            measured = {\"checked\": total, \"caught\": total}\n"
+          "            if measured is None:")],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "the class measure stops being proportional",
+        [("static/app.js",
+          "if (fill) fill.style.width = (Math.max(n / widest, 0.03) * 100).toFixed(2) + '%';",
+          "if (fill) fill.style.width = '100%';")],
+        "test_ui_e2e",
+    ),
+    (
+        "the status pill state is unannounced at 480px again",
+        [("static/style.css",
+          "  .pill-value {\n"
+          "    position: absolute;",
+          "  .pill-value {\n"
+          "    display: none;\n"
+          "    position: absolute;")],
+        "test_frontend_js",
+    ),
+    (
+        "the unreachable-source dot differs only by colour again",
+        [("static/style.css",
+          "  background: none;\n  border: 2px solid var(--bad);",
+          "  background: var(--bad);\n  border: 0;")],
+        "test_frontend_js",
+    ),
 ]

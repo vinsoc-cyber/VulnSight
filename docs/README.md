@@ -40,6 +40,10 @@ Start at the top if you are new; each page is self-contained otherwise.
 - **[Review dispositions](review-dispositions.md)** — every finding from the
   code review and what happened to it, including the ones deliberately left
   alone and why.
+- **[Open findings](open-findings.md)** — the part of the review that is
+  *not* done: defects found, reproduced, and not yet fixed. Read it before
+  concluding anything from the dispositions table, which only covers
+  findings that were acted on.
 
 ## Conventions used in these docs
 

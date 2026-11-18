@@ -74,6 +74,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 | [Design](docs/design.md) | the plan this interface is built to, and the measurements that check it |
 | [Operations](docs/operations.md) | Exposure, caches, quotas, troubleshooting |
 | [Review dispositions](docs/review-dispositions.md) | Every finding from the code review, and what happened to it |
+| [Open findings](docs/open-findings.md) | Defects found and reproduced by the review that are **not** fixed yet |
 | [SECURITY.md](SECURITY.md) | Threat model and how to report a vulnerability |
 
 ## Tests
@@ -82,7 +83,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 .venv/bin/python -m unittest discover -s tests    # 543 tests; 517 need no credentials
 ```
 
-The 48 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
+The 51 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
 and a browser are installed — see [Testing](docs/testing.md).
 
 ## Status and limits

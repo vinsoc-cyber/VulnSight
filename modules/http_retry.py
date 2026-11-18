@@ -161,7 +161,15 @@ def with_retries(
             if not retryable(exc) or attempt == attempts - 1:
                 raise
             advised = retry_after_of(exc)
-            delay = advised if advised is not None else backoff_delay(attempt, base_delay)
+            # A Retry-After of 0 -- which a proxy can send, and which a past
+            # HTTP-date or an unparseable value also lands on -- used to
+            # cancel the backoff outright, because it is not None. The whole
+            # attempt budget then went out back-to-back with no delay at all,
+            # against a host that had just said it was overloaded. An advised
+            # wait is a floor on the backoff, never a replacement for it.
+            delay = backoff_delay(attempt, base_delay)
+            if advised is not None and advised > delay:
+                delay = advised
             delay = min(delay, MAX_BACKOFF)
             if deadline is not None and time.monotonic() + delay >= deadline:
                 logger.warning("%s: retry would exceed the deadline", what)

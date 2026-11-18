@@ -62,11 +62,14 @@
           <p>Filter GHSA, NVD and OSV by bug class, ecosystem and package. Optionally confirm matches with AI.</p>
         </div>
         <button class="rail-close" id="filters-close" type="button" aria-label="Close filters">×</button>
-        <div class="rail-stats" role="group" aria-label="Available search dimensions">
-          <span><b>4</b> sources</span>
-          <span><b>{{ categories|length }}</b> classes</span>
-          <span><b>{{ cwe_count }}</b> CWEs</span>
-        </div>
+        <!-- Three bordered boxes holding "4 / 29 / 944" used to sit here.
+             None of the three is a number anyone acts on, and the shape --
+             a big figure over a small label, in a row of identical cards --
+             is the default hero treatment this design is meant to avoid.
+             The counts that matter are per-class, and they are now a length
+             you can compare in the class field itself. -->
+        <p class="rail-reach">{{ categories|length }} bug classes over
+          {{ cwe_count }} CWEs, across four sources.</p>
       </div>
 
       <section class="control-section history-section" id="history-section" aria-labelledby="history-heading" hidden>

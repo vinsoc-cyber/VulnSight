@@ -379,11 +379,30 @@ def client_key(remote_addr: str | None, forwarded_for: str | None) -> str:
     mint unlimited buckets. Ignoring it means everyone behind a proxy shares the
     proxy's address, which is wrong in the other direction — so which failure
     you get has to be the operator's choice, not a default.
+
+    The entry is counted from the RIGHT. A proxy does not overwrite this
+    header, it appends to it — nginx's own `$proxy_add_x_forwarded_for` is
+    "whatever the client sent, plus the peer address I saw" — so the leftmost
+    entry is still the attacker's string even behind a proxy you fully
+    control. Reading it meant anyone could mint a fresh rate-limit bucket per
+    request with `X-Forwarded-For: 10.0.0.<n>`, and the limiter is the only
+    thing metering the operator's paid AI calls and GitHub quota. It also ran
+    the other way: sending a colleague's address 30 times locked them out.
+
+    VULNSIGHT_TRUSTED_HOPS is how many proxies append before the request
+    reaches this process; with the default of 1 the last entry is the address
+    the single trusted proxy observed.
     """
     if forwarded_for and env_flag("VULNSIGHT_TRUST_PROXY", False):
-        first = forwarded_for.split(",")[0].strip()
-        if first:
-            return first
+        chain = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        hops = max(env_int("VULNSIGHT_TRUSTED_HOPS", 1), 1)
+        if len(chain) >= hops:
+            return chain[-hops]
+        # Fewer entries than hops means the chain is shorter than configured:
+        # the client stripped it or a proxy did not append. Falling back to
+        # the leftmost here would hand back the only entry the client chose,
+        # so use the peer address, which no client can forge.
+        return remote_addr or "unknown"
     return remote_addr or "unknown"
 
 

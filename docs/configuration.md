@@ -66,11 +66,26 @@ limit is N times the configured one. The shipped image uses one worker.
 | `VULNSIGHT_RATE_WINDOW` | `60` s | Window length |
 | `VULNSIGHT_SEARCH_RATE` | `30` | `/api/search` **and** `/api/jobs` calls per window — they share one bucket, since queueing a search costs the same upstream budget as running one |
 | `VULNSIGHT_AI_RATE` | `20` | `/api/ai/classify` and `/api/ai/test` calls per window |
-| `VULNSIGHT_TRUST_PROXY` | unset | Read the client address from the first `X-Forwarded-For` entry. Only set this where a proxy you control writes that header: it is client-supplied otherwise, and one caller can mint unlimited buckets with it. Left unset, everyone behind a proxy shares its address |
+| `VULNSIGHT_TRUST_PROXY` | unset | Read the client address from `X-Forwarded-For`, counting from the **right**. Only set this behind a proxy you control. Left unset, everyone behind a proxy shares its address |
+| `VULNSIGHT_TRUSTED_HOPS` | `1` | How many proxies append to `X-Forwarded-For` before the request reaches this process. Only read when `VULNSIGHT_TRUST_PROXY` is set |
 
 A throttled request gets `429` with `Retry-After`. The limiter runs *after*
 authentication, so requests rejected for a bad token spend nothing — an
 unauthenticated caller cannot exhaust the operator's budget.
+
+**Why the entry is counted from the right.** A proxy does not overwrite
+`X-Forwarded-For`, it appends to it — nginx's own
+`$proxy_add_x_forwarded_for` is "whatever the client sent, plus the peer
+address I saw". The leftmost entry is therefore still the attacker's string
+even behind a proxy you fully control. Reading it meant anyone could send
+`X-Forwarded-For: 10.0.0.<n>` and get a fresh rate-limit bucket on every
+request, past the limiter that is the only thing metering the operator's
+paid AI calls and GitHub quota; and it ran the other way too, since sending
+a colleague's address spent *their* bucket. Set `VULNSIGHT_TRUSTED_HOPS` to
+the number of proxies in front of this process — with the default of 1, the
+last entry is the address your single proxy observed. If the chain is
+shorter than that, the peer address is used instead, because a short chain
+means the client supplied all of it.
 
 ## Background jobs
 

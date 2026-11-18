@@ -201,9 +201,13 @@ class TestTheStatusPillStaysReadable(unittest.TestCase):
         self.assertIsNotNone(ok, "no .dot.ok rule")
         self.assertIsNotNone(bad, "no .dot.bad rule")
         assert ok is not None and bad is not None
-        self.assertRegex(bad.group(1), r"border:\s*\d",
+        # `border: 0` is not a ring, and `\d` matched it: the revert check
+        # for this rule reported NOT CAUGHT until the width was required.
+        self.assertRegex(bad.group(1), r"border:\s*[1-9]\d*px",
                          "the unreachable dot is a ring, not a second colour")
-        self.assertNotRegex(ok.group(1), r"border:\s*\d",
+        self.assertRegex(bad.group(1), r"background:\s*none",
+                         "a ring with a fill is still just a coloured dot")
+        self.assertNotRegex(ok.group(1), r"border:\s*[1-9]\d*px",
                             "the reachable dot is filled, so the two differ")
 
     def test_mono_is_not_used_as_texture_on_the_pill(self):

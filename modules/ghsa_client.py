@@ -261,14 +261,30 @@ def fetch_advisories(params: SearchParams) -> list[dict]:
             logger.warning("GHSA: keeping %d advisory(ies) from the pages that "
                            "succeeded; a later page kept failing", len(results))
             break
+        # Both of the checks below used to raise from inside this loop,
+        # three lines under the handler that exists to keep earlier pages --
+        # so a bad shape or a bad cursor on page 4 discarded pages 1-3, which
+        # is the regression that handler was written for. They end the walk
+        # instead, and only fail the source outright if nothing was collected.
         if not isinstance(batch, list):
-            raise GhCliError("unexpected GHSA response shape (expected a list)")
+            if not results:
+                raise GhCliError("unexpected GHSA response shape (expected a list)")
+            logger.warning("GHSA: page %d was not a list; keeping %d advisory(ies) "
+                           "from the pages that parsed", guard, len(results))
+            break
         results.extend(batch)
         if not next_url:
             break
         # next_url is a full https URL; gh api accepts a full URL too, but we
         # strip to the path+query for consistency.
-        path = _strip_to_path(next_url)
+        try:
+            path = _strip_to_path(next_url)
+        except GhCliError:
+            if not results:
+                raise
+            logger.warning("GHSA: refusing the page-%d cursor; keeping %d "
+                           "advisory(ies) already fetched", guard + 1, len(results))
+            break
 
     return results[: params.max_results]
 

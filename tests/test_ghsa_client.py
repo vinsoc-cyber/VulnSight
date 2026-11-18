@@ -312,6 +312,71 @@ class TestPaginationCursorHandling(unittest.TestCase):
         self.assertIn("after=abc", path)
 
 
+class TestABadLaterPageAlsoKeepsWhatSucceeded(unittest.TestCase):
+    """The handler that preserves earlier pages catches GhCliError raised by
+    the fetch. Two more GhCliError raise sites sat in the same loop body a few
+    lines below it, outside the try -- so a page that parsed to the wrong
+    shape, or a cursor pointing somewhere it should not, discarded every page
+    already paid for. That is the regression the handler was written for,
+    reached by the paths it did not cover."""
+
+    def _page_one_then(self, second_stdout, next_url=None, headers_only=False):
+        url = next_url or "https://api.github.com/advisories?page=2"
+        calls = {"i": 0}
+
+        def _run(cmd, capture_output, text, timeout):
+            calls["i"] += 1
+            if calls["i"] == 1:
+                headers = ("HTTP/2 200\ncontent-type: application/json"
+                           f'\nLink: <{url}>; rel="next"')
+                return mock.Mock(
+                    returncode=0,
+                    stdout=headers + "\n\n" + json.dumps([{"ghsa_id": "A"}]),
+                    stderr="")
+            return mock.Mock(
+                returncode=0,
+                stdout="HTTP/2 200\ncontent-type: application/json\n\n" + second_stdout,
+                stderr="")
+
+        return _run, calls
+
+    def test_a_later_page_of_the_wrong_shape_keeps_the_earlier_ones(self):
+        run, _ = self._page_one_then(json.dumps({"message": "Not Found"}))
+        with mock.patch("modules.ghsa_client.subprocess.run", side_effect=run), \
+             mock.patch("modules.ghsa_client.shutil.which", return_value="/usr/bin/gh"):
+            out = ghsa.fetch_advisories(ghsa.SearchParams(cwes=["79"]))
+        self.assertEqual([a["ghsa_id"] for a in out], ["A"],
+                         "page 1 was discarded because page 2 was an object")
+
+    def test_a_refused_cursor_keeps_the_pages_already_fetched(self):
+        run, _ = self._page_one_then(
+            json.dumps([{"ghsa_id": "B"}]),
+            next_url="https://api.github.com/advisories/../user")
+        with mock.patch("modules.ghsa_client.subprocess.run", side_effect=run), \
+             mock.patch("modules.ghsa_client.shutil.which", return_value="/usr/bin/gh"):
+            out = ghsa.fetch_advisories(ghsa.SearchParams(cwes=["79"]))
+        self.assertEqual([a["ghsa_id"] for a in out], ["A"],
+                         "a hostile cursor must cost the rest of the walk, "
+                         "not the advisories already collected")
+
+    def test_a_bad_shape_on_the_very_first_page_still_fails_the_source(self):
+        """Keeping nothing is not the same as succeeding with nothing: with
+        no results at all the source really did fail and must say so."""
+        calls = {"i": 0}
+
+        def _run(cmd, capture_output, text, timeout):
+            calls["i"] += 1
+            return mock.Mock(
+                returncode=0,
+                stdout='HTTP/2 200\ncontent-type: application/json\n\n{"message": "nope"}',
+                stderr="")
+
+        with mock.patch("modules.ghsa_client.subprocess.run", side_effect=_run), \
+             mock.patch("modules.ghsa_client.shutil.which", return_value="/usr/bin/gh"), \
+             self.assertRaises(ghsa.GhCliError):
+            ghsa.fetch_advisories(ghsa.SearchParams(cwes=["79"]))
+
+
 class TestAFailingLaterPageKeepsWhatSucceeded(unittest.TestCase):
     """Losing 200 advisories because page 3 of 5 failed made a flaky page look
     like a dead source. Whatever has already been collected is returned."""

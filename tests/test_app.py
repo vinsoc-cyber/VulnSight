@@ -1,6 +1,7 @@
 """End-to-end Flask endpoint tests (offline: gh CLI, OSV and AI all mocked;
 cache pointed at a temp SQLite DB before the app module is imported)."""
 
+import re
 import os
 import shutil
 import sys
@@ -395,9 +396,18 @@ class TestFlaskApp(unittest.TestCase):
         # Screen-reader landmarks: one h1, and no aria-label stranded on a bare
         # <div> (role=generic drops the label).
         self.assertEqual(html.count("<h1"), 1)
-        for labelled_div in ('class="system-status"', 'class="rail-stats"', 'class="threat-key"'):
-            index = html.index(labelled_div)
-            self.assertIn('role="group"', html[index - 40:index + 80], labelled_div)
+        # Derived, not a hand-listed set of classes: the list named three,
+        # one of which has since been deleted, and a new labelled <div> would
+        # never have been added to it. Every bare <div> carrying an
+        # aria-label needs a role, because role=generic drops the label.
+        for tag in re.findall(r"<div\b[^>]*>", html):
+            if "aria-label" not in tag:
+                continue
+            with self.subTest(tag=tag[:70]):
+                self.assertRegex(
+                    tag, r'role="[a-z]+"',
+                    "a <div> with an aria-label and no role is announced "
+                    "as role=generic, which drops the label")
         self.assertLess(len(html), 60000, "index page should stay lean")
         for export_format in ("csv", "json", "csv-matches"):
             self.assertIn(f'data-fmt="{export_format}"', html)

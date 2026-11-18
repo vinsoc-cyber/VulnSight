@@ -93,7 +93,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "junk short forms come back into the derived keywords",
         [("modules/cwe_categories.py",
-          '_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl")',
+          '_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl",\n'
+          '                     "resource", "source", "enforce", "forced", "coerce")',
           '_SUBSTRING_DECOYS = ()')],
         "test_cwe_categories",
     ),
@@ -104,7 +105,7 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
         # changed nothing. Remove the terms outright.
         "real short search terms are rejected as noise",
         [("modules/cwe_categories.py",
-          '    "xss", "csrf", "ssrf", "xxe", "rce", "idor", "bola", "bfla", "sqli",\n'
+          '    "xss", "csrf", "ssrf", "xxe", "idor", "bola", "bfla", "sqli",\n'
           '    "ssti", "lfi", "rfi", "xpath", "ldap", "dos", "prng", "toctou", "uaf",\n'
           '    "smtp", "crlf", "http", "json", "yaml", "xml", "jwt", "cors", "redos",\n',
           "")],

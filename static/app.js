@@ -707,6 +707,11 @@
         if (!group) groups.push(group = { name: c.group, items: [] });
         group.items.push(c);
       });
+      // The widest class sets the scale: its track runs the full width and
+      // every other one is read against it. Without a common denominator the
+      // bars would only say "some number", which the text already says.
+      const widest = CLASSES.reduce(
+        (m, c) => Math.max(m, (c.cwes || []).length), 0) || 1;
       map.innerHTML = groups.map(group => `
         <section class="map-group">
           <h4 class="map-group-name">${esc(group.name)}</h4>
@@ -721,10 +726,24 @@
                 <span class="map-code">${esc(c.code || c.key.toUpperCase())}</span>
                 <span class="map-label">${esc(c.label)}</span>
                 <span class="map-count">${n} CWE${n === 1 ? '' : 's'}</span>
+                <span class="map-track" aria-hidden="true"><i></i></span>
               </button>`;
             }).join('')}
           </div>
         </section>`).join('');
+
+      // Set here and not as a style attribute: the CSP is `style-src 'self'`
+      // with no unsafe-inline, so an inline style is dropped and every track
+      // renders empty -- which looks like a design choice rather than a bug.
+      // CSSOM writes are not governed by style-src, and a browser test
+      // asserts a non-zero width so a CSP change cannot quietly flatten them.
+      map.querySelectorAll('.map-class').forEach(el => {
+        const cls = CLASSES.find(c => c.key === el.dataset.class);
+        const n = cls ? (cls.cwes || []).length : 0;
+        const fill = el.querySelector('.map-track > i');
+        // A one-CWE class still gets a visible mark rather than nothing.
+        if (fill) fill.style.width = (Math.max(n / widest, 0.03) * 100).toFixed(2) + '%';
+      });
     }
 
     function renderSelection() {

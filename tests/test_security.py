@@ -281,12 +281,47 @@ class TestClientKey(unittest.TestCase):
             self.assertEqual(security.client_key("10.0.0.1", "1.2.3.4"), "10.0.0.1")
 
     def test_forwarded_for_used_when_proxy_is_trusted(self):
+        """The entry is counted from the right, because a proxy appends to
+        this header rather than overwriting it. This test used to assert the
+        leftmost entry, which is the half the client wrote."""
         with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
             self.assertEqual(
-                security.client_key("10.0.0.1", "1.2.3.4, 10.0.0.1"), "1.2.3.4"
+                security.client_key("10.0.0.1", "1.2.3.4, 203.0.113.9"), "203.0.113.9"
             )
             # A trusted proxy sending nothing usable falls back rather than crashing.
             self.assertEqual(security.client_key("10.0.0.1", "  "), "10.0.0.1")
+
+    def test_a_client_cannot_mint_a_fresh_rate_limit_bucket_per_request(self):
+        """nginx's own `$proxy_add_x_forwarded_for` is "what the client sent,
+        plus the peer I saw", so reading the leftmost entry let anyone send
+        `X-Forwarded-For: 10.0.0.<n>` and get a new bucket every time. The
+        limiter is the only thing metering the operator's paid AI calls."""
+        with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
+            keys = {security.client_key("10.0.0.5", f"10.0.0.{n}, 10.0.0.5")
+                    for n in range(50)}
+        self.assertEqual(keys, {"10.0.0.5"},
+                         f"50 forged headers produced {len(keys)} buckets")
+
+    def test_a_client_cannot_lock_someone_else_out(self):
+        """The same hole ran the other way: 30 searches carrying a
+        colleague's address spent their bucket for the window."""
+        with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
+            victim = security.client_key("10.0.0.9", "198.51.100.7, 10.0.0.9")
+        self.assertNotEqual(victim, "198.51.100.7")
+
+    def test_two_proxies_are_counted_with_trusted_hops(self):
+        env = {"VULNSIGHT_TRUST_PROXY": "1", "VULNSIGHT_TRUSTED_HOPS": "2"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(
+                security.client_key("10.0.0.1", "1.2.3.4, 203.0.113.9, 10.0.0.1"),
+                "203.0.113.9")
+
+    def test_a_chain_shorter_than_the_configured_hops_uses_the_peer(self):
+        """A client that strips the header leaves one entry it chose itself.
+        Falling back to the leftmost would hand that straight back."""
+        env = {"VULNSIGHT_TRUST_PROXY": "1", "VULNSIGHT_TRUSTED_HOPS": "2"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(security.client_key("10.0.0.1", "1.2.3.4"), "10.0.0.1")
 
     def test_missing_remote_addr_still_yields_a_key(self):
         self.assertEqual(security.client_key(None, None), "unknown")

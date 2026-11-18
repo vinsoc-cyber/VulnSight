@@ -14,29 +14,29 @@ modules/
   search_service.py        879   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py         149   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
-  http_retry.py            173   one retry/backoff policy for all four upstreams
-  cwe_categories.py        754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  http_retry.py            181   one retry/backoff policy for all four upstreams
+  cwe_categories.py        763   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py           332   `gh api /advisories`, cursor pagination, normalize()
+  ghsa_client.py           348   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            500   bulk export download, parse, CWE + keyword filters
   epss_client.py           125   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py                 488   SQLite: advisories + verdicts, jobs, migrations
   jobs.py                  223   submit/poll queue for searches too slow to hold open
-  ai_classifier.py        1051   provider client, prompt, verdict cache, key rotation
+  ai_classifier.py        1109   provider client, prompt, verdict cache, key rotation
   openapi.py               572   the OpenAPI description of /api/v1
-  security.py              439   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html       376   page shell -- HTML and Jinja only
-static/app.js             1818   all UI logic; server data arrives via window.BOOT
-static/style.css          1865   design tokens + components, light and dark
+  security.py              458   bind/exposure checks, CSRF origin check, rate limiter
+templates/index.html       379   page shell -- HTML and Jinja only
+static/app.js             1837   all UI logic; server data arrives via window.BOOT
+static/style.css          1875   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           211   finds tests that can no longer fail
-  design_audit.py          359   measures contrast/targets/focus in a real browser
+  design_audit.py          388   measures contrast/targets/focus in a real browser
   generate_cwe_catalog.py  229   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     140   rewrites the revert-check figures and their index
-  revert_checks.py         157   reverts each fix, asserts the suite goes red
+  sync_check_counts.py     193   rewrites the revert-check figures and their index
+  revert_checks.py         231   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
   sync_module_map.py       126   rewrites the line counts in this very table
   sync_testing_doc.py      142   rewrites the per-file test counts in testing.md

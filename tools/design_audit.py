@@ -87,14 +87,43 @@ MEASURE = r"""
     const s = getComputedStyle(el);
     return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
   };
-  // The painted background is the first non-transparent ancestor, not the
-  // element's own `background-color`, which is usually transparent.
+  // The painted background is what the stack of ancestors actually composites
+  // to, not the element's own `background-color`, which is usually
+  // transparent.
+  //
+  // This used to return the first ancestor with any alpha at all and throw
+  // the alpha away -- so a 12%-opacity tint over a panel was measured as if
+  // it were the tint at full strength. That is wrong in both directions: it
+  // invented a failure for accent-coloured text on a faint accent wash, and
+  // it would equally have passed white text on a 5% black veil over white.
+  // Four surfaces in this sheet are translucent by design (--topbar-bg,
+  // --rail-bg, --empty-bg, --scrim-bg), so every contrast figure measured
+  // through one of them was approximate at best.
   const bgOf = el => {
+    const layers = [];
     for (let n = el; n; n = n.parentElement) {
       const c = parse(getComputedStyle(n).backgroundColor);
-      if (c.length >= 3 && (c.length === 3 || c[3] > 0)) return c.slice(0, 3);
+      if (c.length < 3) continue;
+      const a = c.length === 3 ? 1 : c[3];
+      if (a <= 0) continue;
+      layers.push([c[0], c[1], c[2], a]);
+      if (a >= 1) break;          // nothing below an opaque layer shows
     }
-    return [0, 0, 0];
+    // Composite bottom-up, source-over. If no opaque layer was found the
+    // canvas shows through; `color-scheme` paints that white in light mode
+    // and near-black in dark, and the UA exposes it on the root.
+    const bottom = layers.length && layers[layers.length - 1][3] >= 1
+      ? layers.pop().slice(0, 3)
+      : parse(getComputedStyle(document.documentElement).backgroundColor)
+          .slice(0, 3);
+    let out = bottom.length >= 3 ? bottom : [255, 255, 255];
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const [r, g, b, a] = layers[i];
+      out = [r * a + out[0] * (1 - a),
+             g * a + out[1] * (1 - a),
+             b * a + out[2] * (1 - a)];
+    }
+    return out;
   };
   const ratio = (fg, bg) => {
     const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);

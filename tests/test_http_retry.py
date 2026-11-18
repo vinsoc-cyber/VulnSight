@@ -332,5 +332,45 @@ class TestNvdRetries(unittest.TestCase):
         self.assertIn("nvd_api_key", message)
 
 
+class TestAnAdvisedWaitIsAFloorNotAReplacement(unittest.TestCase):
+    """`Retry-After: 0` is legal and proxies send it; a past HTTP-date and an
+    unparseable value both land on 0.0 too. Because 0.0 is not None it used to
+    replace the backoff outright, so the whole attempt budget went out
+    back-to-back with no delay -- against a host that had just said it was
+    overloaded, and with none of the jitter this module exists to add."""
+
+    def _slept(self, retry_after):
+        waits = []
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise http_error(429, retry_after=retry_after)
+            return "ok"
+
+        out = http_retry.with_retries(flaky, what="t", attempts=3,
+                                      sleep=waits.append)
+        self.assertEqual(out, "ok")
+        return waits
+
+    def test_a_zero_retry_after_does_not_cancel_the_backoff(self):
+        waits = self._slept("0")
+        self.assertTrue(waits, "no sleep happened at all")
+        for wait in waits:
+            self.assertGreater(wait, 0.0, f"slept {wait} after Retry-After: 0")
+
+    def test_an_unparseable_retry_after_does_not_cancel_it_either(self):
+        for value in ("nan", "-5", "Thu, 01 Jan 1970 00:00:00 GMT"):
+            with self.subTest(retry_after=value):
+                for wait in self._slept(value):
+                    self.assertGreater(wait, 0.0)
+
+    def test_a_longer_advised_wait_still_wins(self):
+        """The server knows better than the formula when it asks for more."""
+        for wait in self._slept("30"):
+            self.assertGreaterEqual(wait, 30.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

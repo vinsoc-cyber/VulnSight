@@ -32,22 +32,58 @@ back to the old behaviour.
     python3 tools/revert_checks.py --in-place   # edit the checkout (unsafe)
 
 Exit status is 0 only when every revert is caught.
+
+A whole run publishes what it measured to docs/revert-results.json, which
+`tools/sync_check_counts.py` quotes and `tests/test_docs.py` checks. That
+makes adding or removing a check a two-pass operation: the first run is
+against a tree whose recorded figure is stale, so the modules that assert
+on it are legitimately red and their own checks come back BASELINE RED.
+Run it again after committing the new results and they measure normally.
+Two runs is the honest cost of a document that quotes a measurement rather
+than asserting one.
 """
 from __future__ import annotations
 
+import fnmatch
+import json
 import pathlib
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-PY = str(REPO / ".venv" / "bin" / "python")
+# The interpreter already running this harness, not one resolved inside the
+# tree under test. `REPO/.venv/bin/python` is correct in a real checkout and
+# absent in a sandbox copy, because `.venv` is deliberately not copied -- so
+# a nested run (which tests/test_cleanup_stays_clean.py performs, to prove
+# the harness never edits the checkout) died with FileNotFoundError before
+# reaching its first check. That made test_cleanup_stays_clean permanently
+# red inside a sandbox, and under the old scoring every one of the 15 checks
+# routed to it reported `caught` without being measured. They were counted
+# in the "129/129" this tool used to print.
+PY = sys.executable
 
 # Copied into the sandbox; everything else is build output, caches, or
 # large downloads that no check reads.
 SKIP = {".git", ".venv", "node_modules", "__pycache__", "osv_cache",
-        ".coverage", "htmlcov", ".ruff_cache", ".pytest_cache"}
+        ".coverage", "htmlcov", ".ruff_cache", ".pytest_cache",
+        # Secrets. copytree preserved the 0600 mode, so this was never a
+        # world-readable leak, but it put the operator's live GitHub and AI
+        # credentials in /tmp on every run -- and the cleanup is a `finally`
+        # that a SIGKILL skips. It also meant the sandboxed suite ran with
+        # the real keys in os.environ (modules/config.py calls load_dotenv at
+        # import) while the code under test was deliberately broken, so a
+        # check that reverts a redaction could print a live key.
+        ".env", ".vulnsight_api_token", ".ai_key_cooldown.json"}
+SKIP_GLOBS = ("*.db*", ".env.*")
+# ...except the tracked, secret-free templates. `.env.*` on its own also
+# matched `.env.example`, which three test modules read -- so the sandbox
+# suite went red before any revert was applied, and every check routed to
+# those modules would have been scored `caught` by a harness that could not
+# tell "red because of the revert" from "red already".
+SKIP_EXCEPTIONS = {".env.example", ".env.sample", ".env.template"}
 
 # The checks themselves live in tools/checks/, one module per area, so that
 # two people adding checks at once do not collide in a single long list.
@@ -58,9 +94,15 @@ from tools.checks import all_checks  # noqa: E402  (needs the path above)
 
 CHECKS = all_checks()
 
+# What the last whole-battery run actually measured.
+RESULTS_PATH = REPO / "docs" / "revert-results.json"
+
 
 def _ignore(_dir: str, names: list[str]) -> set[str]:
-    return {n for n in names if n in SKIP or n.endswith((".db", ".db-wal", ".db-shm"))}
+    return {n for n in names
+            if n not in SKIP_EXCEPTIONS
+            and (n in SKIP
+                 or any(fnmatch.fnmatch(n, pattern) for pattern in SKIP_GLOBS))}
 
 
 def sandbox(root: pathlib.Path) -> pathlib.Path:
@@ -83,11 +125,26 @@ def suite_is_green(module: str, cwd: pathlib.Path) -> bool:
 
 
 def run_checks(checks, tree: pathlib.Path):
-    """Apply each revert in *tree*, run its module, restore, record."""
+    """Apply each revert in *tree*, run its module, restore, record.
+
+    Each module is run once *unpatched* first. Without that the harness
+    could only observe "red after the revert", which is also what an
+    already-failing module looks like -- so every check routed to a red
+    module reported `caught`, and the tool printed "N/N reverts caught by
+    the suite", which is the one claim it exists to make. A revert whose
+    replacement text breaks an import does the same thing: every test in the
+    module errors, the suite is red, and the harness calls it a pass.
+    """
     results: list[tuple[str, str, str]] = []
     unrestored: list[str] = []
+    baseline: dict[str, bool] = {}
 
     for label, edits, module in checks:
+        if module not in baseline:
+            baseline[module] = suite_is_green(module, tree)
+        if not baseline[module]:
+            results.append((label, "BASELINE RED", module))
+            continue
         originals = {path: (tree / path).read_text(encoding="utf-8")
                      for path, _, _ in edits}
         if any(find not in originals[path] for path, find, _ in edits):
@@ -130,6 +187,7 @@ def main(argv: list[str]) -> int:
         throwaway = tree.parent
         print(f"running in {tree}")
 
+    results_are_partial = len(checks) != len(CHECKS)
     try:
         results, unrestored = run_checks(checks, tree)
     finally:
@@ -142,6 +200,22 @@ def main(argv: list[str]) -> int:
         tail = "" if status == "caught" else f"   <-- {module}"
         print(f"  {label:<{width}}  {status}{tail}")
     print(f"\n{caught}/{len(results)} reverts caught by the suite")
+
+    # Published so docs/review-dispositions.md can quote a measurement
+    # instead of an assertion. sync_check_counts.py used to write
+    # "**N/N caught**" unconditionally -- the document's strongest evidence
+    # row was generated to read as a perfect score whether or not anything
+    # had ever been run. A partial run (a label filter) is not evidence
+    # about the whole battery, so it does not publish.
+    if not wanted and not results_are_partial:
+        RESULTS_PATH.write_text(json.dumps({
+            "checked": len(results),
+            "caught": caught,
+            "baseline_red": sum(1 for _, s, _ in results if s == "BASELINE RED"),
+            "anchor_missing": sum(1 for _, s, _ in results if s == "ANCHOR MISSING"),
+            "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {RESULTS_PATH.relative_to(REPO)}")
 
     # Only reachable with --in-place; in a sandbox the tree is deleted.
     if unrestored:

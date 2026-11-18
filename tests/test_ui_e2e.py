@@ -1141,5 +1141,70 @@ class TestTheOpeningScreenIsTheTaxonomy(UITestCase):
         self.page.wait_for_timeout(150)
 
 
+class TestTheClassMeasureIsReal(UITestCase):
+    """Each class entry carries a track whose filled length is its CWE count
+    against the widest class, because "17 CWEs" and "1 CWE" set in identical
+    boxes cannot be compared without reading all twenty-nine of them.
+
+    The width is assigned through CSSOM rather than a style attribute: the
+    CSP is `style-src 'self'` with no unsafe-inline, so a style attribute is
+    dropped and every track renders empty -- which looks like a deliberately
+    plain design rather than a broken one. These fail if that happens."""
+
+    def _tracks(self):
+        return self.page.evaluate("""() => {
+          const widest = Math.max(...window.BOOT.CLASSES.map(c => (c.cwes || []).length));
+          return [...document.querySelectorAll('.map-class')].map(el => {
+            const cls = window.BOOT.CLASSES.find(c => c.key === el.dataset.class);
+            const fill = el.querySelector('.map-track > i');
+            return {
+              key: el.dataset.class,
+              cwes: cls ? (cls.cwes || []).length : 0,
+              widest,
+              px: fill ? fill.getBoundingClientRect().width : 0,
+              track: el.querySelector('.map-track')
+                ? el.querySelector('.map-track').getBoundingClientRect().width : 0,
+            };
+          });
+        }""")
+
+    def test_every_class_has_a_track_with_a_painted_width(self):
+        self.open()
+        rows = self._tracks()
+        self.assertTrue(rows, "no class entries rendered")
+        for row in rows:
+            with self.subTest(cls=row["key"]):
+                self.assertGreater(row["track"], 0, "the track itself has no width")
+                self.assertGreater(
+                    row["px"], 0,
+                    "the fill is zero-width -- a style attribute blocked by the "
+                    "CSP, or the CSSOM pass never ran")
+
+    def test_a_wider_class_gets_a_longer_track(self):
+        """Without this the bars could all render the same and still pass
+        the test above, which would be decoration rather than a measure."""
+        self.open()
+        rows = [r for r in self._tracks() if r["track"] > 0]
+        widest = max(rows, key=lambda r: r["cwes"])
+        narrowest = min(rows, key=lambda r: r["cwes"])
+        self.assertGreater(widest["cwes"], narrowest["cwes"],
+                           "the fixture has no spread to measure")
+        # Same column width, so the painted lengths are directly comparable.
+        same_width = [r for r in rows
+                      if abs(r["track"] - widest["track"]) < 1]
+        narrowest = min(same_width, key=lambda r: r["cwes"])
+        self.assertGreater(
+            widest["px"], narrowest["px"] * 1.5,
+            f'{widest["key"]} ({widest["cwes"]} CWEs) must read as clearly '
+            f'wider than {narrowest["key"]} ({narrowest["cwes"]})')
+
+    def test_the_widest_class_fills_its_track(self):
+        self.open()
+        rows = [r for r in self._tracks() if r["track"] > 0]
+        widest = max(rows, key=lambda r: r["cwes"])
+        self.assertGreater(widest["px"], widest["track"] * 0.95,
+                           "the scale is not anchored to the widest class")
+
+
 if __name__ == "__main__":
     unittest.main()
