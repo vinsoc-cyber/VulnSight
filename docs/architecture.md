@@ -29,7 +29,7 @@ modules/
   security.py              467   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html       410   page shell -- HTML and Jinja only
 static/app.js             1905   all UI logic; server data arrives via window.BOOT
-static/style.css          2029   design tokens + components, light and dark
+static/style.css          2063   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           341   finds tests that can no longer fail

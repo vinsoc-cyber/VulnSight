@@ -1363,15 +1363,36 @@ button.warn-btn:disabled {
   overflow-wrap: anywhere;
 }
 .badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+/* Facts in a row, not five boxes.
+
+   Once the entry lost its border these were the only boxes left in the
+   results column -- about thirty small outlines across six entries, which
+   made them the loudest texture on the surface and left the advisory
+   title competing with its own metadata. They are the same facts either
+   way: the source, the ecosystem, the CWE. A row of plain codes separated
+   by space says it without drawing thirty rectangles.
+
+   Two keep a fill, and only two: KEV, because "being exploited right now"
+   is the single most decision-relevant fact on the entry, and severity,
+   which is a word on a tint of its own band. */
 .badge {
   max-width: 100%;
-  padding: 3px 7px;
+  padding: 2px 0;
   color: var(--muted);
-  background: var(--badge-bg);
-  border: 1px solid var(--badge-border);
-  border-radius: var(--radius-xs);
+  background: none;
+  border: 0;
+  border-radius: 0;
   font: 650 var(--text-xs)/1.35 var(--mono);
   overflow-wrap: anywhere;
+}
+/* A hairline between facts, so the row reads as a list without needing a
+   box per item. Not a middot: these are codes, and a dot between codes is
+   read as part of one. */
+.badges > .badge:not(.sev):not(.badge--kev) + .badge:not(.sev):not(.badge--kev)::before {
+  margin-right: 10px;
+  color: var(--line-bright);
+  content: "|";
+  font-weight: 400;
 }
 .badge.sev {
   flex: 0 0 auto;
@@ -1435,7 +1456,16 @@ button.warn-btn:disabled {
 .badge.src { color: var(--ink); border-color: var(--line-bright); font-weight: var(--weight-semi); }
 .badge--native { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
 .badge--withdrawn { color: var(--bad); text-decoration: line-through; }
-.badge--kev { color: var(--sev-ink); background: var(--sev-high); border-color: var(--sev-high); font-weight: var(--weight-bold); }
+/* The one filled badge left on an entry. "CISA lists this as being
+   exploited right now" is the single fact most likely to change what the
+   reader does next, so it is the one thing here that gets a fill. */
+.badge--kev {
+  padding: 3px 7px;
+  color: var(--sev-ink);
+  background: var(--sev-high);
+  border-radius: var(--radius-xs);
+  font-weight: var(--weight-bold);
+}
 .desc { margin-top: 8px; color: var(--muted); font-size: var(--text-sm); line-height: 1.5; overflow-wrap: anywhere; }
 .muted { color: var(--faint); }
 .meta {
@@ -1484,21 +1514,25 @@ button.warn-btn:disabled {
 .epss-meter progress::-webkit-progress-value { background: var(--accent); }
 .epss-meter progress::-moz-progress-bar { background: var(--accent); }
 
+/* The same device as the entry it sits inside: a coloured edge and space,
+   not a panel. A bordered box nested in a borderless entry was the one
+   place the redesign contradicted itself. */
 .ai-verdict {
   margin-top: 12px;
-  padding: 10px 12px;
-  background: var(--surface-verdict);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  padding: 2px 0 2px 12px;
+  background: none;
+  border: 0;
+  border-left: 3px solid var(--line-bright);
+  border-radius: 0;
   font-size: var(--text-sm);
 }
-.ai-verdict.match { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); box-shadow: inset 3px 0 0 var(--ok); }
-.ai-verdict.nomatch { color: var(--muted); box-shadow: inset 3px 0 0 var(--line-bright); }
+.ai-verdict.match { border-left-color: var(--ok); }
+.ai-verdict.nomatch { color: var(--muted); }
 /* "Scoring failed halfway" was the only state without a colour, so it read as a
    clean result. It shares the warn hue with the other "do not trust this yet"
    signals (.stale-banner, .summary-capped, .verdict-retry). */
 .ai-verdict.partial { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); box-shadow: inset 3px 0 0 var(--warn); }
-.ai-verdict.error { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); box-shadow: inset 3px 0 0 var(--bad); }
+.ai-verdict.error { border-left-color: var(--bad); }
 .verdict-head { display: flex; align-items: center; gap: 7px; font-weight: 700; }
 .verdict-state { display: inline-flex; align-items: center; gap: 7px; }
 .verdict-state::before { width: 7px; height: 7px; content: ""; background: var(--faint); border-radius: 50%; }
