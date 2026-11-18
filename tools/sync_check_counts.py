@@ -38,6 +38,7 @@ TITLES = {
     "runtime": "HTTP layer, jobs, cache, config, AI classifier",
     "search": "Search pipeline and source clients",
     "frontend": "CWE taxonomy and the browser code",
+    "cleanup": "Removals, extractions and caches (property-asserted)",
 }
 
 

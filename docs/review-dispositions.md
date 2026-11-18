@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 645 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 662 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **85/85 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **92/92 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 85 named bugs in the working tree, runs the test module that is
+each of 92 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -73,9 +73,25 @@ such edit, and no amount of effort invents one:
   mocks `subprocess.run`, so no revert differs without executing a real
   binary.
 
-Everything else is locked. The index at the end of this page lists every
-check by name with the test module that catches it; `python
-tools/revert_checks.py` runs them and must report all of them caught.
+That list was itself too generous. A revert check is not the only
+mechanical guard available: what each of those fixes produced is a
+**property of the tree**, and a property can be asserted directly. Dead code
+is gone or it is not; a cache is consulted or it is not; a helper is
+importable without Flask or it is not.
+`tests/test_cleanup_stays_clean.py` holds those assertions, so no row above
+rests on nothing. Writing it corrected two things on this page: the
+`published_bounds` cache lives on a private helper (so that an unhashable
+argument still raises `ValueError` rather than `TypeError` from
+`lru_cache`), and `gh` is genuinely resolved to a path rather than left to
+`PATH` at exec time.
+
+What remains outside both mechanisms is narrow: the picker's per-keystroke
+re-scoring, whose cost is only observable with instrumentation the page does
+not expose.
+
+The index at the end of this page lists every revert check by name with the
+test module that catches it; `python tools/revert_checks.py` runs them and
+must report all of them caught.
 
 ## HTTP layer, jobs, security
 
@@ -261,7 +277,7 @@ tools/revert_checks.py` runs them and must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 85 checks, by area
+## The 92 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -299,10 +315,11 @@ codebase and the test module that now refuses to let it back in.
 | app.js loses its scope wrapper | `tests/test_frontend_js.py` |
 | module-map drift test stops deriving | `tests/test_docs.py` |
 
-### HTTP layer, jobs, cache, config, AI classifier (21)
+### HTTP layer, jobs, cache, config, AI classifier (22)
 
 | Reverting this | is caught by |
 |---|---|
+| the prune sentinel means 'at boot' instead of 'never' | `tests/test_jobs.py` |
 | a job stays running when recording its terminal state raises | `tests/test_jobs.py` |
 | a job that cannot be marked running is abandoned in queued | `tests/test_jobs.py` |
 | finished jobs are pruned only at process start | `tests/test_jobs.py` |
@@ -371,5 +388,16 @@ codebase and the test module that now refuses to let it back in.
 | Enter commits an option nothing highlighted | `tests/test_ui_e2e.py` |
 | an empty listbox row stops being presentational | `tests/test_ui_e2e.py` |
 | toasts stop sharing one live region | `tests/test_ui_e2e.py` |
+
+### Removals, extractions and caches (property-asserted) (6)
+
+| Reverting this | is caught by |
+|---|---|
+| a helper with no caller comes back | `tests/test_cleanup_stays_clean.py` |
+| the second key-rotation implementation comes back | `tests/test_cleanup_stays_clean.py` |
+| the published-window cache is removed | `tests/test_cleanup_stays_clean.py` |
+| gh is invoked by bare name again | `tests/test_cleanup_stays_clean.py` |
+| the picker goes back to asking the DOM per option | `tests/test_cleanup_stays_clean.py` |
+| a generator binds the name g again | `tests/test_cleanup_stays_clean.py` |
 
 <!-- end generated check index -->

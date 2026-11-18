@@ -292,6 +292,34 @@ class TestDocsMatchTheCode(unittest.TestCase):
         assert claimed is not None
         self.assertEqual(int(claimed.group(1)), actual)
 
+    def test_no_doc_quotes_a_suite_size_that_has_drifted(self):
+        """README advertised "517 offline tests + 26 browser tests" against a
+        real 606 + 39 -- a hand-typed figure nobody re-counted for a hundred
+        tests. Any doc may state the size; it just has to be the size."""
+        offline, browser = 0, 0
+        for name in sorted(os.listdir(os.path.join(ROOT, "tests"))):
+            if not (name.startswith("test_") and name.endswith(".py")):
+                continue
+            count = len(re.findall(
+                r"^    def test_", _read(os.path.join(ROOT, "tests", name)), re.M))
+            if name == "test_ui_e2e.py":
+                browser += count
+            else:
+                offline += count
+
+        for path in _markdown_files():
+            text = _read(path)
+            doc = os.path.basename(path)
+            for claimed in re.findall(r"(\d+) offline tests?", text):
+                with self.subTest(doc=doc, kind="offline"):
+                    self.assertEqual(int(claimed), offline, doc)
+            for claimed in re.findall(r"(\d+) browser tests?", text):
+                with self.subTest(doc=doc, kind="browser"):
+                    self.assertEqual(int(claimed), browser, doc)
+            for claimed in re.findall(r"`Ran (\d+) tests`", text):
+                with self.subTest(doc=doc, kind="total"):
+                    self.assertEqual(int(claimed), offline + browser, doc)
+
     def test_every_route_is_documented(self):
         # Only the URL map is wanted here. Without an declared bind, create_app()
         # sees an unknown (therefore exposed) listener and mints an API token

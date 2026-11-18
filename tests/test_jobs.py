@@ -6,6 +6,7 @@ and comes back with the right terminal state.
 """
 
 import os
+import pathlib
 import sys
 import time
 
@@ -286,10 +287,10 @@ class TestFinishedJobsArePruned(unittest.TestCase):
         self.tmp.close()
         self.db = self.tmp.name
         cache.init_db(self.db)
-        jobs._last_prune = 0.0
+        jobs._last_prune = float("-inf")
 
     def tearDown(self):
-        jobs._last_prune = 0.0
+        jobs._last_prune = float("-inf")
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(self.db + suffix):
                 os.unlink(self.db + suffix)
@@ -313,6 +314,43 @@ class TestFinishedJobsArePruned(unittest.TestCase):
             for _ in range(5):
                 jobs._prune(self.db)
         self.assertEqual(len(calls), 1)
+
+    def test_a_freshly_booted_host_still_prunes(self):
+        """`_last_prune` is compared against time.monotonic(), whose zero is
+        the host's boot rather than the epoch. It was initialised to 0.0,
+        which therefore meant "pruned at boot" -- so a worker starting on a
+        machine that had been up less than an hour skipped pruning for its
+        whole first hour, and these very tests failed on a rebooted laptop
+        while passing everywhere else."""
+        # Read the source, not the attribute: setUp has already assigned
+        # this module global, so asserting on it here would pass whatever
+        # the module initialises it to.
+        source = pathlib.Path(jobs.__file__).read_text(encoding="utf-8")
+        self.assertIn(
+            '_last_prune = float("-inf")', source,
+            "the module's sentinel must mean 'never pruned', not 'at boot'")
+        self.assertNotIn("_last_prune = 0.0", source)
+
+        calls = []
+        with mock.patch.object(jobs.time, "monotonic", return_value=5.0), \
+                mock.patch.object(cache, "prune_jobs",
+                                  side_effect=lambda *a, **k: calls.append(1)):
+            jobs._last_prune = float("-inf")
+            jobs._prune(self.db)          # 5 seconds after boot
+        self.assertEqual(calls, [1],
+                         "a worker five seconds into a boot must still prune")
+
+    def test_the_interval_still_holds_once_something_has_been_pruned(self):
+        """The other half: having pruned, it must not prune again for an
+        hour, or every submission pays for a scan of the jobs table."""
+        calls = []
+        with mock.patch.object(jobs.time, "monotonic", side_effect=[10.0, 20.0]), \
+                mock.patch.object(cache, "prune_jobs",
+                                  side_effect=lambda *a, **k: calls.append(1)):
+            jobs._last_prune = float("-inf")
+            jobs._prune(self.db)          # prunes, records monotonic 10
+            jobs._prune(self.db)          # 10s later: far inside the interval
+        self.assertEqual(calls, [1])
 
     def test_a_pruning_failure_never_fails_the_submission(self):
         with mock.patch.object(cache, "prune_jobs",

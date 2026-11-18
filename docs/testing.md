@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 645 tests: 606 offline + 39 browser
+.venv/bin/python -m unittest discover -s tests        # 662 tests: 623 offline + 39 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -24,10 +24,11 @@ OSV and the AI provider are all mocked.
 | `test_ui_e2e.py` | 39 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
-| `test_jobs.py` | 21 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
+| `test_jobs.py` | 23 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
 | `test_ghsa_client.py` | 20 | `gh` invocation, cursor pagination, `Link` parsing |
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
-| `test_docs.py` | 17 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
+| `test_docs.py` | 18 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
+| `test_cleanup_stays_clean.py` | 14 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 13 | batching, malformed responses |
@@ -62,7 +63,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 602 tests` / `OK (skipped=26)`, and every other test still runs.
+`Ran 662 tests` / `OK (skipped=39)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -205,7 +206,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 85 named bugs it re-introduces the bug in the working tree, runs the
+For each of 92 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It writes to tracked files — it restores

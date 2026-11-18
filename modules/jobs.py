@@ -89,7 +89,12 @@ def startup(path: str | None = None) -> int:
 # advisories.db without bound. The table already carries idx_jobs_created for
 # a query that was never issued on a live process.
 _PRUNE_INTERVAL_SECONDS = 3600.0
-_last_prune = 0.0
+# -inf, not 0.0: this is compared against time.monotonic(), whose zero is
+# the host's boot, not the epoch. 0.0 therefore means "pruned at boot" --
+# so a worker starting on a freshly booted machine skipped pruning for its
+# first hour, which is the opposite of what the sentinel was for. -inf is
+# the only value that means "never pruned" on a monotonic clock.
+_last_prune = float("-inf")
 _prune_lock = threading.Lock()
 
 

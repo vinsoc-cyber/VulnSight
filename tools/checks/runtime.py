@@ -82,6 +82,13 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
 
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
+    (
+        "the prune sentinel means 'at boot' instead of 'never'",
+        [("modules/jobs.py",
+          '_last_prune = float("-inf")',
+          "_last_prune = 0.0")],
+        "test_jobs",
+    ),
     # -- jobs ---------------------------------------------------------------
     (
         "a job stays running when recording its terminal state raises",

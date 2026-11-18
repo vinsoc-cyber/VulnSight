@@ -16,6 +16,7 @@ Separate modules keep concurrent work from colliding in one long list.
 
 from __future__ import annotations
 
+from . import cleanup
 from . import core
 from . import frontend
 from . import runtime
@@ -29,6 +30,7 @@ GROUPS: dict[str, list[Check]] = {
     "runtime": runtime.CHECKS,
     "search": search.CHECKS,
     "frontend": frontend.CHECKS,
+    "cleanup": cleanup.CHECKS,
 }
 
 

@@ -23,7 +23,7 @@ modules/
   epss_client.py           113   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py                 483   SQLite: advisories + verdicts, jobs, migrations
-  jobs.py                  218   submit/poll queue for searches too slow to hold open
+  jobs.py                  223   submit/poll queue for searches too slow to hold open
   ai_classifier.py        1051   provider client, prompt, verdict cache, key rotation
   openapi.py               572   the OpenAPI description of /api/v1
   security.py              439   bind/exposure checks, CSRF origin check, rate limiter
@@ -34,7 +34,7 @@ tools/
   checks/                        the revert checks, one module per area
   design_audit.py          349   measures contrast/targets/focus in a real browser
   generate_cwe_catalog.py  226   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     137   rewrites the revert-check figures and their index
+  sync_check_counts.py     138   rewrites the revert-check figures and their index
   revert_checks.py          99   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   93   rewrites the class tables in bug-classes.md
   sync_module_map.py       124   rewrites the line counts in this very table
