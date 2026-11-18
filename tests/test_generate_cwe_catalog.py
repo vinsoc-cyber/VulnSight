@@ -200,7 +200,12 @@ class TestTheCommittedCatalogMatchesItsGenerator(unittest.TestCase):
         self.assertEqual(list(self.catalog.ABSTRACTION), list(gen.ABSTRACTIONS))
 
     def test_every_extra_alias_survived_into_the_catalog(self):
+        # Emptying EXTRA_ALIASES would delete every community term from the
+        # picker -- "IDOR" and "SSRF" would stop matching anything -- and
+        # this loop would report success over nothing.
+        self.assertGreater(len(gen.EXTRA_ALIASES), 10)
         for cwe_id, terms in gen.EXTRA_ALIASES.items():
+            self.assertTrue(terms, f"EXTRA_ALIASES[{cwe_id}] is empty")
             self.assertIn(cwe_id, self.catalog.NAMES, cwe_id)
             if cwe_id in self.catalog.DEPRECATED:
                 continue

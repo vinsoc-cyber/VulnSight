@@ -17,7 +17,7 @@ modules/
   http_retry.py            173   one retry/backoff policy for all four upstreams
   cwe_categories.py        754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
-  ghsa_client.py           326   `gh api /advisories`, cursor pagination, normalize()
+  ghsa_client.py           332   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            500   bulk export download, parse, CWE + keyword filters
   epss_client.py           125   FIRST EPSS scores, batched
@@ -29,7 +29,7 @@ modules/
   security.py              439   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html       376   page shell -- HTML and Jinja only
 static/app.js             1818   all UI logic; server data arrives via window.BOOT
-static/style.css          1835   design tokens + components, light and dark
+static/style.css          1865   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           211   finds tests that can no longer fail
@@ -39,7 +39,7 @@ tools/
   revert_checks.py         157   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
   sync_module_map.py       126   rewrites the line counts in this very table
-  sync_testing_doc.py      107   rewrites the per-file test counts in testing.md
+  sync_testing_doc.py      142   rewrites the per-file test counts in testing.md
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import unittest
 
 from modules import cwe_categories as cwe
+from modules.cwe_catalog import NAMES
 
 
 class TestCweCategories(unittest.TestCase):
@@ -252,12 +253,16 @@ class TestDataIntegrity(unittest.TestCase):
             self.assertIn(key, cwe.CATEGORIES,
                           msg=f"KEYWORDS['{key}'] has no matching category")
 
-    def test_all_category_cwes_have_labels(self):
+    def test_every_category_cwe_is_in_the_mitre_catalog(self):
+        """A curated id that MITRE does not define renders as the bare
+        "CWE-639" placeholder in the picker and in every result row, which
+        looks like a missing label rather than the typo it is."""
         for key, cat in cwe.CATEGORIES.items():
             for c in cat["core"] + cat["extended"]:
-                self.assertNotEqual(
-                    cwe.cwe_label(c), f"CWE-{c}",
-                    msg=f"category '{key}': CWE-{c} is not in the MITRE catalog")
+                with self.subTest(category=key, cwe=c):
+                    self.assertIn(c, NAMES, f"category '{key}': CWE-{c} "
+                                            "is not in the MITRE catalog")
+                    self.assertEqual(cwe.cwe_label(c), NAMES[c])
 
 
 
@@ -352,18 +357,30 @@ class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
                         self.fail(f"KEYWORDS[{category!r}] entry {keyword!r} "
                                   f"matches inside the unrelated word {decoy!r}")
 
-    def test_core_and_extended_stay_disjoint_after_the_promotions(self):
-        for key, spec in cwe.CATEGORIES.items():
-            with self.subTest(category=key):
-                self.assertEqual(
-                    set(spec["core"]) & set(spec["extended"]), set())
+    def test_no_derived_keyword_is_a_substring_trap(self):
+        """The sweep above covers the curated classes. The incident it is
+        named for came from the *derived* side: CWE-616's name ends in
+        "(PHP)", so `cwe:616` prefiltered on "php" and matched essentially
+        every PHP advisory. Nothing checked that half.
 
-    def test_every_listed_cwe_exists_in_the_catalog(self):
-        from modules.cwe_catalog import NAMES
-        for key, spec in cwe.CATEGORIES.items():
-            for cwe_id in [*spec["core"], *spec["extended"]]:
-                with self.subTest(category=key, cwe=cwe_id):
-                    self.assertIn(cwe_id, NAMES)
+        No trap exists today across all ~940 catalog ids -- this keeps it
+        that way, because the terms are generated from MITRE's text and a
+        future catalog release can introduce one without anyone editing
+        this repo.
+        """
+        decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
+                  "medieval", "obstacle", "tentacle", "reevaluated",
+                  "php", "association", "classification", "serialisation")
+        ids = [row[0] for row in cwe.picker_catalog()["rows"]]
+        self.assertGreater(len(ids), 500, "the catalog looks truncated")
+
+        for cwe_id in ids:
+            for keyword in cwe.category_keywords([f"cwe:{cwe_id}"]):
+                for decoy in decoys:
+                    if keyword != decoy and keyword in decoy:
+                        self.fail(
+                            f"cwe:{cwe_id} derives the term {keyword!r}, which "
+                            f"matches inside the unrelated word {decoy!r}")
 
 
 

@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 735 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 744 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **128/128 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **129/129 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 128 named bugs in the working tree, runs the test module that is
+each of 129 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,13 +277,13 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 128 checks, by area
+## The 129 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
 codebase and the test module that now refuses to let it back in.
 
-### First pass: security, merge, sources, taxonomy, docs (28)
+### First pass: security, merge, sources, taxonomy, docs (29)
 
 | Reverting this | is caught by |
 |---|---|
@@ -301,6 +301,7 @@ codebase and the test module that now refuses to let it back in.
 | NVD windows overlap again | `tests/test_nvd_client.py` |
 | GHSA pagination breaks on the wrong Link header | `tests/test_ghsa_client.py` |
 | GHSA cursor trusted again | `tests/test_ghsa_client.py` |
+| GHSA cursor checked by prefix again | `tests/test_ghsa_client.py` |
 | OSV load lock removed | `tests/test_osv_client.py` |
 | OSV cache path stops being validated | `tests/test_osv_client.py` |
 | auth falls back to a path prefix | `tests/test_app.py` |

@@ -119,8 +119,18 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "GHSA cursor trusted again",
         [("modules/ghsa_client.py",
-          '    if not path.startswith("/advisories"):',
+          '    if parts.path != "/advisories":',
           "    if False:")],
+        "test_ghsa_client",
+    ),
+    (
+        # The guard was a prefix match for most of its life, which let
+        # "/advisories/../user" through -- the API server resolves that to
+        # /user and returns the operator's account.
+        "GHSA cursor checked by prefix again",
+        [("modules/ghsa_client.py",
+          '    if parts.path != "/advisories":',
+          '    if not parts.path.startswith("/advisories"):')],
         "test_ghsa_client",
     ),
     (

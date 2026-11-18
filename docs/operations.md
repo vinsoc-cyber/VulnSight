@@ -90,7 +90,7 @@ always free.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Header shows `GH OFFLINE` | `gh` not authenticated, or unavailable | `gh auth login`; in Docker pass `GH_TOKEN` |
+| Header shows `GH Not connected` | `gh` not authenticated, or unavailable | `gh auth login`; in Docker pass `GH_TOKEN` |
 | Header shows `AI OFF` | no token / base URL / model | see [Configuration](configuration.md#ai-provider) |
 | `GHSA fetch failed.` | `gh` error, network, or rate limit | run `gh api /advisories --paginate` manually to see the real error |
 | Search returns far fewer than `max_results` | per-source truncation then exact re-filtering, most visible with NVD + `affects` | widen `max_results`, or drop the package filter |

@@ -5,7 +5,7 @@ and the measurements that check it. Written so the next person can disagree
 with a decision on its merits rather than guess at the intent.
 
 Numbers quoted here are produced by `python tools/design_audit.py`, which
-drives a real browser across seven viewport/theme states. `tests/test_docs.py`
+drives a real browser across ten viewport/theme states. `tests/test_docs.py`
 fails if this page drifts from the stylesheet.
 
 ## The subject
@@ -53,9 +53,17 @@ badge for the same glance. Source, ecosystem and package badges get an
 outline and no fill — they were louder than the CWE that is the actual
 subject of the search.
 
-`--ok` green is reserved for a confirmed AI match and used nowhere else,
-which is why `--sev-low` is a steel blue rather than the green it once
-shared.
+`--ok` and `--bad` carry two things and only two: the AI verdict, and
+whether GitHub and the AI endpoint are reachable. That second use is why
+`--sev-low` is a steel blue rather than the green it once shared — a low
+severity and a working connection must not look like the same fact.
+
+Neither status is hue alone. A reachable source is a filled dot, an
+unreachable one is a ring, because red and green are the commonest pair to
+confuse and between 461 and 480px the word beside the dot is clipped out of
+view. The same rule is why the pill's state is clipped rather than
+`display: none`: clipping keeps it in the accessibility tree, and the
+narrower breakpoint had been removing it outright.
 
 Two families that look similar are not interchangeable: `--warn` / `--bad`
 are **text** colours that must clear 4.5:1 on the badge fill, while
@@ -173,7 +181,7 @@ that reports results lives in the rail.
 
 ```
  ┌────────────────────────────────────────────────────────────────────────┐
- │ VS  VulnSight        ●GH AUTHED ●AI READY [Test AI] (1059)  ◐          │  topbar, sticky
+ │ VS  VulnSight     ●GH Connected ○AI Not configured [Test AI] 1059 cached │  topbar, sticky
  ├──────────────────────┬─────────────────────────────────────────────────┤
  │ Build a search       │  Advisory queue                 Severity   CVSS │  display heading
  │  ┌────┬────┬────┐    │  Merged records from GHSA,     ┌────┬────┐      │  + severity key,
@@ -299,8 +307,19 @@ against the known tells of a generated page, done by measuring the sheet.
 
 ## What is measured, and where
 
-`python tools/design_audit.py --out shots/` drives Chromium across seven
-states (desktop/mobile/narrow/tablet/wide × light/dark) and fails on any of:
+`python tools/design_audit.py --out shots/` drives Chromium across ten
+states and fails on any of:
+
+| | Viewport | Themes |
+|---|---|---|
+| `/` | 1440×900, 390×844, 320×844, 820×1180, 1920×1080 | light and dark |
+| `/api/docs` | 1440×900, 390×844 | light and dark |
+
+The second page is listed because it was outside every earlier audit, which
+is how a stylesheet with no scale tokens survived on it (see **The second
+page**). The figure here is checked against `design_audit.STATES`, so it
+cannot drift the way "seven" did when the API page was added.
+
 
 - **Contrast** below the WCAG AA threshold for that element's own size and
   weight, measured against the actually-painted background rather than the

@@ -189,7 +189,11 @@ class TestFlaskApp(unittest.TestCase):
                                  json={"categories": ["bac"], "sort": "updated"})
         self.assertEqual(r.status_code, 200)
         ids = [x["ghsa_id"] for x in r.get_json()["results"]]
-        self.assertEqual(ids, [SORT_B, SORT_C, SORT_A])  # by updated_at desc
+        # updated desc is now A, B, C -- distinct from every other
+        # (field, direction) pair in the fixture. It used to be the exact
+        # reverse of published, which made `published desc` and
+        # `updated asc` the same order and hid a direction-flipped mix-up.
+        self.assertEqual(ids, [SORT_A, SORT_B, SORT_C])
 
     # ------------------------------------------------------------ ai/classify
 

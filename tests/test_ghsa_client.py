@@ -293,7 +293,14 @@ class TestPaginationCursorHandling(unittest.TestCase):
         flag parser rather than as a path."""
         for hostile in ("https://api.github.com/user",
                         "https://evil.test/--input=/etc/passwd",
-                        "https://api.github.com/"):
+                        "https://api.github.com/",
+                        # Prefix-matched "/advisories" and resolves to /user
+                        # at the server, which returns the operator's account.
+                        "https://api.github.com/advisories/../user",
+                        "https://api.github.com/advisories/../../user",
+                        # A sibling route, not this list endpoint.
+                        "https://api.github.com/advisories-beta?page=2",
+                        "https://api.github.com/advisories/GHSA-xxxx"):
             with self.subTest(url=hostile):
                 with self.assertRaises(ghsa.GhCliError):
                     ghsa._strip_to_path(hostile)

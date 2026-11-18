@@ -29,17 +29,17 @@
       <span class="pill">
         <span class="dot {{ 'ok' if gh_ok else 'bad' }}" aria-hidden="true"></span>
         <span class="pill-key">GH</span>
-        <span class="pill-value">{{ 'AUTHED' if gh_ok else 'OFFLINE' }}</span>
+        <span class="pill-value">{{ 'Connected' if gh_ok else 'Not connected' }}</span>
       </span>
       <span class="pill">
         <span class="dot {{ 'ok' if ai_configured else 'bad' }}" aria-hidden="true"></span>
         <span class="pill-key">AI</span>
-        <span class="pill-value">{{ 'READY' if ai_configured else 'OFF' }}</span>
+        <span class="pill-value">{{ 'Ready' if ai_configured else 'Not configured' }}</span>
       </span>
       <button class="pill pill-action" id="ai-test-pill" type="button" title="Test the configured AI endpoint">Test AI</button>
       <span class="pill cache-pill" title="Advisories in the local cache">
         <span class="cache-mark" aria-hidden="true"></span>
-        <span>{{ cached_count }} cached</span>
+        <span><span class="cache-count">{{ cached_count }}</span> cached</span>
       </span>
       <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
         <span class="theme-icon" aria-hidden="true"></span>

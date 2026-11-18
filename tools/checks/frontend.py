@@ -129,11 +129,16 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     ),
     (
         "two spellings of the same pill radius come back",
+        # `border-radius: var(--radius-pill)` appears six times, so the
+        # anchor is the one that sits above .pill's own font declaration.
+        # That line is the check's fragile half: it moved once already, when
+        # the pill stopped being set in mono, and the revert then reported
+        # ANCHOR MISSING rather than a pass.
         [("static/style.css",
           "  border-radius: var(--radius-pill);\n"
-          "  font: 650 var(--text-xs)/1 var(--mono);",
+          "  font: 600 var(--text-xs)/1 var(--sans);",
           "  border-radius: 99px;\n"
-          "  font: 650 var(--text-xs)/1 var(--mono);")],
+          "  font: 600 var(--text-xs)/1 var(--sans);")],
         "test_frontend_js",
     ),
     (

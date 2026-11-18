@@ -18,6 +18,24 @@ from modules import nvd_client, records
 from samples import NVD_VULN
 
 
+def _vuln(cve_id, **overrides):
+    """One NVD `vulnerabilities[]` entry, in the shape the API documents.
+
+    Three classes build these; each used to carry its own copy, so a change
+    to NVD's record shape had to be found in three places and the copies had
+    already drifted apart.
+    """
+    cve = {
+        "id": cve_id,
+        "descriptions": [{"lang": "en", "value": f"description of {cve_id}"}],
+        "published": "2026-01-01T00:00:00.000",
+        "lastModified": "2026-01-01T00:00:00.000",
+        "metrics": {}, "weaknesses": [], "configurations": [], "references": [],
+    }
+    cve.update(overrides)
+    return {"cve": cve}
+
+
 class TestNormalize(unittest.TestCase):
     def test_basic_fields(self):
         n = nvd_client.normalize(NVD_VULN)
@@ -63,8 +81,22 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual(n["html_url"], "https://nvd.nist.gov/vuln/detail/CVE-2021-44228")
 
     def test_summary_truncated(self):
+        """The cap is 120 characters plus the ellipsis, and the full text
+        stays in `description`. `<= 125` left four characters of slack, so
+        the cap could drift without the test noticing -- and said nothing
+        about the ellipsis or about the untruncated copy, which is what the
+        result card expands to."""
         n = nvd_client.normalize(NVD_VULN)
-        self.assertTrue(len(n["summary"]) <= 125)
+        self.assertGreater(len(n["description"]), 120, "NVD_VULN is too short "
+                                                       "to exercise truncation")
+        self.assertEqual(len(n["summary"]), 121)
+        self.assertTrue(n["summary"].endswith("\u2026"))
+        self.assertEqual(n["summary"][:120], n["description"][:120])
+
+    def test_a_short_summary_is_not_marked_as_truncated(self):
+        n = nvd_client.normalize(_vuln("CVE-2026-1", descriptions=[
+            {"lang": "en", "value": "short enough"}]))
+        self.assertEqual(n["summary"], "short enough")
 
 
 class TestDateParams(unittest.TestCase):
@@ -146,10 +178,8 @@ class TestFetchNvd(unittest.TestCase):
         with self.assertRaises(nvd_client.NvdError):
             nvd_client.fetch_nvd(nvd_client.NvdSearchParams(cwes=["79", "89"]))
 
-    @mock.patch.dict(os.environ, {}, clear=True)
     def test_request_delay_without_key(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("NVD_API_KEY", None)
+        with mock.patch.dict(os.environ, {}, clear=True):
             delay = nvd_client._request_delay()
         self.assertGreaterEqual(delay, 6.0)
 
@@ -351,26 +381,15 @@ class TestOneBadRecordDoesNotSinkTheBatch(unittest.TestCase):
     that discarded the sources which had already succeeded.
     """
 
-    def _vuln(self, cve_id, **overrides):
-        cve = {
-            "id": cve_id,
-            "descriptions": [{"lang": "en", "value": f"description of {cve_id}"}],
-            "published": "2026-01-01T00:00:00.000",
-            "lastModified": "2026-01-01T00:00:00.000",
-            "metrics": {}, "weaknesses": [], "configurations": [], "references": [],
-        }
-        cve.update(overrides)
-        return {"cve": cve}
-
     def test_malformed_records_are_skipped_and_counted(self):
         batch = [
-            self._vuln("CVE-2026-1"),
+            _vuln("CVE-2026-1"),
             # Shapes NVD does not forbid, each of which used to raise:
-            self._vuln("CVE-2026-2", descriptions=[{"lang": "en", "value": None}]),
-            self._vuln("CVE-2026-3", weaknesses=["CWE-79"]),
-            self._vuln("CVE-2026-4", configurations=[
+            _vuln("CVE-2026-2", descriptions=[{"lang": "en", "value": None}]),
+            _vuln("CVE-2026-3", weaknesses=["CWE-79"]),
+            _vuln("CVE-2026-4", configurations=[
                 {"nodes": [{"cpeMatch": [{"vulnerable": True, "criteria": None}]}]}]),
-            self._vuln("CVE-2026-5"),
+            _vuln("CVE-2026-5"),
         ]
         kept, skipped = records.normalize_all(
             batch, nvd_client.normalize, source="NVD")
@@ -378,7 +397,7 @@ class TestOneBadRecordDoesNotSinkTheBatch(unittest.TestCase):
         self.assertEqual([r["cve_id"] for r in kept], ["CVE-2026-1", "CVE-2026-5"])
 
     def test_a_clean_batch_reports_no_skips(self):
-        batch = [self._vuln("CVE-2026-1"), self._vuln("CVE-2026-2")]
+        batch = [_vuln("CVE-2026-1"), _vuln("CVE-2026-2")]
         kept, skipped = records.normalize_all(
             batch, nvd_client.normalize, source="NVD")
         self.assertEqual(skipped, 0)
@@ -399,25 +418,14 @@ class TestFetchNvdDegradesOneRecordAtATime(unittest.TestCase):
     sources that had already succeeded.
     """
 
-    def _vuln(self, cve_id, **overrides):
-        cve = {
-            "id": cve_id,
-            "descriptions": [{"lang": "en", "value": f"description of {cve_id}"}],
-            "published": "2026-01-01T00:00:00.000",
-            "lastModified": "2026-01-01T00:00:00.000",
-            "metrics": {}, "weaknesses": [], "configurations": [], "references": [],
-        }
-        cve.update(overrides)
-        return {"cve": cve}
-
     @mock.patch("modules.nvd_client.time.sleep")
     def test_a_malformed_record_does_not_sink_the_fetch(self, mock_sleep):
         batch = [
-            self._vuln("CVE-2026-1"),
+            _vuln("CVE-2026-1"),
             # A bare string where NVD documents an object: normalize() calls
             # .get() on it and raises AttributeError, which is not an NvdError.
-            self._vuln("CVE-2026-2", weaknesses=["CWE-79"]),
-            self._vuln("CVE-2026-3"),
+            _vuln("CVE-2026-2", weaknesses=["CWE-79"]),
+            _vuln("CVE-2026-3"),
         ]
         with mock.patch.object(nvd_client, "_fetch_cves_for_cwe",
                                return_value=batch):
@@ -428,7 +436,7 @@ class TestFetchNvdDegradesOneRecordAtATime(unittest.TestCase):
 
     @mock.patch("modules.nvd_client.time.sleep")
     def test_a_clean_fetch_keeps_everything(self, mock_sleep):
-        batch = [self._vuln("CVE-2026-1"), self._vuln("CVE-2026-2")]
+        batch = [_vuln("CVE-2026-1"), _vuln("CVE-2026-2")]
         with mock.patch.object(nvd_client, "_fetch_cves_for_cwe",
                                return_value=batch):
             results = nvd_client.fetch_nvd(
@@ -444,31 +452,25 @@ class TestTheCvssVectorReachesTheRow(unittest.TestCase):
     look up even when NVD had supplied one.
     """
 
-    def _vuln(self, metrics):
-        return {"cve": {
-            "id": "CVE-2026-1",
-            "descriptions": [{"lang": "en", "value": "d"}],
-            "metrics": metrics, "weaknesses": [],
-            "configurations": [], "references": [],
-        }}
-
     def test_a_v31_vector_is_carried(self):
         vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        row = nvd_client.normalize(self._vuln({"cvssMetricV31": [
-            {"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL",
-                          "vectorString": vector}}]}))
+        row = nvd_client.normalize(_vuln(
+            "CVE-2026-1", metrics={"cvssMetricV31": [
+                {"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL",
+                              "vectorString": vector}}]}))
         self.assertEqual(row.get("cvss_vector"), vector)
         self.assertEqual(row["cvss_score"], 9.8)
 
     def test_a_v2_vector_is_carried_too(self):
         vector = "AV:N/AC:L/Au:N/C:P/I:P/A:P"
-        row = nvd_client.normalize(self._vuln({"cvssMetricV2": [
-            {"baseSeverity": "HIGH",
-             "cvssData": {"baseScore": 7.5, "vectorString": vector}}]}))
+        row = nvd_client.normalize(_vuln(
+            "CVE-2026-1", metrics={"cvssMetricV2": [
+                {"baseSeverity": "HIGH",
+                 "cvssData": {"baseScore": 7.5, "vectorString": vector}}]}))
         self.assertEqual(row.get("cvss_vector"), vector)
 
     def test_no_metrics_means_an_explicit_null(self):
-        row = nvd_client.normalize(self._vuln({}))
+        row = nvd_client.normalize(_vuln("CVE-2026-1", metrics={}))
         self.assertIn("cvss_vector", row)
         self.assertIsNone(row["cvss_vector"])
 

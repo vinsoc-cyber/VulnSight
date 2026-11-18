@@ -3,10 +3,19 @@
 // rules (undeclared names, unreachable code, shadowed bindings, == vs ===),
 // not a style opinion -- formatting is left alone on purpose.
 //
-//   npx eslint static tests
+//   npx eslint .
 import globals from 'globals';
 
 export default [
+  {
+    // Without this, `eslint .` walks into the Python virtualenv and lints
+    // Playwright's vendored bundles, whose inline eslint-disable comments
+    // name @typescript-eslint rules this project does not install -- six
+    // errors from third-party code, in the gate that is supposed to say
+    // whether *our* two files are clean. node_modules is ignored by
+    // default; .venv is not.
+    ignores: ['.venv/**', 'osv_cache/**', 'node_modules/**'],
+  },
   {
     files: ['static/**/*.js'],
     languageOptions: {

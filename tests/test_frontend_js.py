@@ -169,5 +169,86 @@ class TestFrontendJavaScript(unittest.TestCase):
                 f"{smaller}px and {larger}px are too close to read as ranks")
 
 
+class TestTheStatusPillStaysReadable(unittest.TestCase):
+    """The two pills in the topbar say whether GitHub and the AI endpoint are
+    reachable. Nothing else on the page answers that, and the answer decides
+    whether a search returns anything and whether a classify run can spend
+    money -- so it has to survive a narrow viewport, a screen reader and a
+    reader who cannot separate red from green.
+
+    All three had been broken in the same small block of CSS."""
+
+    def _sheet(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_state_word_is_never_removed_from_the_accessibility_tree(self):
+        """`.pill-value { display: none }` at 480px took the word out of the
+        a11y tree as well as off the screen, so between 461 and 480px the
+        pill announced "GH" and showed a bare coloured dot."""
+        css = self._sheet()
+        for match in re.finditer(r"\.pill-value\s*\{([^}]*)\}", css):
+            with self.subTest(rule=match.group(0)[:40]):
+                self.assertNotRegex(
+                    match.group(1), r"display:\s*none",
+                    "clip .pill-value instead; display:none unannounces it")
+
+    def test_an_unreachable_source_differs_by_shape_and_not_only_by_colour(self):
+        """Both dots were filled circles separated by hue alone."""
+        css = self._sheet()
+        ok = re.search(r"\.dot\.ok\s*\{([^}]*)\}", css)
+        bad = re.search(r"\.dot\.bad\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(ok, "no .dot.ok rule")
+        self.assertIsNotNone(bad, "no .dot.bad rule")
+        assert ok is not None and bad is not None
+        self.assertRegex(bad.group(1), r"border:\s*\d",
+                         "the unreachable dot is a ring, not a second colour")
+        self.assertNotRegex(ok.group(1), r"border:\s*\d",
+                            "the reachable dot is filled, so the two differ")
+
+    def test_mono_is_not_used_as_texture_on_the_pill(self):
+        """`--mono` means "this is a code". The pill set it on the whole
+        wrapper, which put a monospace face on "Connected" and "cached" --
+        the one use of mono the stylesheet's own header forbids."""
+        css = self._sheet()
+        pill = re.search(r"\n\.pill\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(pill, "no .pill rule")
+        assert pill is not None
+        self.assertNotIn("var(--mono)", pill.group(1))
+        for selector in (".pill-key", ".cache-count"):
+            with self.subTest(selector=selector):
+                rule = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+                self.assertIsNotNone(rule, f"no {selector} rule")
+                assert rule is not None
+                self.assertIn("var(--mono)", rule.group(1))
+
+    def test_the_sheet_keeps_exactly_one_uppercase_rule(self):
+        """docs/design.md claims one, on severity badges, where the label is
+        a code -- and the claim was about CSS, so it stayed true while the
+        status words were typed in capitals in the template instead."""
+        rules = re.findall(r"text-transform:\s*uppercase", self._sheet())
+        self.assertEqual(len(rules), 1, "design.md documents exactly one")
+
+    def test_the_status_words_are_sentence_case_and_say_what_a_user_sees(self):
+        """They read AUTHED / OFFLINE / READY / OFF: shouted, and the first
+        of them is `gh auth status` vocabulary rather than anything a user
+        of this page would say."""
+        template = os.path.join(os.path.dirname(STATIC_DIR), "templates",
+                                "index.html")
+        with open(template, encoding="utf-8") as fh:
+            markup = fh.read()
+        values = re.findall(
+            r'class="pill-value">\{\{(.+?)\}\}</span>', markup)
+        self.assertEqual(len(values), 2, "expected the GH and AI pills")
+        for expression in values:
+            for word in re.findall(r"'([^']+)'", expression):
+                with self.subTest(word=word):
+                    self.assertRegex(
+                        word, r"^[A-Z][a-z]+(?: [a-z]+)*$",
+                        "status words are sentence case, not shouted")
+                    self.assertNotIn("auth", word.lower(),
+                                     "say what the user sees, not what gh calls it")
+
+
 if __name__ == "__main__":
     unittest.main()

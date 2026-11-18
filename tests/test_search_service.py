@@ -389,13 +389,16 @@ class TestRunSearch(TempCacheDB, unittest.TestCase):
     def test_sort_updated_fixed(self):
         # Regression: the old code always sorted by published_at.
         out = self._run({"sort": "updated"})
+        # updated desc is A, B, C in the corrected fixture; it used to
+        # be the exact reverse of published, which made two orderings
+        # identical and hid a direction-flipped field mix-up.
         self.assertEqual([r["ghsa_id"] for r in out.results],
-                         [SORT_B, SORT_C, SORT_A])
+                         [SORT_A, SORT_B, SORT_C])
 
     def test_sort_updated_ascending(self):
         out = self._run({"sort": "updated", "direction": "asc"})
         self.assertEqual([r["ghsa_id"] for r in out.results],
-                         [SORT_A, SORT_C, SORT_B])
+                         [SORT_C, SORT_B, SORT_A])
 
     def test_sort_cve_id(self):
         out = self._run({"sort": "cve_id"})

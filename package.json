@@ -3,7 +3,7 @@
   "private": true,
   "description": "Dev-only tooling for static/. VulnSight ships no bundler and no build step: static/app.js and static/style.css are served exactly as they are written. These are checkers, not a pipeline.",
   "scripts": {
-    "lint": "eslint static tests",
+    "lint": "eslint .",
     "lint:css": "stylelint \"static/*.css\"",
     "typecheck": "tsc -p jsconfig.json",
     "test": "node tests/test_frontend_security.js && node tests/test_frontend_finder.js",

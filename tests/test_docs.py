@@ -336,12 +336,64 @@ class TestDocsMatchTheCode(unittest.TestCase):
             for claimed in re.findall(r"(\d+) offline tests?", text):
                 with self.subTest(doc=doc, kind="offline"):
                     self.assertEqual(int(claimed), offline, doc)
-            for claimed in re.findall(r"(\d+) browser tests?", text):
-                with self.subTest(doc=doc, kind="browser"):
-                    self.assertEqual(int(claimed), browser, doc)
+            for pattern in (r"(\d+) browser tests?", r"(\d+) e2e tests?"):
+                for claimed in re.findall(pattern, text):
+                    with self.subTest(doc=doc, kind="browser"):
+                        self.assertEqual(int(claimed), browser, doc)
             for claimed in re.findall(r"`Ran (\d+) tests`", text):
                 with self.subTest(doc=doc, kind="total"):
                     self.assertEqual(int(claimed), offline + browser, doc)
+
+    def test_the_design_doc_quotes_the_stylesheet_it_describes(self):
+        """docs/design.md opens by saying this test fails if the page drifts
+        from the stylesheet. Nothing checked it: the doc could name a hex or
+        a type step the sheet had moved on from, and the sentence promising
+        otherwise would still be sitting at the top of it. Every `--token`
+        quoted in a table here is now read back out of static/style.css."""
+        doc = _read(os.path.join(DOCS, "design.md"))
+        sheet = _read(os.path.join(ROOT, "static", "style.css"))
+
+        # | `--token` | light | dark | job |  and  | `--token` | value | job |
+        pairs = re.findall(
+            r"^\| `(--[\w-]+)` \| `([^`]+)` \| `([^`]+)` \|", doc, re.M)
+        singles = re.findall(
+            r"^\| `(--text-[\w-]+)` \| `?([\d.]+px|clamp\([^)]*\))`? \|",
+            doc, re.M)
+        self.assertGreaterEqual(len(pairs), 6, "the colour table looks empty")
+        self.assertGreaterEqual(len(singles), 6, "the type table looks empty")
+
+        declared = dict(re.findall(r"^\s*(--[\w-]+):\s*([^;]+);", sheet, re.M))
+        for token, light, dark in pairs:
+            with self.subTest(token=token):
+                self.assertIn(token, declared,
+                              f"design.md documents {token}; the sheet has no such token")
+                self.assertEqual(
+                    declared[token].strip(), f"light-dark({light}, {dark})",
+                    f"design.md says {token} is {light}/{dark}; "
+                    f"the sheet says {declared[token].strip()}")
+        for token, value in singles:
+            with self.subTest(token=token):
+                self.assertIn(token, declared)
+                self.assertEqual(declared[token].split("/*")[0].strip(), value,
+                                 f"design.md says {token} is {value}")
+
+    def test_the_design_doc_states_the_number_of_states_measured(self):
+        """It said seven for as long as there were seven. Adding /api/docs
+        made it ten and the sentence stayed, so the doc understated the
+        coverage of the one page an integrator reads."""
+        from tools import design_audit
+
+        words = {7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
+                 12: "twelve"}
+        count = len(design_audit.STATES)
+        self.assertIn(count, words, "add the number word for a larger table")
+        doc = _read(os.path.join(DOCS, "design.md"))
+        for claimed in re.findall(r"across (\w+)\s*\n?states|across (\w+) viewport",
+                                  doc):
+            word = claimed[0] or claimed[1]
+            with self.subTest(claimed=word):
+                self.assertEqual(word, words[count],
+                                 f"design.md says {word}; STATES holds {count}")
 
     def test_the_browser_test_table_lists_every_group(self):
         """docs/testing.md describes the browser suite group by group. The

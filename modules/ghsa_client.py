@@ -279,12 +279,18 @@ def _strip_to_path(url: str) -> str:
     The value comes from a response header and becomes an argv element, so it
     is checked rather than trusted: anything that is not an /advisories path
     would otherwise be handed to gh's flag parser.
+
+    The check is equality, not a prefix. `startswith("/advisories")` also
+    accepted "/advisories/../user" -- which the API server resolves back to
+    /user, the endpoint that returns the operator's account -- as well as a
+    sibling route like "/advisories-beta". This endpoint paginates one list,
+    so the only cursor it can legitimately hand back is a query string on
+    /advisories itself.
     """
     parts = urlsplit(url)
-    path = f"{parts.path}?{parts.query}" if parts.query else parts.path
-    if not path.startswith("/advisories"):
+    if parts.path != "/advisories":
         raise GhCliError(f"refusing a pagination cursor outside /advisories: {url!r}")
-    return path
+    return f"{parts.path}?{parts.query}" if parts.query else parts.path
 
 
 # ---------------------------------------------------------------------------

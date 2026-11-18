@@ -150,9 +150,16 @@ NVD_VULN = {
 }
 
 # --- sortable GHSA raw records for the /api/search sort-fix regression ------
-# The three orderings all differ so a wrong sort field is always detectable:
-#   published desc : A, C, B          updated desc : B, C, A
-#   cve_id    desc : B, A, C          (asc = each reversed)
+# All six orderings differ, so any wrong (field, direction) pair is
+# detectable:
+#   published desc : A, C, B      asc : B, C, A
+#   updated   desc : A, B, C      asc : C, B, A
+#   cve_id    desc : B, A, C      asc : C, A, B
+#
+# The comment here used to claim the same while updated_at was the exact
+# reverse of published_at -- so `published desc` and `updated asc` were the
+# identical order, and a mix-up that also flipped direction was invisible.
+# A same-direction field swap was caught; the other half was not.
 SORT_A = "GHSA-aaaa-aaaa-aaaa"
 SORT_B = "GHSA-bbbb-bbbb-bbbb"
 SORT_C = "GHSA-cccc-cccc-cccc"
@@ -164,10 +171,34 @@ def make_sortable_raw():
         return dict(SAMPLE, ghsa_id=gid, cve_id=cve, published_at=pub, updated_at=upd)
 
     return [
-        _rec(SORT_A, "CVE-2026-0002", "2026-01-03T00:00:00Z", "2026-02-01T00:00:00Z"),
-        _rec(SORT_B, "CVE-2026-0003", "2026-01-01T00:00:00Z", "2026-02-03T00:00:00Z"),
-        _rec(SORT_C, "CVE-2026-0001", "2026-01-02T00:00:00Z", "2026-02-02T00:00:00Z"),
+        _rec(SORT_A, "CVE-2026-0002", "2026-01-03T00:00:00Z", "2026-02-03T00:00:00Z"),
+        _rec(SORT_B, "CVE-2026-0003", "2026-01-01T00:00:00Z", "2026-02-02T00:00:00Z"),
+        _rec(SORT_C, "CVE-2026-0001", "2026-01-02T00:00:00Z", "2026-02-01T00:00:00Z"),
     ]
+
+
+# --- Normalized advisory ---------------------------------------------------
+# What the AI classifier and the cache are handed: a *normalized* record, not
+# a raw GHSA one. Four tests built this by hand and the four copies had
+# already drifted -- one dropped `advisory_id`, so a code path that falls back
+# to it was never exercised, and another omitted `severity`. One builder, and
+# `test_the_fixture_matches_a_real_normalized_advisory` keeps it honest
+# against what ghsa_client.normalize() actually emits.
+
+def advisory(**overrides):
+    """A normalized advisory carrying every field the classifier reads."""
+    record = {
+        "advisory_id": "GHSA-aaaa-aaaa-aaaa",
+        "ghsa_id": "GHSA-aaaa-aaaa-aaaa",
+        "cve_id": "CVE-2026-0001",
+        "severity": "high",
+        "summary": "s",
+        "description": "d",
+        "cwes": ["639"],
+        "packages": [],
+    }
+    record.update(overrides)
+    return record
 
 
 # --- HTTP failure fixtures -------------------------------------------------

@@ -22,7 +22,7 @@ import urllib.error
 from modules import ai_classifier
 from modules import cache
 from modules import ghsa_client as ghsa
-from samples import SAMPLE, http_error, redirect_cooldown
+from samples import SAMPLE, advisory, http_error, redirect_cooldown
 
 
 # Module-scoped rather than per-class: every class here can reach
@@ -574,12 +574,9 @@ class TestClassifyBatchIsCallableWithoutFlask(unittest.TestCase):
         self.db = self.tmp.name
         cache.init_db(self.db)
         cache.upsert_advisories([
-            {"advisory_id": "GHSA-aaaa", "cve_id": "CVE-2026-1",
-             "severity": "high", "summary": "s", "description": "d",
-             "cwes": ["639"], "packages": []},
-            {"advisory_id": "GHSA-bbbb", "cve_id": "CVE-2026-2",
-             "severity": "low", "summary": "s", "description": "d",
-             "cwes": ["79"], "packages": []},
+            advisory(advisory_id="GHSA-aaaa", cve_id="CVE-2026-1"),
+            advisory(advisory_id="GHSA-bbbb", cve_id="CVE-2026-2",
+                     severity="low", cwes=["79"]),
         ], path=self.db)
         self.cfg = ai_classifier.AIConfig(
             provider="glm", base_url="https://x", tokens=["k"], model="m")
@@ -753,8 +750,7 @@ class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
             return mock.MagicMock(__enter__=lambda s: io.BytesIO(body.encode()),
                                   __exit__=lambda *a: None)
 
-        adv = {"advisory_id": "GHSA-1", "ghsa_id": "GHSA-1", "cve_id": "CVE-1",
-               "summary": "s", "description": "d", "cwes": ["639"], "packages": []}
+        adv = advisory()
         with mock.patch.object(ai_classifier.urllib.request, "urlopen", fake_urlopen):
             verdict = ai_classifier.classify_one(cfg, adv, "bac")
         self.assertTrue(verdict["is_match"])
@@ -816,8 +812,7 @@ class TestVerdictShapeAndFingerprint(unittest.TestCase):
         kwargs.update(over)
         return ai_classifier.AIConfig(**kwargs)
 
-    ADVISORY = {"advisory_id": "G", "ghsa_id": "G", "cve_id": "C",
-                "summary": "s", "description": "d", "cwes": [], "packages": []}
+    ADVISORY = advisory(cwes=[])
 
     def _fp(self, cfg, category="bac"):
         return ai_classifier.classification_fingerprint(cfg, self.ADVISORY, category)
@@ -995,8 +990,7 @@ class TestPromptInjection(unittest.TestCase):
     )
 
     def _prompt(self, **fields):
-        adv = {"ghsa_id": "GHSA-x", "cve_id": "CVE-1", "cwes": ["79"],
-               "packages": [], "summary": "ok", "description": "ok"}
+        adv = advisory(cwes=["79"], summary="ok", description="ok")
         adv.update(fields)
         return ai_classifier._build_user_prompt(adv, "bac")
 
@@ -1023,10 +1017,14 @@ class TestPromptInjection(unittest.TestCase):
                         prompt.index("<untrusted_advisory>"))
 
     def test_the_whole_advisory_sits_inside_the_fence(self):
-        prompt = self._prompt(summary="SUMMARY-MARKER", description="DESC-MARKER")
+        adv = advisory(summary="SUMMARY-MARKER", description="DESC-MARKER")
+        prompt = ai_classifier._build_user_prompt(adv, "bac")
         start = prompt.index("<untrusted_advisory>")
         end = prompt.index("</untrusted_advisory>")
-        for marker in ("SUMMARY-MARKER", "DESC-MARKER", "GHSA-x", "CVE-1"):
+        # Taken from the advisory rather than written out, so renaming a
+        # fixture id cannot quietly drop an identifier from the sweep.
+        for marker in ("SUMMARY-MARKER", "DESC-MARKER",
+                       adv["ghsa_id"], adv["cve_id"]):
             self.assertTrue(start < prompt.index(marker) < end, marker)
 
     def test_truncation_is_marked_so_evidence_is_not_silently_cut(self):
@@ -1049,8 +1047,7 @@ class TestPromptInjection(unittest.TestCase):
         only restated the constant and had to be edited every time it moved.
         """
         cfg = ai_classifier.AIConfig("glm", "https://x", ["k"], "m")
-        adv = {"advisory_id": "G", "ghsa_id": "G", "cve_id": "C",
-               "summary": "s", "description": "d", "cwes": [], "packages": []}
+        adv = advisory(cwes=[])
         before = ai_classifier.classification_fingerprint(cfg, adv, "bac")
         with mock.patch.object(ai_classifier, "CLASSIFIER_VERSION", "test"):
             self.assertNotEqual(

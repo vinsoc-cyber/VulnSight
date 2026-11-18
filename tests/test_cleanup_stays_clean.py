@@ -22,6 +22,7 @@ import inspect
 import os
 import subprocess
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -235,6 +236,40 @@ class TestNoTestCanSilentlyStopChecking(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True, timeout=180)
         self.assertEqual(proc.returncode, 0,
                          f"tests that cannot fail:\n{proc.stdout}")
+
+
+class TestTheSharedFixturesMatchTheRealShapes(unittest.TestCase):
+    """A fixture that has drifted from the record it stands in for tests a
+    shape the product never produces.
+
+    Four test files each hand-built "a normalized advisory" for the AI
+    classifier, and the four copies had already diverged: one omitted
+    `advisory_id`, which is the first key the cache-id fallback reads, so
+    that branch was exercised nowhere. They now share `samples.advisory`,
+    and this is what stops the single copy drifting in turn.
+    """
+
+    def test_the_advisory_fixture_only_uses_real_normalized_fields(self):
+        from modules import ghsa_client
+        from samples import SAMPLE, advisory
+        real = set(ghsa_client.normalize(SAMPLE))
+        invented = sorted(set(advisory()) - real)
+        self.assertEqual(
+            invented, [],
+            f"samples.advisory() carries fields normalize() never emits: "
+            f"{invented}")
+
+    def test_the_advisory_fixture_carries_every_field_the_classifier_reads(self):
+        """_build_user_prompt and the verdict cache id between them read
+        eight keys. A fixture missing one silently tests the empty branch."""
+        from samples import advisory
+        source = inspect.getsource(ai_classifier)
+        read = set(re.findall(r'adv\.get\(["\'](\w+)["\']', source))
+        self.assertTrue(read, "the extraction found no adv.get() calls")
+        missing = sorted(read - set(advisory()) - {"osv_id"})
+        self.assertEqual(
+            missing, [],
+            f"ai_classifier reads these and the fixture omits them: {missing}")
 
 
 class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):

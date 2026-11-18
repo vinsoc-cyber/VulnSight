@@ -35,6 +35,19 @@ ROW_RE = re.compile(r"^\| `(test_\w+\.py)` \| (\d+) \|(.*)$", re.M)
 TOTAL_RE = re.compile(r"^(\.venv/bin/python -m unittest discover -s tests\s+# )"
                       r"(\d+) tests: (\d+) offline \+ (\d+) browser$", re.M)
 
+# The same three figures turn up in prose, in this doc and in the others, and
+# `tests/test_docs.py::test_no_doc_quotes_a_suite_size_that_has_drifted`
+# checks every one of them. Rewriting only the header left "`Ran 735 tests`"
+# four lines below it stale and the suite red -- a generator that owns a
+# number has to own every copy of it, or it has merely moved the hand-editing
+# somewhere less visible.
+PROSE_RES = {
+    "offline": re.compile(r"(\d+)(?= offline tests?\b)"),
+    "browser": re.compile(r"(\d+)(?= browser tests?\b)"),
+    "browser_alt": re.compile(r"(\d+)(?= e2e tests?\b)"),
+    "total": re.compile(r"(?<=`Ran )(\d+)(?= tests`)"),
+}
+
 
 def counts() -> dict[str, int]:
     return {
@@ -88,6 +101,23 @@ def main(argv: list[str]) -> int:
     if not substitutions:
         drift.append("header: no 'N tests: N offline + N browser' line to update")
 
+    figures = {"offline": total - browser, "browser": browser,
+               "browser_alt": browser, "total": total}
+    pending: dict[pathlib.Path, str] = {DOC: text}
+    for path in [*sorted(ROOT.glob("*.md")), *sorted((ROOT / "docs").glob("*.md"))]:
+        body = pending.get(path) or path.read_text(encoding="utf-8")
+        for kind, pattern in PROSE_RES.items():
+            want = str(figures[kind])
+
+            def fix(match: re.Match[str], want=want, kind=kind, path=path) -> str:
+                if match.group(1) != want:
+                    drift.append(f"{path.name}: says {match.group(1)} "
+                                 f"where the {kind} count is {want}")
+                return want
+
+            body = pattern.sub(fix, body)
+        pending[path] = body
+
     if not drift:
         print("docs/testing.md counts are already accurate")
         return 0
@@ -98,8 +128,13 @@ def main(argv: list[str]) -> int:
 
     unwritable = [line for line in drift
                   if "missing from the table" in line or "not in tests/" in line]
-    write_atomic(DOC, text)
-    print(f"\nrewrote {len(drift) - len(unwritable)} count(s) in {DOC.name}")
+    written = 0
+    for path, body in pending.items():
+        if body != path.read_text(encoding="utf-8"):
+            write_atomic(path, body)
+            written += 1
+    print(f"\nrewrote {len(drift) - len(unwritable)} count(s) across "
+          f"{written} file(s)")
     return 2 if unwritable else 0
 
 
