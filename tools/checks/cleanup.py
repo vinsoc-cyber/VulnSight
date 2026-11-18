@@ -13,6 +13,26 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        # The gated categories, not the advisory one: `loop-only` is
+        # reported and deliberately does not fail the build, so a revert
+        # that only produces it proves nothing. A first attempt at these
+        # two checks did exactly that and reported a false gap.
+        "a test's only assertion hides behind an if",
+        [("tests/test_ui_e2e.py",
+          "        # Hiding it at every width would satisfy \"never cut off where shown\".\n"
+          "        self.assertTrue(shown_somewhere,\n"
+          '                        "the wordmark is never shown at any width")',
+          "")],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "a test compares a value with itself",
+        [("tests/test_records.py",
+          '        self.assertEqual(records.identify({"other": "x"}, "id"), "")',
+          '        self.assertEqual("", "")')],
+        "test_cleanup_stays_clean",
+    ),
+    (
         "the image stops declaring the bind it chose",
         [("Dockerfile",
           "    VULNSIGHT_DATA_DIR=/data \\\n    VULNSIGHT_BIND=0.0.0.0",

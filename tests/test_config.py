@@ -118,7 +118,8 @@ class TestLoadDotenvParsing(unittest.TestCase):
             os.unlink(path)
 
     def test_a_missing_file_is_not_an_error(self):
-        config.load_dotenv("/nonexistent/.env")
+        """Running without a .env is the normal case, not a failure."""
+        config.load_dotenv("/nonexistent/.env")   # must not raise
 
 
 

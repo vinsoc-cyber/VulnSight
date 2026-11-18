@@ -54,15 +54,21 @@ class TestDocsStructure(unittest.TestCase):
 
     def test_readme_links_to_every_doc_page(self):
         readme = _read(os.path.join(ROOT, "README.md"))
-        for name in sorted(os.listdir(DOCS)):
-            if name.endswith(".md") and name != "README.md":
-                self.assertIn(f"docs/{name}", readme, name)
+        pages = [name for name in sorted(os.listdir(DOCS))
+                 if name.endswith(".md") and name != "README.md"]
+        # Without this the test passes when the listing is empty, which is
+        # the one case where "every page is linked" is worth nothing.
+        self.assertGreater(len(pages), 5, "the docs directory looks empty")
+        for name in pages:
+            self.assertIn(f"docs/{name}", readme, name)
 
     def test_index_links_to_every_doc_page(self):
         index = _read(os.path.join(DOCS, "README.md"))
-        for name in sorted(os.listdir(DOCS)):
-            if name.endswith(".md") and name != "README.md":
-                self.assertIn(f"({name})", index, name)
+        pages = [name for name in sorted(os.listdir(DOCS))
+                 if name.endswith(".md") and name != "README.md"]
+        self.assertGreater(len(pages), 5, "the docs directory looks empty")
+        for name in pages:
+            self.assertIn(f"({name})", index, name)
 
     def test_every_internal_link_and_anchor_resolves(self):
         link = re.compile(r"\[[^\]]+\]\(([^)#]+)(#[^)]+)?\)")
@@ -248,10 +254,12 @@ class TestDocsMatchTheCode(unittest.TestCase):
             if os.path.isfile(path):
                 declared += _read(path).lower()
 
+        pages = _markdown_files()
+        self.assertGreater(len(pages), 5, "no markdown files found to check")
         for tool in ("pytest", "tox", "nox", "mypy"):
             if tool in declared:
                 continue
-            for path in _markdown_files():
+            for path in pages:
                 with self.subTest(tool=tool, doc=os.path.basename(path)):
                     self.assertNotIn(
                         f"-m {tool}", _read(path),
@@ -264,19 +272,30 @@ class TestDocsMatchTheCode(unittest.TestCase):
         behind, which makes the strongest evidence in these docs the least
         trustworthy number in them."""
         total = len(revert_checks.CHECKS)
+        # The phrases below are how the docs state the figure. If the
+        # wording changes, every loop here finds nothing and the test
+        # reports success while the number it exists to police goes
+        # unchecked -- so count the matches and require some.
+        stated = 0
         for name, text in self.text.items():
             if "revert_checks.py" not in text:
                 continue
             for claimed in re.findall(r"(\d+) named bugs", text):
+                stated += 1
                 with self.subTest(doc=name):
                     self.assertEqual(
                         int(claimed), total,
                         f"{name} says {claimed} named bugs; CHECKS has {total}")
             for a, b in re.findall(r"\*\*(\d+)/(\d+) caught\*\*", text):
+                stated += 1
                 with self.subTest(doc=name):
                     self.assertEqual(
                         (int(a), int(b)), (total, total),
                         f"{name} claims {a}/{b}; CHECKS has {total}")
+        self.assertGreater(
+            stated, 0,
+            "no doc states the revert-check tally any more; this check is "
+            "silently passing. Re-point it at however the figure is written.")
 
     def test_the_stated_suite_size_matches_the_suite(self):
         """`docs/review-dispositions.md` quotes a pass count as evidence. A
@@ -297,7 +316,10 @@ class TestDocsMatchTheCode(unittest.TestCase):
         real 606 + 39 -- a hand-typed figure nobody re-counted for a hundred
         tests. Any doc may state the size; it just has to be the size."""
         offline, browser = 0, 0
-        for name in sorted(os.listdir(os.path.join(ROOT, "tests"))):
+        files = sorted(os.listdir(os.path.join(ROOT, "tests")))
+        self.assertGreater(len([f for f in files if f.startswith("test_")]), 10,
+                           "the tests directory listing looks wrong")
+        for name in files:
             if not (name.startswith("test_") and name.endswith(".py")):
                 continue
             count = len(re.findall(

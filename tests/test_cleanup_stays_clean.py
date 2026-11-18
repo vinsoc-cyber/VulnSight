@@ -17,6 +17,7 @@ they exist so that no row in the disposition table rests on nothing.
 """
 
 import ast
+import hashlib
 import inspect
 import os
 import re
@@ -116,6 +117,12 @@ class TestExtractionsStayExtracted(unittest.TestCase):
         function. The genexp had its own scope so it worked, which is worse:
         it read as a bug and behaved correctly."""
         tree = ast.parse(_source("app.py"))
+        # If app.py ever had no comprehensions and no for-loops, "none of
+        # them binds `g`" would be true and meaningless.
+        self.assertGreater(
+            sum(1 for n in ast.walk(tree)
+                if isinstance(n, (ast.comprehension, ast.For))), 5,
+            "nothing to check; the walk found no loops")
         for node in ast.walk(tree):
             if isinstance(node, (ast.comprehension,)):
                 target = node.target
@@ -184,6 +191,78 @@ class TestThePerformanceFixesAreStillInPlace(unittest.TestCase):
         where the out-of-memory kills came from."""
         src = _source("modules/osv_client.py")
         self.assertIn("_load_lock", src)
+
+
+class TestNoTestCanSilentlyStopChecking(unittest.TestCase):
+    """A green suite is worth what its tests can still fail.
+
+    `tools/audit_tests.py` sweeps every test method for the shapes a test
+    takes once it has stopped checking: no assertion at all, assertions
+    reachable only inside an `if` (so an empty result is a pass), and
+    comparisons of a value with itself. Running it here means the sweep is
+    part of the suite rather than something somebody remembers to do.
+
+    Its first run over this repo flagged 15 of 687 methods. Eleven were
+    legitimate -- `self.fail()` inside a guard, determinism tests that
+    compare two calls, "must not raise" smoke tests -- and the detector was
+    taught about each. Five were real: four would have passed with an empty
+    loop, and one browser test would have passed if the wordmark were
+    hidden at every width.
+    """
+
+    def test_no_test_method_is_flagged_as_unable_to_fail(self):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "audit_tests.py"),
+             "--strict"],
+            cwd=ROOT, capture_output=True, text=True, timeout=180)
+        self.assertEqual(proc.returncode, 0,
+                         f"tests that cannot fail:\n{proc.stdout}")
+
+
+class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):
+    """It edits source files on purpose. It must do that to a copy.
+
+    The first version edited the checkout and restored in a `finally`,
+    which is correct in isolation and wrong the moment anything else reads
+    the repo. During one long run somebody ran `docker compose up --build`
+    and got an image with a deliberately-broken `app.js` baked in, from a
+    compose file that was mid-revert and publishing on every interface. A
+    warning in a docstring is not a guard; this is.
+    """
+
+    def test_running_a_destructive_check_leaves_the_tree_byte_identical(self):
+        watched = ["static/app.js", "docker-compose.yml",
+                   "modules/search_service.py"]
+        before = {f: hashlib.sha256(_source(f).encode()).hexdigest() for f in watched}
+
+        # Checks that rewrite exactly those three files.
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "revert_checks.py"),
+             "compose publishes", "opening screen stops", "one bad record"],
+            cwd=ROOT, capture_output=True, text=True, timeout=900)
+        self.assertIn("reverts caught", proc.stdout, proc.stdout + proc.stderr)
+
+        after = {f: hashlib.sha256(_source(f).encode()).hexdigest() for f in watched}
+        self.assertEqual(before, after,
+                         "the harness modified the working tree")
+
+    def test_it_says_where_it_is_running(self):
+        """If it ever stops printing a sandbox path, it is back in the
+        checkout and the test above is the only thing standing in the way."""
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "revert_checks.py"),
+             "cve_id sorts"],
+            cwd=ROOT, capture_output=True, text=True, timeout=900)
+        self.assertRegex(proc.stdout, r"running in /")
+        self.assertNotIn(ROOT + "\n", proc.stdout)
+
+    def test_in_place_is_opt_in_and_says_so(self):
+        source = _source("tools/revert_checks.py")
+        self.assertIn("--in-place", source)
+        self.assertIn("editing the checkout", source)
+        # The default path must build a sandbox.
+        self.assertIn("tree = sandbox(REPO)", source)
 
 
 class TestEveryFixedRowHasAGuard(unittest.TestCase):

@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 687 tests: 641 offline + 46 browser
+.venv/bin/python -m unittest discover -s tests        # 691 tests: 645 offline + 46 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -29,7 +29,7 @@ OSV and the AI provider are all mocked.
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
 | `test_docs.py` | 18 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_deployment.py` | 16 | Dockerfile, compose, entrypoint and run.sh: the bind the image declares, the user it drops to, head parity |
-| `test_cleanup_stays_clean.py` | 14 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
+| `test_cleanup_stays_clean.py` | 18 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 13 | batching, malformed responses |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 687 tests` / `OK (skipped=46)`, and every other test still runs.
+`Ran 691 tests` / `OK (skipped=46)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -207,12 +207,18 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 105 named bugs it re-introduces the bug in the working tree, runs the
+For each of 107 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
-covered, whatever any summary claims. It writes to tracked files — it restores
-them in a `finally` and verifies the tree is clean on exit, but do not run it on
-a dirty tree you care about.
+covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never
+modified. That is not a nicety: the first version edited tracked files in
+place and restored them afterwards, which is correct in isolation and wrong
+the moment anything else reads the repo. During one long run a
+`docker compose up --build` picked up a deliberately-broken `app.js` and a
+compose file that was mid-revert and publishing on every interface, and
+baked both into an image. `--in-place` restores the old behaviour and says
+loudly that it is doing so; `tests/test_cleanup_stays_clean.py` hashes three
+source files around a destructive run and fails if any of them moved.
 
 It earns its keep. Its first run found three uncovered fixes. Two were real
 gaps: GHSA record degradation was never driven through `run_search`, and the

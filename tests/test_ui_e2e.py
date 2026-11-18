@@ -862,6 +862,7 @@ class TestTopbarLayoutHolds(UITestCase):
         """Hidden is fine; half-painted is not. Where the name is on screen
         it must fit the box it is given."""
         self.open()
+        shown_somewhere = False
         for width in (320, 390, 414, 480, 700, 900, 1400):
             page = self._at(width)
             try:
@@ -872,11 +873,15 @@ class TestTopbarLayoutHolds(UITestCase):
                           scrollW: el.scrollWidth, clientW: el.clientWidth};
                 }""")
                 if state["shown"]:
+                    shown_somewhere = True
                     self.assertLessEqual(
                         state["scrollW"], state["clientW"] + 1,
                         f"at {width}px the wordmark overflows its box")
             finally:
                 page.close()
+        # Hiding it at every width would satisfy "never cut off where shown".
+        self.assertTrue(shown_somewhere,
+                        "the wordmark is never shown at any width")
 
     def test_the_brand_link_is_still_announced_in_full_when_hidden(self):
         """At narrow widths the name is clipped out of view rather than

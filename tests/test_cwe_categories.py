@@ -342,6 +342,9 @@ class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
         # are allowed -- it is the accidental substring that misfires.
         decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
                   "medieval", "obstacle", "tentacle", "reevaluated")
+        # An empty KEYWORDS would satisfy "no keyword is a trap" vacuously.
+        self.assertGreater(sum(len(v) for v in cwe.KEYWORDS.values()), 50,
+                           "KEYWORDS looks empty; this check proves nothing")
         for category, keywords in cwe.KEYWORDS.items():
             for keyword in keywords:
                 for decoy in decoys:
