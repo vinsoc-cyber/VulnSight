@@ -83,6 +83,13 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "a transient rate limit is persisted across restarts again",
+        [("modules/ai_classifier.py",
+          "            cfg.mark_skip_token(auth, skip_for, persist=not retryable)",
+          "            cfg.mark_skip_token(auth, skip_for, persist=True)")],
+        "test_ai_classifier",
+    ),
+    (
         "the auth allowlist goes back to being unreachable",
         [("app.py",
           "        if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:\n"

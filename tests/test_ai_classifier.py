@@ -641,11 +641,46 @@ class TestRateLimitsDoNotSpendKeys(unittest.TestCase):
         self.assertLessEqual(skip, ai_classifier._MAX_RATE_PAUSE)
 
     def test_a_throttle_is_not_written_to_disk(self):
+        """The decision production makes, not the argument the test passes.
+
+        This used to call mark_skip_token(persist=False) and assert nothing
+        was written -- asserting its own argument. The real decision is
+        `persist=not retryable` at the HTTP error site; changing that to
+        `persist=True` left the whole suite green, and it is this class's
+        headline bug: a 30-second throttle outliving the restart that would
+        have cleared it.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, ".ai_key_cooldown.json")
             with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path):
-                self._cfg().mark_skip_token("k1", 30, persist=False)
-                self.assertFalse(os.path.exists(path))
+                cfg = self._cfg()
+                # A 429 that says "slow down": retryable, so in-memory only.
+                err = http_error(429, body=b'{"error":"Rate limit reached"}')
+                # urlopen, not _call_messages: mocking the latter skips the
+                # code that decides whether to persist.
+                with mock.patch("urllib.request.urlopen", side_effect=err), \
+                        mock.patch.object(ai_classifier.http_retry.time, "sleep"):
+                    ai_classifier.ping(cfg)
+                self.assertFalse(
+                    os.path.exists(path),
+                    "a transient rate limit was persisted across restarts")
+
+    def test_a_spent_key_is_written_to_disk(self):
+        """The other side of the same decision: a 401 means the key is
+        finished, and re-learning that after a restart costs a real
+        request on a key already known to be dead."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".ai_key_cooldown.json")
+            with mock.patch.object(ai_classifier, "COOLDOWN_PATH", path):
+                cfg = self._cfg()
+                err = http_error(401, body=b'{"error":"invalid api_key"}')
+                with mock.patch("urllib.request.urlopen", side_effect=err), \
+                        mock.patch.object(ai_classifier.http_retry.time, "sleep"):
+                    ai_classifier.ping(cfg)
+                self.assertTrue(
+                    os.path.exists(path),
+                    "a revoked key was not recorded, so the next process "
+                    "will spend a request discovering it again")
 
     def test_a_short_cooldown_cannot_erase_a_long_one_on_disk(self):
         """_persist_cooldown wrote time.time()+seconds unconditionally, so a

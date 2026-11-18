@@ -343,6 +343,19 @@ class TestDocsMatchTheCode(unittest.TestCase):
                 with self.subTest(doc=doc, kind="total"):
                     self.assertEqual(int(claimed), offline + browser, doc)
 
+    def test_the_browser_test_table_lists_every_group(self):
+        """docs/testing.md describes the browser suite group by group. The
+        table listed 9 of 14 classes -- the five added during this review
+        were simply missing, and nothing noticed, so the page understated
+        what the suite covers to anyone deciding whether to trust it."""
+        source = _read(os.path.join(ROOT, "tests", "test_ui_e2e.py"))
+        groups = re.findall(r"^class (Test\w+)\(UITestCase\)", source, re.M)
+        self.assertGreater(len(groups), 5, "the e2e module looks truncated")
+        doc = self.text["docs/testing.md"]
+        missing = [name for name in groups if name not in doc]
+        self.assertEqual(missing, [],
+                         f"docs/testing.md does not mention {missing}")
+
     def test_every_route_is_documented(self):
         # Only the URL map is wanted here, but create_app() has two side
         # effects. Without a declared bind it sees an unknown (therefore

@@ -519,7 +519,7 @@ class TestCacheStatusSurvivesAVanishingFile(unittest.TestCase):
              mock.patch.object(osv_client, "CACHE_DIR", directory):
             with open(osv_client._zip_path("Go"), "wb") as handle:
                 handle.write(b"x" * 10)
-            with mock.patch.object(osv_client.os.path, "getsize", vanishing):
+            with mock.patch("modules.osv_client.os.path.getsize", vanishing):
                 self.assertEqual(osv_client.cache_status(), [])
 
     def test_a_present_cache_is_still_reported(self):

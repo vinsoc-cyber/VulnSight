@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 710 tests: 662 offline + 48 browser
+.venv/bin/python -m unittest discover -s tests        # 718 tests: 670 offline + 48 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -14,7 +14,7 @@ OSV and the AI provider are all mocked.
 | File | Tests | Covers |
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
-| `test_ai_classifier.py` | 75 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_ai_classifier.py` | 76 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
 | `test_app.py` | 73 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
 | `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
@@ -25,9 +25,9 @@ OSV and the AI provider are all mocked.
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
 | `test_jobs.py` | 23 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
-| `test_ghsa_client.py` | 20 | `gh` invocation, cursor pagination, `Link` parsing |
+| `test_ghsa_client.py` | 26 | `gh` invocation, cursor pagination, `Link` parsing |
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
-| `test_docs.py` | 18 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
+| `test_docs.py` | 19 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_deployment.py` | 16 | Dockerfile, compose, entrypoint and run.sh: the bind the image declares, the user it drops to, head parity |
 | `test_cleanup_stays_clean.py` | 24 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 710 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 718 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -80,15 +80,25 @@ test corresponds to a defect that actually shipped:
 | `TestFailureStates` | a source-less search keeps the previous view; missing EPSS is not rendered as `0.00%` |
 | `TestRecentSearches` | no duplicate entries, signature-keyed rows, restore reapplies filters |
 | `TestAccessibility` | exactly one `<h1>`, labelled containers expose their label, the mobile panel takes and traps focus |
+| `TestFocusSurvivesARerender` | a per-card retry keeps focus and scroll position instead of dropping to `<body>` |
+| `TestAuthGateTrapsFocus` | the gate opens through the real path, inerts the background, and traps Tab and Shift+Tab |
+| `TestTheComboboxSaysWhatEnterWillDo` | a match is highlighted before any key is pressed, and the "no matches" row is not announced as an option |
+| `TestToastsShareOneLiveRegion` | every toast lands in one named live region, so two at once do not compete |
+| `TestTheOpeningScreenIsTheTaxonomy` | every class is offered, the map and the rail cannot disagree, and picking one keeps focus on the tile |
 
 ### Assert on what is rendered
 
-These tests check `getComputedStyle(el).display`, never `el.hidden`. That is not
+These tests check `getComputedStyle(el).display`, not `el.hidden`. That is not
 style preference. A `.cat { display: grid }` rule beat the UA stylesheet's
 `[hidden] { display: none }`, so the class filter set `hidden` on every row and
 **changed nothing on screen** — while a property-based assertion stayed green.
-Delete `.taxonomy-item[hidden] { display: none }` from the stylesheet and two of
-these tests fail, which is the point.
+One declaration does that work -- `[hidden] { display: none !important; }` --
+because the UA stylesheet's own version loses to any rule with a class
+selector, and several components set display (`.combo-list` is flex,
+`.auth-gate` is flex, `.cat` is grid). Delete it and the CWE popup stays
+painted with `hidden=true` on it, and the auth scrim covers the whole app
+permanently. `tests/test_frontend_js.py` guards the rule in milliseconds and
+a revert check proves the guard bites.
 
 Also useful: each test declares expected console noise via
 `self.tolerated_errors`; anything else fails the test, so a stray JS exception
@@ -207,7 +217,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 117 named bugs it re-introduces the bug in the working tree, runs the
+For each of 120 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

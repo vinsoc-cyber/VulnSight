@@ -128,6 +128,9 @@ class TestGeneratedModuleIsValid(unittest.TestCase):
         ])
         _, ns = _module_from(root)
         self.assertNotIn("9999", ns["NAMES"])
+        # And the weakness survived as data rather than being dropped:
+        # asserting only absence passes if render silently lost the row.
+        self.assertEqual(ns["NAMES"]["79"], 'Name", "9999": "injected')
 
     def test_render_is_deterministic(self):
         """docs/cwe-catalog.md promises byte-identical output for the same

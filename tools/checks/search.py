@@ -13,6 +13,25 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "a typo in a transient-error marker stops GHSA retrying",
+        [("modules/ghsa_client.py",
+          '    "timed out", "502", "503", "504", "bad gateway", "service unavailable",',
+          '    "timed out", "5O2", "503", "504", "bad gatway", "service unavailable",')],
+        "test_ghsa_client",
+    ),
+    (
+        "GHSA stops retrying a transient page at all",
+        [("modules/ghsa_client.py",
+          "def _is_transient_gh_error(exc: BaseException) -> bool:\n"
+          "    if not isinstance(exc, GhCliError):\n"
+          "        return False",
+          "def _is_transient_gh_error(exc: BaseException) -> bool:\n"
+          "    return False\n"
+          "    if not isinstance(exc, GhCliError):\n"
+          "        return False")],
+        "test_ghsa_client",
+    ),
+    (
         "EPSS keys are not normalised on the way back",
         [("modules/epss_client.py",
           "            results[cve.upper()] = {",

@@ -17,6 +17,78 @@ from modules import ghsa_client as ghsa
 from samples import SAMPLE
 
 
+class TestATransientPageIsRetried(unittest.TestCase):
+    """The module's headline promise -- "a page that fails transiently is
+    retried" -- had no test and no revert check. `_is_transient_gh_error`,
+    `_TRANSIENT_GH_MARKERS` and `FETCH_DEADLINE_SECONDS` appeared in no
+    test file at all, so a typo in one marker would silently restore the
+    bug where one flaky page loses 200 advisories.
+
+    The existing failure test uses stderr="boom", which is deliberately
+    *not* transient, so it exercised the opposite branch.
+    """
+
+    def test_the_markers_that_decide_a_retry(self):
+        for text in ("502 Bad Gateway", "connection reset by peer",
+                     "TLS handshake timeout", "API rate limit exceeded",
+                     "temporary failure in name resolution", "unexpected EOF"):
+            with self.subTest(stderr=text):
+                self.assertTrue(
+                    ghsa._is_transient_gh_error(ghsa.GhCliError(text)),
+                    f"{text!r} should be worth another attempt")
+
+    def test_a_permanent_failure_is_not_retried(self):
+        for text in ("Not Found", "Bad credentials", "Validation Failed",
+                     "could not resolve to a Repository"):
+            with self.subTest(stderr=text):
+                self.assertFalse(
+                    ghsa._is_transient_gh_error(ghsa.GhCliError(text)))
+
+    def test_only_a_gh_error_counts(self):
+        """is_retryable's default reads HTTP status; this one only ever
+        sees a subprocess result, so anything else must fall through."""
+        self.assertFalse(ghsa._is_transient_gh_error(OSError("502")))
+        self.assertFalse(ghsa._is_transient_gh_error(ValueError("timed out")))
+
+    def test_a_flaky_first_page_is_retried_and_the_fetch_succeeds(self):
+        """End to end: the predicate is wired into the fetch, not merely
+        defined. Without the retry this returns nothing."""
+        good = json.dumps([dict(SAMPLE)])
+        calls = {"n": 0}
+
+        def flaky(cmd, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return mock.Mock(returncode=1, stdout="", stderr="502 Bad Gateway")
+            return mock.Mock(returncode=0, stdout="HTTP/2.0 200\r\n\r\n" + good,
+                             stderr="")
+
+        with mock.patch.object(ghsa.subprocess, "run", side_effect=flaky), \
+                mock.patch.object(ghsa.http_retry.time, "sleep"):
+            out = ghsa.fetch_advisories(ghsa.SearchParams(max_results=10))
+        self.assertEqual(calls["n"], 2, "the transient page was not retried")
+        self.assertEqual(len(out), 1)
+
+    def test_a_permanent_first_page_is_not_retried(self):
+        calls = {"n": 0}
+
+        def always_bad(cmd, *args, **kwargs):
+            calls["n"] += 1
+            return mock.Mock(returncode=1, stdout="", stderr="Bad credentials")
+
+        with mock.patch.object(ghsa.subprocess, "run", side_effect=always_bad), \
+                mock.patch.object(ghsa.http_retry.time, "sleep"), \
+                self.assertRaises(ghsa.GhCliError):
+            ghsa.fetch_advisories(ghsa.SearchParams(max_results=10))
+        self.assertEqual(calls["n"], 1, "a permanent failure was retried")
+
+    def test_the_whole_fetch_has_a_deadline(self):
+        """50 pages times a 60s per-call timeout is a 50-minute worst case
+        inside a request the shipped gunicorn allows 180s."""
+        self.assertLessEqual(ghsa.FETCH_DEADLINE_SECONDS, 180)
+        self.assertGreater(ghsa.FETCH_DEADLINE_SECONDS, 0)
+
+
 class TestSearchParams(unittest.TestCase):
     def test_query_build(self):
         p = ghsa.SearchParams(ecosystem="maven", cwes=["CWE-639", "862"],
@@ -172,7 +244,12 @@ class TestPaginationCursorHandling(unittest.TestCase):
 
     def _gh_response(self, headers, body="[]"):
         """Drive the real _run_gh_api with a canned `gh api -i` stdout."""
-        completed = mock.Mock(returncode=0, stdout=headers + "\r\n" + body, stderr="")
+        # Two CRLFs: _run_gh_api splits on the blank line between headers
+        # and body (re.split(r"\r?\n\r?\n")). With one, the JSON ended up
+        # inside the header blob, `data` came back empty, and the `body`
+        # argument did nothing -- the three callers discarded it with `_,`.
+        completed = mock.Mock(returncode=0,
+                              stdout=headers + "\r\n\r\n" + body, stderr="")
         with mock.patch.object(ghsa.subprocess, "run", return_value=completed):
             return ghsa._run_gh_api("/advisories?per_page=100")
 
