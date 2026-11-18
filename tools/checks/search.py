@@ -54,10 +54,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "the advisory batch is sent in one oversized statement",
         [("modules/cache.py",
-          "        for start in range(0, len(ids), 500):\n"
-          "            chunk = ids[start:start + 500]",
-          "        for start in range(0, len(ids), 100000):\n"
-          "            chunk = ids[start:start + 100000]")],
+          "_IN_CLAUSE_CHUNK = 500",
+          "_IN_CLAUSE_CHUNK = 100000")],
         "test_cache",
     ),
     # ---------------------------------------------------------------- merge
@@ -119,7 +117,8 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     (
         "every selected source failing answers 200, not 502",
         [("modules/search_service.py",
-          "    if failed_sources and set(failed_sources) >= set(q.sources):",
+          "    if (failed_sources and attempted_sources\n"
+          "            and set(failed_sources) >= set(attempted_sources)):",
           "    if False:")],
         "test_search_service",
     ),

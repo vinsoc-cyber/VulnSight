@@ -357,7 +357,17 @@ def audit(base: str, out: pathlib.Path | None) -> int:
             page.on("console",
                     lambda msg, sink=errors: sink.append(f"console: {msg.text}")
                     if msg.type == "error" else None)
-            page.goto(base + path, wait_until="networkidle")
+            response = page.goto(base + path, wait_until="networkidle")
+            # Flask's 404 body is exactly one <h1>, with no overflow and no
+            # JS errors -- so it satisfies every structural check here. If
+            # /api/docs ever stopped registering, the three states added to
+            # cover that page would have audited the 404 and reported clean.
+            if response is not None and response.status >= 400:
+                problems.append(
+                    f"{name}: {base + path} returned HTTP {response.status}; "
+                    f"nothing below measured the intended page")
+                page.close()
+                continue
             page.evaluate(f"() => document.documentElement.dataset.theme = '{theme}'")
             if populate:
                 _stub_and_search(page)
@@ -451,9 +461,15 @@ def main(argv: list[str]) -> int:
     try:
         import playwright.sync_api  # noqa: F401
     except ImportError:
+        # 77, the conventional "skipped" code, not 0. Returning success
+        # meant this tool wired into CI without a browser passed forever
+        # having measured nothing -- indistinguishable from "measured
+        # everything, all good", which is the failure mode it exists to
+        # catch in other people's work.
         print("playwright is not installed (pip install -r requirements-dev.txt)",
               file=sys.stderr)
-        return 0
+        print("SKIPPED: nothing was measured", file=sys.stderr)
+        return 77
 
     if args.url:
         return audit(args.url, args.out)

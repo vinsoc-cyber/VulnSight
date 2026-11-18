@@ -8,10 +8,14 @@ stopped checking anything:
   no-assertion      the body never asserts, raises or uses assertRaises
   conditional-only  every assertion is nested inside an `if`, so an empty or
                     unexpected result skips the check and the test passes
-  self-fulfilling   the only values asserted on are literals defined in the
-                    same test, so it checks Python rather than the product
-  reimplements      the test rebuilds the logic under test instead of calling
-                    it, so it stays green while the shipped code is broken
+  loop-only         every assertion sits inside a loop over a runtime value,
+                    so an empty sequence is a pass
+  self-fulfilling   nothing under test is ever called: every name the test
+                    asserts on was assigned in the test itself, so it checks
+                    Python rather than the product
+  reimplements      the test rebuilds an expected value with the same
+                    operations the code under test uses, so it stays green
+                    while the shipped code is broken in the same way
   always-true       assertTrue(True), assertEqual(x, x), assertIn(a, a)
 
 None of these are proof of a bad test on their own -- a smoke test that only
@@ -42,6 +46,19 @@ ASSERT_CALLS = {
 }
 
 
+def _imported_names(tree: ast.Module) -> set[str]:
+    """Top-level names bound by imports, for the self-fulfilling check."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    return names
+
+
 def _is_assertion(node: ast.AST) -> bool:
     if isinstance(node, ast.Assert):
         return True
@@ -57,7 +74,7 @@ def _is_assertion(node: ast.AST) -> bool:
     return False
 
 
-def _assertions(fn: ast.FunctionDef) -> list[ast.AST]:
+def _assertions(fn: ast.AST) -> list[ast.AST]:
     return [n for n in ast.walk(fn) if _is_assertion(n)]
 
 
@@ -98,7 +115,7 @@ def _guards(current: ast.AST, child: ast.AST, branches_only: bool) -> bool:
     return isinstance(current, (ast.If, ast.While, ast.ExceptHandler))
 
 
-def _depth_guarded(fn: ast.FunctionDef, node: ast.AST, *,
+def _depth_guarded(fn: ast.AST, node: ast.AST, *,
                    branches_only: bool = False) -> bool:
     """True when *node* sits inside a branch, or a possibly-empty loop."""
     stack: list[tuple[ast.AST, bool]] = [(fn, False)]
@@ -111,10 +128,86 @@ def _depth_guarded(fn: ast.FunctionDef, node: ast.AST, *,
     return False
 
 
-def audit_function(path: pathlib.Path, fn: ast.FunctionDef) -> list[str]:
+def _references_anything_outside(fn: ast.AST, imported: set[str],
+                                 helpers: set[str]) -> bool:
+    """True when the test reaches anything defined outside its own body.
+
+    The stated defect is "the only values asserted on are literals defined
+    in the same test, so it checks Python rather than the product", and the
+    first implementation asked a much narrower question -- "does it *call*
+    an imported name" -- which flagged 45 honest tests. A product function
+    passed as a callback (`key=search_service._cve_sort_key`) is reaching
+    the product without being called here, and a test that asserts on a
+    module's source text through a file-reading helper is reaching it too.
+
+    So: does any imported name, or any module-level helper from the same
+    file, appear anywhere in this function? If nothing does, the test can
+    only be examining values it made up.
+    """
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and (node.id in imported
+                                           or node.id in helpers):
+            return True
+        if isinstance(node, ast.Attribute):
+            root = node
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name):
+                if root.id in imported or root.id in helpers:
+                    return True
+                # self.<x> where x is not an assertion reaches a fixture.
+                if root.id == "self" and not node.attr.startswith(("assert", "fail")):
+                    return True
+    return False
+
+
+# Operators that a test re-applying the code's own arithmetic will use. A
+# literal expectation is fine; recomputing one is how `min(max(x, 10), 2000)`
+# ended up on both sides of an assertEqual.
+_ARITHMETIC = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod,
+               ast.Pow)
+
+
+def _all_literal(node: ast.AST) -> bool:
+    """True when nothing in *node* is a name or a call.
+
+    `120 * 86400` is a readable spelling of "120 days in seconds", not a
+    reimplementation of anything -- it was the detector's first and only
+    false positive, against an assertion that measured a real duration
+    against a documented bound.
+    """
+    return not any(isinstance(inner, (ast.Name, ast.Call, ast.Attribute))
+                   for inner in ast.walk(node))
+
+
+def _is_computed(side: ast.AST) -> bool:
+    """True when this side of a comparison is calculated rather than stated.
+
+    A constant expression does not count, however it is spelled.
+    """
+    for inner in ast.walk(side):
+        if (isinstance(inner, ast.BinOp) and isinstance(inner.op, _ARITHMETIC)
+                and not _all_literal(inner)):
+            return True
+        if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                and inner.func.id in {"min", "max", "round", "abs", "sum"}
+                and not _all_literal(inner)):
+            return True
+    return False
+
+
+def audit_function(source: str,
+                   fn: ast.FunctionDef | ast.AsyncFunctionDef,
+                   imported: set[str] | None = None,
+                   helpers: set[str] | None = None) -> list[str]:
+    """Flags for one test function.
+
+    Takes the file's text rather than its path: this re-read the whole file
+    once per function, so a 1,400-line test module was read ninety times.
+    """
     flags = []
     asserts = _assertions(fn)
-    src = ast.get_source_segment(path.read_text(encoding="utf-8"), fn) or ""
+    src = ast.get_source_segment(source, fn) or ""
 
     if not asserts:
         # Not-raising is a real assertion when the function under test is
@@ -165,6 +258,24 @@ def audit_function(path: pathlib.Path, fn: ast.FunctionDef) -> list[str]:
             flags.append("always-true")
             break
 
+    # self-fulfilling: asserts, but never reaches the product.
+    if (asserts and imported is not None and helpers is not None
+            and not _references_anything_outside(fn, imported, helpers)):
+        flags.append("self-fulfilling")
+
+    # reimplements: both sides of a comparison are computed the same way.
+    # Only flagged when BOTH sides compute, because one computed side is an
+    # ordinary expectation ("twice the page size").
+    for node in asserts:
+        if not (isinstance(node, ast.Call) and len(node.args) >= 2):
+            continue
+        # Both sides, because one computed side is an ordinary expectation
+        # ("twice the page size"). Both computed the same way is the shape
+        # where the test and the code can be wrong together.
+        if _is_computed(node.args[0]) and _is_computed(node.args[1]):
+            flags.append("reimplements")
+            break
+
     return sorted(set(flags))
 
 
@@ -173,23 +284,42 @@ def main(argv: list[str]) -> int:
     findings: list[tuple[str, str, str]] = []
     counted = 0
 
-    for path in sorted(TESTS.glob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    files = sorted(TESTS.glob("test_*.py"))
+    # A floor. An empty glob printed "0 test methods / nothing flagged" and
+    # returned 0 under --strict, so a misconfigured path reported a clean
+    # sweep of nothing -- the exact shape this tool exists to find.
+    if len(files) < 5:
+        print(f"only {len(files)} test file(s) under {TESTS}; refusing to "
+              f"report a clean sweep", file=sys.stderr)
+        return 2
+
+    for path in files:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported = _imported_names(tree)
+        helpers = {node.name for node in tree.body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        helpers |= {target.id for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    for target in node.targets if isinstance(target, ast.Name)}
         for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if not node.name.startswith("test_"):
                 continue
             counted += 1
             findings += [(path.name, node.name, flag)
-                         for flag in audit_function(path, node)]
+                         for flag in audit_function(source, node, imported, helpers)]
 
     by_flag: dict[str, list[tuple[str, str]]] = {}
     for file, name, flag in findings:
         by_flag.setdefault(flag, []).append((file, name))
 
-    print(f"{counted} test methods across "
-          f"{len(list(TESTS.glob('test_*.py')))} files\n")
+    print(f"{counted} test methods across {len(files)} files\n")
+    if counted < 50:
+        print(f"only {counted} test methods found; refusing to report a "
+              f"clean sweep", file=sys.stderr)
+        return 2
     if not findings:
         print("nothing flagged")
         return 0

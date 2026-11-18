@@ -61,6 +61,9 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
                         "200": _json_response("Verdicts", _CLASSIFY_RESPONSE),
                         "400": _ERROR_RESPONSE,
                         "401": _ERROR_RESPONSE,
+                        # Same `_json_object` helper as /search and /jobs,
+                        # which both list it.
+                        "415": _ERROR_RESPONSE,
                         "429": _ERROR_RESPONSE,
                     },
                 }
@@ -70,10 +73,21 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
                     "operationId": "pingAiProvider",
                     "summary": "One trivial prompt, to check the provider answers",
                     "security": [{_TOKEN_SCHEME: []}],
-                    "requestBody": _json_body({"type": "object"}, required=False),
+                    # Required, because the handler requires it. The spec
+                    # said optional and `_json_object` returns 415 without a
+                    # JSON content-type and 400 for a non-object body --
+                    # neither of which was listed. A client generated from
+                    # this document called pingAiProvider() with no
+                    # arguments and got an undocumented 415, which is the
+                    # one failure this file's header says it exists to
+                    # prevent: "an invented schema is worse than none,
+                    # because a client generator will believe it."
+                    "requestBody": _json_body({"type": "object"}),
                     "responses": {
                         "200": _json_response("Provider reply", {"type": "object"}),
+                        "400": _ERROR_RESPONSE,
                         "401": _ERROR_RESPONSE,
+                        "415": _ERROR_RESPONSE,
                         "429": _ERROR_RESPONSE,
                     },
                 }
@@ -208,40 +222,21 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
     # -- cache --------------------------------------------------------------
     (
         "one SQLite connection per advisory id in a classify request",
+        # The connection has to move INSIDE the loop. Chunking the query
+        # one id at a time still costs one connection, which is what the
+        # test measures -- so a revert that only splits the chunks reports
+        # NOT CAUGHT, correctly.
         [("modules/cache.py",
-          "    ids = list(dict.fromkeys(advisory_ids))\n"
-          "    if not ids:\n"
-          "        return {}\n"
           "    found: dict[str, dict] = {}\n"
           "    with _db(path) as conn:\n"
-          "        # Chunked so a large batch cannot trip SQLITE_LIMIT_VARIABLE_NUMBER.\n"
-          "        # That limit was 999 until SQLite 3.32 (2020) and is 32766 on\n"
-          "        # anything current -- the old comment said 999 flatly, which is the\n"
-          "        # number people then write tests against, and a 1,500-id test\n"
-          '        # \"proving\" the chunking passed with the chunking removed. The\n'
-          "        # chunk stays at 500 because the floor is what has to be safe: a\n"
-          "        # build may still be compiled with the old limit.\n"
-          "        for start in range(0, len(ids), 500):\n"
-          "            chunk = ids[start:start + 500]\n"
-          '            placeholders = ",".join("?" * len(chunk))\n'
-          "            rows = conn.execute(\n"
-          "                # Only placeholders are interpolated; every value is bound.\n"
-          '                f"SELECT advisory_id, data FROM advisories "\n'
-          '                f"WHERE advisory_id IN ({placeholders})",\n'
-          "                chunk,\n"
-          "            ).fetchall()\n"
-          "            for row in rows:\n"
-          "                try:\n"
-          '                    found[row["advisory_id"]] = json.loads(row["data"])\n'
-          "                except (TypeError, ValueError):\n"
-          "                    continue          # one unreadable row must not sink the batch\n"
-          "    return found",
+          "        # Chunked so a large batch cannot trip "
+          "SQLITE_LIMIT_VARIABLE_NUMBER.\n"
+          "        # See _IN_CLAUSE_CHUNK.\n"
+          "        for start in range(0, len(ids), _IN_CLAUSE_CHUNK):",
           "    found: dict[str, dict] = {}\n"
-          "    for advisory_id in advisory_ids:\n"
-          "        record = get_advisory(advisory_id, path=path)\n"
-          "        if record is not None:\n"
-          "            found[advisory_id] = record\n"
-          "    return found")],
+          "    for one_id in ids:\n"
+          "      with _db(path) as conn:\n"
+          "        for start in range(0, len([one_id]), _IN_CLAUSE_CHUNK):")],
         "test_cache",
     ),
     (

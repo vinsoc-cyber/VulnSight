@@ -73,8 +73,31 @@ class TestParseSearchQuery(unittest.TestCase):
         self.assertTrue(q.include_extended)
         self.assertIn("639", q.cwes)  # resolved from bac
 
-    def test_bogus_sort_and_direction_fall_back(self):
-        q = search_service.parse_search_query({"categories": ["bac"], "sort": "bogus", "direction": "sideways"})
+    def test_an_unsupported_sort_or_direction_is_a_400(self):
+        """These used to fall back to the default silently, while every
+        other invalid field raised. `{"sort": "severity"}` returned
+        published-sorted results and nothing in the response said so, so a
+        caller with a typo got a plausible answer to a different question."""
+        for body, bad in (
+            ({"categories": ["bac"], "sort": "bogus"}, "bogus"),
+            ({"categories": ["bac"], "sort": "severity"}, "severity"),
+            ({"categories": ["bac"], "direction": "sideways"}, "sideways"),
+        ):
+            with self.subTest(body=body):
+                with self.assertRaises(search_service.SearchError) as caught:
+                    search_service.parse_search_query(body)
+                self.assertEqual(caught.exception.status, 400)
+                self.assertIn(bad, caught.exception.public_message)
+
+    def test_the_message_lists_what_is_accepted(self):
+        with self.assertRaises(search_service.SearchError) as caught:
+            search_service.parse_search_query(
+                {"categories": ["bac"], "sort": "bogus"})
+        for valid in search_service.VALID_SORTS:
+            self.assertIn(valid, caught.exception.public_message)
+
+    def test_the_defaults_still_apply_when_nothing_is_given(self):
+        q = search_service.parse_search_query({"categories": ["bac"]})
         self.assertEqual(q.sort, "published")
         self.assertEqual(q.direction, "desc")
 
@@ -1080,7 +1103,7 @@ class TestRecordsWithoutACveStayOutOfTheWay(unittest.TestCase):
                          ["CVE-2026-1", "GO-1", "GO-2"])
 
 
-class TestAFailedCacheWriteDoesNotDiscardTheSearch(unittest.TestCase):
+class TestAFailedCacheWriteDoesNotDiscardTheSearch(TempCacheDB, unittest.TestCase):
     """modules/cache.py's own docstring says the cache is optional. The
     write was unguarded, so a locked database threw away minutes of
     rate-limited fetching as a 500 at the very last step."""
@@ -1101,6 +1124,92 @@ class TestAFailedCacheWriteDoesNotDiscardTheSearch(unittest.TestCase):
                     {"categories": ["bac"], "sources": ["ghsa"]}))
         self.assertTrue(outcome.results, "a cache failure emptied the search")
 
+
+class TestTimestampsAreComparedAsInstants(unittest.TestCase):
+    """GHSA and OSV send "...Z" and NVD sends a naive "...253", and these
+    fields were compared as raw strings -- right to the second for UTC
+    values and wrong on sub-second ties and on any non-UTC offset.
+    query_filters.parse_timestamp exists for exactly this and was not
+    used."""
+
+    def test_an_offset_timestamp_is_not_ordered_by_its_bytes(self):
+        """"2026-01-01T09:00:00+09:00" is midnight UTC, earlier than
+        "2026-01-01T08:00:00Z" -- and sorts after it as a string."""
+        merged = search_service._merge_group([
+            {"source": "ghsa", "advisory_id": "A",
+             "updated_at": "2026-01-01T08:00:00Z"},
+            {"source": "nvd", "advisory_id": "A",
+             "updated_at": "2026-01-01T09:00:00+09:00"},
+        ])
+        self.assertEqual(merged["updated_at"], "2026-01-01T08:00:00Z")
+
+    def test_sub_second_precision_is_honoured(self):
+        merged = search_service._merge_group([
+            {"source": "ghsa", "advisory_id": "A",
+             "updated_at": "2026-01-01T00:00:00.100Z"},
+            {"source": "nvd", "advisory_id": "A",
+             "updated_at": "2026-01-01T00:00:00.090Z"},
+        ])
+        self.assertEqual(merged["updated_at"], "2026-01-01T00:00:00.100Z")
+
+    def test_the_stored_value_is_the_original_string(self):
+        """Parsing is for ordering only; a reformatted date would change
+        what every client renders."""
+        merged = search_service._merge_group([
+            {"source": "nvd", "advisory_id": "A",
+             "updated_at": "2026-03-04T05:06:07.253"},
+        ])
+        self.assertEqual(merged["updated_at"], "2026-03-04T05:06:07.253")
+
+    def test_an_unparseable_value_does_not_raise(self):
+        merged = search_service._merge_group([
+            {"source": "ghsa", "advisory_id": "A", "updated_at": "not a date"},
+            {"source": "nvd", "advisory_id": "A",
+             "updated_at": "2026-01-01T00:00:00Z"},
+        ])
+        self.assertEqual(merged["updated_at"], "2026-01-01T00:00:00Z")
+
+
+class TestATotalFailureIsMeasuredAgainstWhatRan(TempCacheDB, unittest.TestCase):
+    """`set(failed_sources) >= set(q.sources)` compared failures against
+    the *requested* sources. A source that is skipped -- OSV with
+    ecosystem="any" -- is neither a success nor a failure, so if every
+    source that actually ran had failed but one had been skipped, the
+    response was 200 with count: 0 instead of the 502 docs/api.md
+    documents."""
+
+    def test_a_skipped_source_does_not_mask_a_total_failure(self):
+        def boom(*a, **k):
+            raise ghsa.GhCliError("gh exploded")
+
+        query = search_service.parse_search_query({
+            "categories": ["bac"],
+            # OSV is skipped for ecosystem "any"; GHSA is the only source
+            # that runs, and it fails.
+            "sources": ["ghsa", "osv"],
+            "ecosystem": "any",
+        })
+        with mock.patch.object(search_service.ghsa, "fetch_advisories", boom), \
+             self.assertRaises(search_service.SearchError) as caught:
+            search_service.run_search(query)
+        self.assertEqual(caught.exception.status, 502)
+
+    def test_a_partial_failure_is_still_a_200(self):
+        """One source failing while another answers is a warning, not a
+        502 -- that distinction is the whole point of the comparison."""
+        def boom(*a, **k):
+            raise nvd_client.NvdError("nvd exploded")
+
+        query = search_service.parse_search_query({
+            "categories": ["bac"], "sources": ["ghsa", "nvd"]})
+        with mock.patch.object(search_service.ghsa, "fetch_advisories",
+                               return_value=[SAMPLE]), \
+             mock.patch.object(search_service.nvd_client, "fetch_nvd", boom), \
+             mock.patch.object(search_service.cache, "get_classifications",
+                               return_value={}):
+            outcome = search_service.run_search(query)
+        self.assertTrue(outcome.results)
+        self.assertTrue(any("NVD" in w for w in outcome.warnings))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

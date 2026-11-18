@@ -22,11 +22,25 @@ import functools
 
 from .config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 from .cwe_categories import CATEGORIES, ECOSYSTEMS, SEVERITIES
-from .search_service import MAX_CATEGORY_INPUTS
+from .search_service import (DEFAULT_MAX_RESULTS, MAX_AFFECTS_LENGTH,
+                              MAX_CATEGORY_INPUTS, MAX_RESULTS_CAP)
 
 API_VERSION = "1.0.0"
 
 _TOKEN_SCHEME = "vulnsightToken"
+
+def _ref_to(name: str) -> dict:
+    """A $ref usable inside a schema literal, before the registry exists.
+
+    The nested uses -- Advisory inside SearchResponse.results, SearchStats
+    inside .stats, Verdict inside ClassifyResponse.verdicts -- are written
+    at module level, so `_ref`'s identity lookup cannot reach them. Naming
+    the target here keeps those three out of the "registered but never
+    referenced" state, which is the same decoration in a different place.
+    `test_every_ref_resolves` fails if a name here is not published.
+    """
+    return {"$ref": f"#/components/schemas/{name}"}
+
 
 _ERROR = {
     "type": "object",
@@ -46,7 +60,11 @@ _SEARCH_REQUEST = {
         "categories": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 100,
+            # Imported, not retyped. This file already imports
+            # MAX_CATEGORY_INPUTS and uses it correctly for classify;
+            # hardcoding it here meant raising the limit left the spec
+            # saying 100 with no test failing.
+            "maxItems": MAX_CATEGORY_INPUTS,
             "items": {"type": "string", "maxLength": 64},
             "description": (
                 "Curated bug-class keys and/or `cwe:<id>` for any single MITRE "
@@ -61,9 +79,12 @@ _SEARCH_REQUEST = {
         "ecosystem": {"type": "string", "enum": ["any", *ECOSYSTEMS], "default": "any"},
         "affects": {
             "type": "string",
-            "maxLength": 300,
+            "maxLength": MAX_AFFECTS_LENGTH,
             "nullable": True,
-            "description": "Exact, case-insensitive package name match.",
+            "description": (
+                "Case-insensitive package name. Matches either half of an "
+                "NVD `vendor:product` name, and the whole name otherwise."
+            ),
         },
         "severity": {"type": "string", "enum": ["any", *SEVERITIES], "default": "any"},
         "published": {
@@ -87,7 +108,8 @@ _SEARCH_REQUEST = {
         },
         "direction": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
         "max_results": {
-            "type": "integer", "minimum": 1, "maximum": 500, "default": 100,
+            "type": "integer", "minimum": 1,
+            "maximum": MAX_RESULTS_CAP, "default": DEFAULT_MAX_RESULTS,
             "description": "Clamped, not rejected, when out of range.",
         },
         "sources": {
@@ -213,7 +235,7 @@ _SEARCH_RESPONSE = {
             "type": "object",
             "description": "The query as the server resolved it, echoed back.",
         },
-        "stats": _STATS,
+        "stats": _ref_to("SearchStats"),
         "warnings": {
             "type": "array", "items": {"type": "string"},
             "description": (
@@ -221,7 +243,7 @@ _SEARCH_RESPONSE = {
                 "failure still returns 200 with count 0, so check this."
             ),
         },
-        "results": {"type": "array", "items": _ADVISORY},
+        "results": {"type": "array", "items": _ref_to("Advisory")},
     },
 }
 
@@ -289,7 +311,7 @@ _CLASSIFY_RESPONSE = {
         "category": {"type": "string",
                      "description": "The first requested category."},
         "categories": {"type": "array", "items": {"type": "string"}},
-        "verdicts": {"type": "object", "additionalProperties": _VERDICT,
+        "verdicts": {"type": "object", "additionalProperties": _ref_to("Verdict"),
                      "description": "Keyed by advisory_id."},
         "by_category": {
             "type": "object",
@@ -304,19 +326,64 @@ _CLASSIFY_RESPONSE = {
 }
 
 
+# Every schema that `components.schemas` publishes, keyed by the object so a
+# use site can be turned into a $ref by identity.
+#
+# `components.schemas` registered six schemas and the document contained
+# zero `$ref`: every use site inlined the same object, so the served JSON
+# carried each schema twice (_ERROR six times, through _ERROR_RESPONSE) and
+# a generator emitted anonymous inline models instead of Error, Advisory,
+# Job and SearchResponse. The registry was decoration.
+_COMPONENT_NAMES: dict[int, str] = {}
+
+
+def _component(name: str, schema: dict) -> dict:
+    """Register *schema* under *name* and return it unchanged."""
+    _COMPONENT_NAMES[id(schema)] = name
+    return schema
+
+
+def _ref(schema: dict) -> dict:
+    """A $ref to *schema* when it is registered, else the schema itself.
+
+    By identity, not by value: two schemas can be structurally equal and
+    mean different things, and the use sites already pass the very objects
+    the registry holds.
+    """
+    name = _COMPONENT_NAMES.get(id(schema))
+    return {"$ref": f"#/components/schemas/{name}"} if name else schema
+
+
 def _json_body(schema: dict, *, required: bool = True) -> dict:
     return {
         "required": required,
-        "content": {"application/json": {"schema": schema}},
+        "content": {"application/json": {"schema": _ref(schema)}},
     }
 
 
 def _json_response(description: str, schema: dict) -> dict:
     return {
         "description": description,
-        "content": {"application/json": {"schema": schema}},
+        "content": {"application/json": {"schema": _ref(schema)}},
     }
 
+
+# Registered here, after every schema exists and before the first use site
+# below turns one into a $ref. The same tuple feeds components.schemas in
+# build_spec, so a schema cannot be published under a name it is not
+# referenced by, or referenced by a name it is not published under.
+_COMPONENTS: tuple[tuple[str, dict], ...] = (
+    ("Error", _ERROR),
+    ("SearchRequest", _SEARCH_REQUEST),
+    ("SearchResponse", _SEARCH_RESPONSE),
+    ("SearchStats", _STATS),
+    ("Advisory", _ADVISORY),
+    ("Job", _JOB),
+    ("Verdict", _VERDICT),
+    ("ClassifyResponse", _CLASSIFY_RESPONSE),
+)
+for _name, _schema in _COMPONENTS:
+    _component(_name, _schema)
 
 _ERROR_RESPONSE = _json_response("Error", _ERROR)
 
@@ -360,14 +427,10 @@ def build_spec(server_url: str = "/") -> dict:
                     ),
                 }
             },
-            "schemas": {
-                "Error": _ERROR,
-                "SearchRequest": _SEARCH_REQUEST,
-                "SearchResponse": _SEARCH_RESPONSE,
-                "SearchStats": _STATS,
-                "Advisory": _ADVISORY,
-                "Job": _JOB,
-            },
+            # _VERDICT and _CLASSIFY_RESPONSE were used by the paths and
+            # never registered here, so they were the only two shapes a
+            # client could not name at all.
+            "schemas": dict(_COMPONENTS),
         },
         "paths": {
             "/api/v1/meta": {
@@ -551,6 +614,9 @@ def build_spec(server_url: str = "/") -> dict:
                         "200": _json_response("Verdicts", _CLASSIFY_RESPONSE),
                         "400": _ERROR_RESPONSE,
                         "401": _ERROR_RESPONSE,
+                        # Same `_json_object` helper as /search and /jobs,
+                        # which both list it.
+                        "415": _ERROR_RESPONSE,
                         "429": _ERROR_RESPONSE,
                     },
                 }
@@ -560,10 +626,21 @@ def build_spec(server_url: str = "/") -> dict:
                     "operationId": "pingAiProvider",
                     "summary": "One trivial prompt, to check the provider answers",
                     "security": [{_TOKEN_SCHEME: []}],
-                    "requestBody": _json_body({"type": "object"}, required=False),
+                    # Required, because the handler requires it. The spec
+                    # said optional and `_json_object` returns 415 without a
+                    # JSON content-type and 400 for a non-object body --
+                    # neither of which was listed. A client generated from
+                    # this document called pingAiProvider() with no
+                    # arguments and got an undocumented 415, which is the
+                    # one failure this file's header says it exists to
+                    # prevent: "an invented schema is worse than none,
+                    # because a client generator will believe it."
+                    "requestBody": _json_body({"type": "object"}),
                     "responses": {
                         "200": _json_response("Provider reply", {"type": "object"}),
+                        "400": _ERROR_RESPONSE,
                         "401": _ERROR_RESPONSE,
+                        "415": _ERROR_RESPONSE,
                         "429": _ERROR_RESPONSE,
                     },
                 }

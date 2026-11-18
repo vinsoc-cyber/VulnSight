@@ -108,6 +108,24 @@ def main(argv: list[str]) -> int:
             seen.add(line.split(":")[0])
             unique.append(line)
 
+    # A floor, before "accurate" can be printed. If ROW_RE stops matching --
+    # somebody converts the fenced block to a markdown table, or reindents
+    # it -- `rows` is empty, nothing drifts, and both modes printed "already
+    # accurate" and exited 0 on a document that had stopped carrying any
+    # derived figure at all. sync_testing_doc guards the equivalent case.
+    # Not a fixed threshold -- a small map is legitimate. The failure this
+    # guards is "the block still has content and none of it parses", which
+    # is what a reformat or a reindent produces: `rows` is empty, nothing
+    # drifts, and both modes printed "already accurate" on a document that
+    # had stopped carrying any derived figure at all.
+    parsed = len(ROW_RE.findall(block.group(2)))
+    content_lines = [line for line in block.group(2).splitlines() if line.strip()]
+    if content_lines and not parsed:
+        print(f"the module map has {len(content_lines)} line(s) and none of "
+              f"them parse as rows; its shape has changed and nothing is "
+              f"being derived", file=sys.stderr)
+        return 2
+
     if not unique:
         print("module map is already accurate")
         return 0

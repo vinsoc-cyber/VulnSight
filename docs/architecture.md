@@ -11,34 +11,34 @@ able to read end to end before pointing it at their credentials.
 app.py                     632   Flask routes, request guards, response headers
 modules/
   config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py        965   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  search_service.py       1056   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py         167   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
   http_retry.py            181   one retry/backoff policy for all four upstreams
-  cwe_categories.py        763   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_categories.py        768   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py           369   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py            477   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            584   bulk export download, parse, CWE + keyword filters
   epss_client.py           159   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py                 503   SQLite: advisories + verdicts, jobs, migrations
+  cache.py                 525   SQLite: advisories + verdicts, jobs, migrations
   jobs.py                  268   submit/poll queue for searches too slow to hold open
-  ai_classifier.py        1221   provider client, prompt, verdict cache, key rotation
-  openapi.py               572   the OpenAPI description of /api/v1
+  ai_classifier.py        1239   provider client, prompt, verdict cache, key rotation
+  openapi.py               649   the OpenAPI description of /api/v1
   security.py              467   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html       388   page shell -- HTML and Jinja only
 static/app.js             1884   all UI logic; server data arrives via window.BOOT
 static/style.css          1936   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
-  audit_tests.py           211   finds tests that can no longer fail
-  design_audit.py          466   measures contrast/targets/focus in a real browser
-  generate_cwe_catalog.py  229   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     194   rewrites the revert-check figures and their index
+  audit_tests.py           341   finds tests that can no longer fail
+  design_audit.py          482   measures contrast/targets/focus in a real browser
+  generate_cwe_catalog.py  276   regenerates modules/cwe_catalog.py from MITRE XML
+  sync_check_counts.py     195   rewrites the revert-check figures and their index
   revert_checks.py         231   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
-  sync_module_map.py       126   rewrites the line counts in this very table
+  sync_module_map.py       144   rewrites the line counts in this very table
   sync_testing_doc.py      142   rewrites the per-file test counts in testing.md
 ```
 

@@ -26,6 +26,7 @@ import re
 import shutil
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 from typing import Any, cast
@@ -330,6 +331,160 @@ class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):
         self.assertIn("editing the checkout", source)
         # The default path must build a sandbox.
         self.assertIn("tree = sandbox(REPO)", source)
+
+
+class TestWriteAtomicKeepsThePermissionsItFound(unittest.TestCase):
+    """`mkstemp` creates at 0600 and `os.replace` carries the temp file's
+    mode, not the target's -- so every file this touched was silently
+    narrowed to 0600. Git tracks only the +x bit, so the change was
+    invisible in review, and anything reading those files as a different
+    UID (a CI runner, a bind-mounted docs server, a build container) got
+    EACCES on a file nobody knowingly changed."""
+
+    def test_a_group_readable_file_stays_group_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "generated.py"
+            target.write_text("old\n", encoding="utf-8")
+            os.chmod(target, 0o644)
+            write_atomic(target, "new\n")
+            self.assertEqual(oct(os.stat(target).st_mode)[-3:], "644")
+            self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
+
+    def test_a_private_file_stays_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "secret"
+            target.write_text("x", encoding="utf-8")
+            os.chmod(target, 0o600)
+            write_atomic(target, "y\n")
+            self.assertEqual(oct(os.stat(target).st_mode)[-3:], "600")
+
+    def test_an_executable_keeps_its_bit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "script.sh"
+            target.write_text("#!/bin/sh\n", encoding="utf-8")
+            os.chmod(target, 0o755)
+            write_atomic(target, "#!/bin/sh\necho hi\n")
+            self.assertEqual(oct(os.stat(target).st_mode)[-3:], "755")
+
+    def test_a_new_file_is_not_born_private(self):
+        """0600 on a file that did not exist is the same defect, just
+        without a previous mode to compare against."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "fresh.py"
+            write_atomic(target, "x\n")
+            mode = os.stat(target).st_mode & 0o777
+            self.assertTrue(mode & 0o044, f"created as {oct(mode)}, unreadable "
+                                          f"to anyone but the owner")
+
+    def test_a_failed_write_leaves_the_original_and_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "f.py"
+            target.write_text("original\n", encoding="utf-8")
+            with mock.patch("os.replace", side_effect=OSError("boom")), \
+                 self.assertRaises(OSError):
+                write_atomic(target, "replacement\n")
+            self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+            leftovers = [n for n in os.listdir(tmp) if n.endswith(".tmp")]
+            self.assertEqual(leftovers, [], "a temp file was left behind")
+
+
+class TestTheTestAuditorsDetectorsCanFire(unittest.TestCase):
+    """`audit_tests.py` advertised five detectors and implemented three:
+    `self-fulfilling` and `reimplements` were produced by no code path at
+    all, so `--strict` could not fail on them however bad a test was.
+
+    Reporting clean is worth something only if the detector is capable of
+    reporting otherwise. These feed it known-bad and known-good functions.
+    """
+
+    def _flags(self, source):
+        import ast
+
+        from tools import audit_tests
+
+        source = textwrap.dedent(source)
+        tree = ast.parse(source)
+        imported = audit_tests._imported_names(tree)
+        helpers = {node.name for node in tree.body
+                   if isinstance(node, ast.FunctionDef)}
+        fn = next(node for node in ast.walk(tree)
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name.startswith("test_"))
+        return audit_tests.audit_function(source, fn, imported, helpers)
+
+    SELF_FULFILLING = (
+        "import unittest\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_nothing(self):\n"
+        "        rows = [{'a': 1}, {'a': 2}]\n"
+        "        total = sum(r['a'] for r in rows)\n"
+        "        self.assertEqual(total, 3)\n"
+    )
+    CALLS_THE_PRODUCT = (
+        "import unittest\n"
+        "from modules import cwe_categories\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_real(self):\n"
+        "        self.assertTrue(cwe_categories.resolve_cwes(['bac'], True))\n"
+    )
+    PASSES_A_CALLBACK = (
+        "import unittest\n"
+        "from modules import search_service\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_sorts(self):\n"
+        "        ids = ['CVE-2025-9', 'CVE-2026-1']\n"
+        "        self.assertEqual(sorted(ids, key=search_service._cve_sort_key),\n"
+        "                         ['CVE-2025-9', 'CVE-2026-1'])\n"
+    )
+    RECOMPUTES = (
+        "import unittest\n"
+        "from modules import nvd_client\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_page_size(self):\n"
+        "        sent = nvd_client.page_size_for(200)\n"
+        "        self.assertEqual(min(max(sent, 10), 2000),\n"
+        "                         min(max(200, 10), 2000))\n"
+    )
+    LITERAL_EXPECTATION = (
+        "import unittest\n"
+        "from modules import nvd_client\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_page_size(self):\n"
+        "        self.assertEqual(nvd_client._page_size(200), 200)\n"
+    )
+
+    def test_a_test_that_never_touches_the_product_is_flagged(self):
+        self.assertIn("self-fulfilling", self._flags(self.SELF_FULFILLING))
+
+    def test_a_test_that_calls_the_product_is_not_flagged(self):
+        self.assertNotIn("self-fulfilling", self._flags(self.CALLS_THE_PRODUCT))
+
+    def test_a_product_function_passed_as_a_callback_is_not_flagged(self):
+        """`key=search_service._cve_sort_key` reaches the product without
+        being called in the test. The first implementation asked only "does
+        it call an imported name" and flagged 45 honest tests, which is how
+        a gate gets switched off."""
+        self.assertNotIn("self-fulfilling", self._flags(self.PASSES_A_CALLBACK))
+
+    def test_a_test_that_recomputes_its_expectation_is_flagged(self):
+        """The NVD page-size test did exactly this: it evaluated
+        `min(max(results_per_page, 10), 2000)` while the module used
+        `remaining`, so replacing the whole expression with
+        `params.results_per_page` left it green."""
+        self.assertIn("reimplements", self._flags(self.RECOMPUTES))
+
+    def test_a_literal_expectation_is_not_flagged_as_reimplementing(self):
+        self.assertNotIn("reimplements", self._flags(self.LITERAL_EXPECTATION))
+
+    def test_the_auditor_refuses_to_sweep_an_empty_directory(self):
+        """An empty glob printed "0 test methods / nothing flagged" and
+        returned 0 under --strict, so a misconfigured path reported a clean
+        sweep of nothing -- the exact shape this tool exists to find."""
+        from tools import audit_tests
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(audit_tests, "TESTS", pathlib.Path(tmp)):
+                self.assertNotEqual(audit_tests.main(["--strict"]), 0)
 
 
 class TestTheHarnessCannotReportAnUnmeasuredPass(unittest.TestCase):

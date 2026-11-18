@@ -444,5 +444,58 @@ class TestDerivedPrefilterTermsAreUseful(unittest.TestCase):
                 self.assertFalse(any(k in text for k in keywords), text)
 
 
+class TestTheCuratedKeywordsAreNotSubstringTraps(unittest.TestCase):
+    """KEYWORDS are matched as bare substrings against advisory text on the
+    OSV-native path, at one paid AI call each. The derived side had a sweep
+    already; the curated side did not, and it held several terms that fire
+    on unrelated advisories.
+
+    "overflows" pulled every "buffer overflows" memory-safety advisory into
+    the integer class, "forbidden" matched any advisory mentioning a 403,
+    "panic" matched any Go panic, and "md5"/"sha1" matched a checksum or a
+    fingerprint being printed.
+    """
+
+    DECOYS = (
+        "returns 403 forbidden to the caller",
+        "a buffer overflows when the header is long",
+        "stack overflows in the recursive parser",
+        # A panic mentioned in passing, not a crash being reported. The
+        # first version of this decoy -- "the service panics on a nil
+        # pointer" -- is a real DoS advisory, so matching it was correct
+        # and the decoy was wrong.
+        "the stack trace from the panic is attached below",
+        "logs the md5 checksum of each artifact",
+        "prints the sha1 fingerprint of the key",
+        "renders an iframe for the preview pane",
+        "calls retrieval(x) on the cached entry",
+    )
+
+    def test_no_curated_keyword_matches_inside_an_unrelated_advisory(self):
+        hits = [(category, keyword, decoy)
+                for category, keywords in cwe.KEYWORDS.items()
+                for keyword in keywords
+                for decoy in self.DECOYS
+                if keyword in decoy]
+        # "buffer overflow" genuinely belongs to the memory class, so a
+        # memory-class hit on a buffer-overflow decoy is a true positive.
+        traps = [hit for hit in hits if hit[0] != "memory"]
+        self.assertEqual(traps, [], f"curated keyword traps: {traps}")
+
+    def test_the_classes_still_have_usable_prefilters(self):
+        """Removing a trap must not leave a class matching nothing -- an
+        empty prefilter means the OSV-native path finds no candidates."""
+        for category in ("bac", "intoverflow", "dos", "crypto",
+                         "clickjacking", "ssti"):
+            with self.subTest(category=category):
+                self.assertGreaterEqual(len(cwe.KEYWORDS[category]), 5)
+
+    def test_the_long_forms_survived(self):
+        joined = {category: " ".join(keywords)
+                  for category, keywords in cwe.KEYWORDS.items()}
+        self.assertIn("integer overflow", joined["intoverflow"])
+        self.assertIn("unauthorized", joined["bac"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

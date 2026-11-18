@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import re
 import tempfile
 import unittest
@@ -279,6 +280,116 @@ class TestSpecMatchesRealResponses(_AppCase):
         self.assertNotEqual(validate({"count": "twelve"}, schema), [])
         stats = self.spec["components"]["schemas"]["SearchStats"]
         self.assertNotEqual(validate({"truncated": "yes"}, stats), [])
+
+
+class TestEveryStatusTheHandlersSendIsDocumented(_AppCase):
+    """The spec listed responses the handlers do not send, and omitted ones
+    they do.
+
+    `/api/v1/ai/test` declared its body optional while `_json_object`
+    returns **415** without a JSON content-type and **400** for a non-object
+    body; neither was listed, so a client generated from this document
+    called pingAiProvider() with no arguments and got an undocumented 415.
+    `/api/v1/ai/classify` omitted 415 from the same helper while `/search`
+    and `/jobs` both listed it.
+
+    The existing tests check path and method parity and validate the
+    responses they happen to elicit, so a status nothing provokes was
+    invisible. These provoke them."""
+
+    def _documented(self, path, method="post"):
+        return set(self.spec["paths"][path][method]["responses"])
+
+    def _assert_documented(self, path, status, **kwargs):
+        response = self.client.post(path, **kwargs)
+        self.assertEqual(response.status_code, status)
+        self.assertIn(str(status), self._documented(path),
+                      f"{path} returns {status} and the spec does not say so")
+
+    def test_a_request_with_no_json_content_type_is_a_documented_415(self):
+        for path in ("/api/v1/search", "/api/v1/ai/classify", "/api/v1/ai/test",
+                     "/api/v1/jobs"):
+            with self.subTest(path=path):
+                self._assert_documented(path, 415, data="not json")
+
+    def test_a_non_object_json_body_is_a_documented_400(self):
+        for path in ("/api/v1/search", "/api/v1/ai/classify", "/api/v1/ai/test",
+                     "/api/v1/jobs"):
+            with self.subTest(path=path):
+                self._assert_documented(path, 400, data="[1, 2, 3]",
+                                        content_type="application/json")
+
+    def test_ai_test_does_not_claim_its_body_is_optional(self):
+        """It is the handler that decides, and the handler requires one."""
+        body = self.spec["paths"]["/api/v1/ai/test"]["post"]["requestBody"]
+        self.assertTrue(body["required"])
+
+
+class TestTheComponentsAreActuallyReferenced(_AppCase):
+    """`components.schemas` registered six schemas and the document
+    contained zero `$ref`: every use site inlined the same object, so the
+    served JSON carried each schema twice (Error six times) and a generator
+    emitted anonymous inline models instead of Error, Advisory, Job and
+    SearchResponse. Two more shapes, Verdict and ClassifyResponse, were
+    used by the paths and never registered at all."""
+
+    def test_the_document_uses_refs(self):
+        text = json.dumps(self.spec)
+        self.assertGreater(text.count('"$ref"'), 10,
+                           "components.schemas is decoration again")
+
+    def test_every_ref_resolves(self):
+        text = json.dumps(self.spec)
+        names = set(self.spec["components"]["schemas"])
+        dangling = sorted({ref for ref in
+                           re.findall(r"#/components/schemas/(\w+)", text)
+                           if ref not in names})
+        self.assertEqual(dangling, [], f"unresolvable $ref: {dangling}")
+
+    def test_every_registered_schema_is_referenced_somewhere(self):
+        """A schema nobody points at is the same decoration in a new place."""
+        text = json.dumps(self.spec)
+        referenced = set(re.findall(r"#/components/schemas/(\w+)", text))
+        unused = sorted(set(self.spec["components"]["schemas"]) - referenced)
+        self.assertEqual(unused, [], f"registered but never referenced: {unused}")
+
+    def test_the_shapes_a_client_needs_to_name_are_all_published(self):
+        for name in ("Error", "Advisory", "Job", "SearchRequest",
+                     "SearchResponse", "Verdict", "ClassifyResponse"):
+            with self.subTest(schema=name):
+                self.assertIn(name, self.spec["components"]["schemas"])
+
+
+class TestTheSpecDoesNotRestateLimits(_AppCase):
+    """100, 300 and 500 were typed into the schema while the module that
+    enforces them held the same numbers, so raising one left the published
+    contract saying the old value and no test failed."""
+
+    def test_the_published_limits_are_the_enforced_ones(self):
+        from modules import search_service
+
+        properties = self.spec["components"]["schemas"]["SearchRequest"]["properties"]
+        self.assertEqual(properties["categories"]["maxItems"],
+                         search_service.MAX_CATEGORY_INPUTS)
+        self.assertEqual(properties["affects"]["maxLength"],
+                         search_service.MAX_AFFECTS_LENGTH)
+        self.assertEqual(properties["max_results"]["maximum"],
+                         search_service.MAX_RESULTS_CAP)
+        self.assertEqual(properties["max_results"]["default"],
+                         search_service.DEFAULT_MAX_RESULTS)
+
+    def test_the_enforced_limit_is_the_one_a_request_actually_hits(self):
+        """Reading the constant proves the spec and the module agree; this
+        proves the module agrees with itself."""
+        from modules import search_service
+
+        over = "x" * (search_service.MAX_AFFECTS_LENGTH + 1)
+        with self.assertRaises(search_service.SearchError):
+            search_service.parse_search_query(
+                {"categories": ["bac"], "affects": over})
+        query = search_service.parse_search_query(
+            {"categories": ["bac"], "max_results": 10_000})
+        self.assertEqual(query.max_results, search_service.MAX_RESULTS_CAP)
 
 
 if __name__ == "__main__":

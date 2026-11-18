@@ -1503,5 +1503,27 @@ class TestAnImpossibleRequestIsNotRetriedOnEveryKey(unittest.TestCase):
         self.assertEqual(calls["n"], 3)
 
 
+class TestNoVerdictsIsNotAVerdict(unittest.TestCase):
+    """An empty mapping used to synthesize
+    `{"is_match": False, "confidence": 0.0, "has_errors": False}` out of
+    zero verdicts, which reads as a confident ruling that nothing
+    produced. Not reachable through /api/ai/classify today -- the view
+    rejects an empty category list -- but one caller away: a script calling
+    classify_batch with no categories, or a stored blob whose advisory_id
+    disagrees with its row key."""
+
+    def test_an_empty_mapping_is_an_error_not_a_no(self):
+        out = ai_classifier.aggregate_category_verdicts({})
+        self.assertIsNone(out["is_match"], "zero verdicts became a definite no")
+        self.assertTrue(out["has_errors"])
+        self.assertTrue(out["errors"])
+
+    def test_a_real_no_is_still_a_no(self):
+        out = ai_classifier.aggregate_category_verdicts(
+            {"bac": {"is_match": False, "confidence": 0.9}})
+        self.assertIs(out["is_match"], False)
+        self.assertFalse(out["has_errors"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

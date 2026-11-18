@@ -20,6 +20,7 @@ from . import cleanup
 from . import core
 from . import frontend
 from . import hardening
+from . import hardening2
 from . import runtime
 from . import search
 
@@ -33,6 +34,7 @@ GROUPS: dict[str, list[Check]] = {
     "frontend": frontend.CHECKS,
     "cleanup": cleanup.CHECKS,
     "hardening": hardening.CHECKS,
+    "hardening2": hardening2.CHECKS,
 }
 
 

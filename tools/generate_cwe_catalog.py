@@ -207,8 +207,55 @@ def render(root: ET.Element) -> str:
     return "\n".join(lines)
 
 
+# The smallest catalog worth writing. MITRE ships ~940 weaknesses and the
+# curated classes reference ~150 ids; a filtered, truncated or partially
+# downloaded XML would otherwise be compiled, written, and only noticed on
+# the next CI run -- after the file the server imports had been replaced.
+MIN_WEAKNESSES = 800
+
+
+def _check_catalog(names: dict, aliases: dict) -> None:
+    """Refuse a catalog that is materially smaller or missing the ids the
+    curated classes depend on.
+
+    compile() proves the output is valid Python, which is not the same as
+    proving it is a usable catalog. A deprecated EXTRA_ALIASES entry drops
+    its aliases silently -- searching "XXE" or "SSRF" simply stops working
+    -- and nothing checked the ~150 ids that modules/cwe_categories.py
+    hard-codes.
+    """
+    if len(names) < MIN_WEAKNESSES:
+        raise SystemExit(
+            f"refusing to write: only {len(names)} weaknesses parsed, "
+            f"expected at least {MIN_WEAKNESSES}. Is the XML truncated?")
+
+    sys.path.insert(0, str(OUT_PATH.parent.parent))
+    try:
+        from modules.cwe_categories import CATEGORIES
+    except Exception as exc:                       # pragma: no cover
+        print(f"note: could not cross-check the curated classes ({exc})",
+              file=sys.stderr)
+        return
+
+    curated = {cwe_id for spec in CATEGORIES.values()
+               for cwe_id in (*spec["core"], *spec["extended"])}
+    missing = sorted(curated - set(names), key=lambda value: int(value))
+    if missing:
+        raise SystemExit(
+            f"refusing to write: {len(missing)} CWE(s) the curated classes "
+            f"use are absent from this catalog: {missing[:10]}")
+
+    lost = sorted(cwe_id for cwe_id in EXTRA_ALIASES if cwe_id not in aliases)
+    if lost:
+        print(f"warning: EXTRA_ALIASES for {lost} did not survive -- those "
+              f"ids are deprecated in this catalog, so their community "
+              f"terms will no longer match.", file=sys.stderr)
+
+
 def main() -> None:
     root = load_xml(sys.argv[1] if len(sys.argv) > 1 else None)
+    names, aliases, _deprecated, _version, _date = collect(root)
+    _check_catalog(names, aliases)
     text = render(root)
     # This file writes Python that modules/cwe_categories.py imports, which
     # every client imports in turn -- so anything that lands here runs inside

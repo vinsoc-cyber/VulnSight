@@ -802,7 +802,25 @@ def classification_fingerprint(cfg: AIConfig, adv: dict, category: str) -> str:
 
 
 def aggregate_category_verdicts(category_verdicts: dict[str, dict]) -> dict:
-    """Collapse per-category verdicts without hiding partial failures."""
+    """Collapse per-category verdicts without hiding partial failures.
+
+    An empty mapping is not a "no". It used to synthesize
+    `{"is_match": False, "confidence": 0.0, "has_errors": False}` out of
+    zero verdicts, which reads as a confident ruling that nothing produced.
+    It is not reachable through /api/ai/classify today -- the view rejects
+    an empty category list, and classify_many's gid always matches the
+    lookup key -- but it is one caller away: a script calling
+    classify_batch with no categories, or a stored blob whose advisory_id
+    disagrees with its row key, would get "not this class" instead of an
+    error.
+    """
+    if not category_verdicts:
+        return {
+            "is_match": None,
+            "confidence": 0.0,
+            "has_errors": True,
+            "errors": {"*": "no categories were scored"},
+        }
     successes = {
         category: verdict
         for category, verdict in category_verdicts.items()

@@ -393,5 +393,56 @@ class TestBugClassesDocSync(unittest.TestCase):
         self.assertIn("no class-table section", out)
 
 
+class TestAToolCannotReportCleanOnNothing(unittest.TestCase):
+    """Three tools could print success having measured nothing, which is
+    worse than failing: it is indistinguishable from a real pass.
+
+    `sync_module_map` reported "already accurate" when ROW_RE parsed zero
+    rows -- somebody converting the fenced block to a markdown table, or
+    reindenting it, would have silently stopped every line count being
+    derived. `sync_testing_doc` already guarded the equivalent case, which
+    is how the asymmetry was found.
+    """
+
+    def test_sync_module_map_refuses_a_block_it_cannot_parse(self):
+        import re as _re
+
+        original = sync_module_map.ROW_RE
+        try:
+            sync_module_map.ROW_RE = _re.compile(r"ZZZ_NEVER_MATCHES")
+            with contextlib.redirect_stderr(io.StringIO()):
+                rc = sync_module_map.main(["--check"])
+        finally:
+            sync_module_map.ROW_RE = original
+        self.assertEqual(rc, 2, "a map that parses to nothing reported clean")
+
+    def test_sync_module_map_is_happy_with_the_real_block(self):
+        """The floor must not fire on the document as it stands."""
+        with contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = sync_module_map.main(["--check"])
+        self.assertIn(rc, (0, 1), "the floor fired on a healthy map")
+
+    def test_the_design_audit_does_not_report_success_without_a_browser(self):
+        """Wired into CI without playwright it returned 0 -- passing
+        forever having measured nothing, which is the exact failure it
+        exists to catch in other people's work."""
+        source = _read(os.path.join(ROOT, "tools", "design_audit.py"))
+        self.assertNotRegex(
+            source,
+            r"playwright is not installed[\s\S]{0,200}?return 0\b",
+            "a missing browser still exits 0")
+        self.assertRegex(source, r"return 77")
+
+    def test_the_design_audit_checks_the_page_it_asked_for(self):
+        """Flask's 404 body is exactly one <h1> with no overflow and no JS
+        errors, so it satisfies every structural check. If /api/docs ever
+        stopped registering, the states added to cover it would have
+        audited the 404 and reported clean."""
+        source = _read(os.path.join(ROOT, "tools", "design_audit.py"))
+        self.assertRegex(source, r"response\s*=\s*page\.goto")
+        self.assertRegex(source, r"response\.status\s*>=\s*400")
+
+
 if __name__ == "__main__":
     unittest.main()

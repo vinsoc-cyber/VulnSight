@@ -46,6 +46,7 @@ TITLES = {
     "frontend": "CWE taxonomy and the browser code",
     "cleanup": "Removals, extractions and caches (property-asserted)",
     "hardening": "Availability, cost and correctness from the whole-tree review",
+    "hardening2": "Deployment, the published contract, and tools that could not fail",
 }
 
 

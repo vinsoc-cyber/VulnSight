@@ -276,34 +276,85 @@ rather than silently kept, so the next reviewer can disagree.
    answer "what do I get if I tick this?" — *"GitHub, filtered by CWE at the
    source"*, not *"GHSA · CWE filter"*.
 
-## Reviewed against the brief
+## Every region, judged
 
-A design is not finished because its author likes it. This is the check
-against the known tells of a generated page, done by measuring the sheet.
+The sections above are the plan. This is the critique: each region of the
+page in turn, against the brief's list of generated-page tells and against
+the five principles. It exists because the earlier passes judged the
+regions that were being changed, which is the easy half — a page is
+generic in the regions nobody looked at.
+
+Two of these were found only because this sweep happened. The results
+surface had never been opened by `tools/design_audit.py`, and the AI
+verdict panel had never been rendered outside a browser test that asserts
+on text.
+
+| Region | Verdict |
+|---|---|
+| Topbar wordmark | **Keep.** A two-letter monogram and a name. The subtitle says what the product does in five words rather than a tagline. |
+| Status pills | **Changed.** Mono was set on the whole pill, putting a monospace face on "Connected" and "cached" — the sheet's own rule is that mono means a code. Mono is now on `GH`/`AI` and the count only. State words were shouted caps and `AUTHED` was `gh auth status` vocabulary. |
+| Status dots | **Changed.** Filled vs ring, not red vs green alone. Below 480px the word beside the dot is clipped, so hue was carrying the state by itself. |
+| `Test AI` | **Keep.** The one accent-filled control in the topbar, and it spends nothing — it is the "will this work before I pay" button, which is the brief's second job. |
+| Cache count | **Keep.** A number that changes under the reader's eye, so the digits are mono and do not shift width. |
+| Theme toggle | **Keep.** An icon button with an `aria-label`; no text competing at 320px. |
+| Rail heading + reach line | **Changed.** "4 / 29 / 944" in three bordered boxes was the brief's named default hero treatment, holding three numbers nobody acts on. One sentence of prose now. |
+| Recent searches | **Keep.** Real state, not a canned preset list: each row is a query that was actually run, with its hit count and how long ago. |
+| Bug-class finder | **Keep.** A combobox over 944 CWEs that accepts an id, a name or a community alias. The hint under it states all three, which is the only place that can be said for a one-line input. |
+| Selected chips | **Keep.** Each carries a remove control; the count line states what the selection will cost ("1 AI pass per advisory") before anything is spent. |
+| Class list | **Keep.** Checkboxes with a description each. The descriptions are what the AI prompt uses as the class definition, so they are load-bearing text rather than help copy. |
+| Sources | **Keep.** Each option says what you get, not what it is: "GitHub, filtered by CWE at the source". |
+| Scope / Query | **Changed.** The direction control said "Newest first" whatever the sort field, so ordering by CVE id offered an age for something that has none. |
+| Run buttons | **Keep.** One filled control — the one that spends money — and a quiet secondary beside it. A disabled action is grey, never a dimmed accent, because a half-bright warning colour still reads as actionable. |
+| Workspace heading | **Changed.** It claimed results were "ranked for triage" when the order is publication date. |
+| Severity key | **Changed.** Four bordered cards in a page already built of them. A legend has no business carrying the weight of the thing it explains. |
+| Signals line | **Keep.** `GHSA NVD OSV EPSS AI` names the per-card marks, in the order they appear on a card. |
+| Result summary | **Changed.** An empty CWE list still rendered `· CWEs:` and an empty `<code>`, which paints as a stray box. The active order is now stated here. |
+| Search warnings | **Changed.** Emitted as error toasts, so a persistent statement about the result set floated over the list and covered a card title. |
+| Toolbar actions | **Keep.** "Refine with AI" is the filled one; it is the control that spends. |
+| Export | **Keep.** A `<details>` popover, three formats, no modal for a three-item menu. |
+| Card | **Keep.** A bordered rounded rectangle is the right primitive *here*: a card holds genuinely mixed content — a title, badges, a package range, a meta row and sometimes a verdict — unlike the twenty-nine equal taxonomy entries, which were boxes around nothing. |
+| Severity on a card | **Changed.** Encoded twice: a left spine *and* a saturated filled badge at the far corner. The spine is the half that reads down a column. |
+| `KEV / EXPLOITED` | **Keep.** The one filled badge on the surface, on the single most decision-relevant fact: this is being exploited now. Boldness spent once. |
+| Source badges | **Keep.** Outline, no fill. They were louder than the CWE that is the subject of the search. |
+| CWE badge | **Keep.** The id in mono, the name in sans behind a hairline. The id is the code; the name is prose. |
+| Package range | **Keep.** `lodash → 4.17.21` — the arrow carries meaning (vulnerable → fixed), which is the brief's own exception to the "→ appended to link text" tell. |
+| Meta row | **Changed.** The advisory and CVE links had a 17px hit area. The labels before each value stay: two identifiers sit side by side and the row is the only place to disambiguate them. |
+| EPSS meter | **Keep.** A quantity as a length, beside the figure. The same device as the class-field measure, which is why it reads as one system. |
+| AI verdict panel | **Keep.** Green left rule for a confirmed match, the class it matched, a confidence figure, and the model's reason in full. `--ok` green appears here and on the status dots and nowhere else. |
+| Empty / onboarding hero | **Keep.** The claim at display size, and the taxonomy immediately under it. |
+| Class field | **Changed.** Twenty-nine identical boxes said these are twenty-nine equal things. The CWE count is a length now, and the track doubles as the entry's baseline. |
+| Auth gate | **Keep.** A modal that traps focus and inerts the page behind it, with one input and one action. It appears because the bind guard decided a token is required, and it says so. |
+| Toasts | **Partly kept.** Transient completion messages stay as toasts; only the persistent warnings moved. A toast that disappears is a different thing from a statement about the result set. |
+| Mobile slide-over | **Keep.** Below 900px the rail becomes a panel reached from one button. The breakpoint is declared once as `--breakpoint-panel` and read from CSS by `app.js`, so the two cannot drift. |
+
+### Tells, re-checked across the whole page
 
 | Tell | Status |
 |---|---|
 | Cream `#F4F1EA` + serif display + terracotta accent | absent |
-| Near-black + a single acid-green or vermilion accent | partly — the ground is near-black, but the accent is a desaturated steel chosen to stay out of the severity hues, and severity owns the chroma |
-| Broadsheet: hairline rules, zero radius, dense columns | absent |
-| SaaS-card kit: one radius on everything, identical soft shadows | absent — four radii that encode rank, no `rgba(0,0,0,.1)` shadow anywhere |
-| Tracked-out ALL-CAPS eyebrow above every heading | one uppercase rule, on severity badges, where the label is a code |
-| Meta strings joined with middle dots (`A · B · C`) | **was present** — five decorative joins, now written as phrases. The remaining dots join genuinely parallel facets (`GHSA+NVD · max 100 · oldest first`) |
-| `WORD — fragment` with a spaced em dash | used sparingly, in prose, not as a label pattern |
-| Tinted near-black (`#0B0B0B`, `#111`) standing in for black | absent |
-| Monospace for small data labels | avoided on purpose — see **Type** |
-| `→` appended to link and button text | one `→`, and it is `package → first-patched-version`, carrying meaning |
+| Near-black + one acid accent | partly — the ground is near-black, the accent is a desaturated steel chosen to stay out of the four severity hues, and severity owns the chroma |
+| Broadsheet: hairline rules, zero radius, dense columns | absent. The class field lost its borders but gained space and a measure, not rules |
+| SaaS-card kit: one radius on everything, identical soft shadows | **was present, and the earlier self-review graded its way out of it by counting radii.** Four radii on one component at four sizes is still one component. The class field and the severity key are no longer cards; the result card stays, because it holds mixed content |
+| ALL-CAPS eyebrow above every heading | one CSS rule, on severity badges, where the label is a code. The status words were shouted in the markup instead, which the CSS-only claim did not cover; they are sentence case now |
+| Meta strings joined with middle dots | the remaining dots join genuinely parallel facets (`6 advisories · newest first · CWEs: 639`) |
+| `WORD — fragment` with a spaced em dash | used in prose, not as a label pattern |
+| Tinted near-black standing in for black | absent |
+| Monospace for small data labels | **was present on the status pills.** Mono is now codes, ids, vectors and counts only |
+| `→` appended to link and button text | one `→`, in `package → first-patched-version`, carrying meaning |
 
-### What changed because of this review
+### What this sweep did not change, and why
 
-- The type scale, as described above. The plan that went into this pass said
-  "keep the type, fix the copy"; measuring the sheet showed the type *was*
-  the problem.
-- Two things were deliberately **not** changed. The palette is already a
-  documented, measured system; re-picking it would have been motion rather
-  than design. And promoting mono to the structural voice was rejected as a
-  listed tell, after the stylesheet turned out to have made the better call
-  already.
+The **default sort** is publication date, so a LOW advisory at 1% EPSS sits
+above a CRITICAL one being actively exploited. The interface no longer
+claims otherwise, but a risk-ordered default would serve the stated job
+better. It changes what every existing API caller gets back, so it is a
+product decision and sits in [open findings](open-findings.md).
+
+The **class filter narrows the rail and not the map**. Typing "idor" leaves
+the rail showing "1 of 29" beside a map still showing twenty-nine. Both
+readings are defensible — the map is the overview, and collapsing it to one
+tile while typing would destroy that — so the behaviour stands rather than
+being changed on a preference.
 
 ## What is measured, and where
 

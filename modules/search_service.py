@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from . import ai_classifier
@@ -25,12 +26,22 @@ from .cwe_categories import (
     normalize_cwe_id,
     resolve_cwes,
 )
-from .query_filters import matches_common_filters, valid_published_filter
+from .query_filters import (matches_common_filters, parse_timestamp,
+                            valid_published_filter)
 
 logger = logging.getLogger(__name__)
 
 # Derived, not a second literal: the two had to be edited together and
 # nothing checked that they matched.
+# The request limits, named once. modules/openapi.py imports these rather
+# than restating them: it already imported MAX_CATEGORY_INPUTS and used it
+# correctly for classify, while 100/300/500 were retyped into the schema --
+# so raising one here left the published contract saying the old number and
+# no test failed.
+MAX_RESULTS_CAP = 500
+DEFAULT_MAX_RESULTS = 100
+MAX_AFFECTS_LENGTH = 300
+
 VALID_SORTS: tuple[str, ...]  # assigned below, once _SORT_FIELD exists
 VALID_DIRECTIONS = ("asc", "desc")
 VALID_SOURCES = ("ghsa", "nvd", "osv", "osv-native")
@@ -210,16 +221,26 @@ def parse_search_query(body: dict) -> SearchQuery:
     severity = parse_text(body.get("severity"), "any", "severity")
     published = parse_text(body.get("published"), "", "published") or None
     adv_type = parse_text(body.get("type"), "reviewed", "type")
+    # Validated, not coerced. Every other invalid field raises a 400 while
+    # these two were silently replaced with the default, so {"sort":
+    # "severity"} returned published-sorted results with nothing saying so.
     sort = parse_text(body.get("sort"), "published", "sort")
     if sort not in VALID_SORTS:
-        sort = "published"
+        raise SearchError(
+            f"Unsupported sort: {sort}. One of: {', '.join(VALID_SORTS)}.", 400)
     direction = parse_text(body.get("direction"), "desc", "direction")
     if direction not in VALID_DIRECTIONS:
-        direction = "desc"
+        raise SearchError(
+            f"Unsupported direction: {direction}. "
+            f"One of: {', '.join(VALID_DIRECTIONS)}.", 400)
     try:
-        max_results = max(1, min(500, int(body.get("max_results", 100))))
+        max_results = max(1, min(MAX_RESULTS_CAP,
+                                 int(body.get("max_results", DEFAULT_MAX_RESULTS))))
     except (TypeError, ValueError):
-        max_results = 100
+        # Clamped rather than rejected on purpose: a number out of range is
+        # a request for "as many as you can", and the cap is documented.
+        # A non-numeric value is the typo case and takes the default.
+        max_results = DEFAULT_MAX_RESULTS
 
     # A category is either a curated bug class ("bac") or a single CWE picked
     # from the full MITRE catalog ("cwe:1321").
@@ -241,8 +262,9 @@ def parse_search_query(body: dict) -> SearchQuery:
         raise SearchError(f"Unsupported advisory type: {adv_type}", 400)
     if not valid_published_filter(published):
         raise SearchError(f"Invalid published filter: {published}", 400)
-    if affects and len(affects) > 300:
-        raise SearchError("affects is too long (maximum 300 characters).", 400)
+    if affects and len(affects) > MAX_AFFECTS_LENGTH:
+        raise SearchError(
+            f"affects is too long (maximum {MAX_AFFECTS_LENGTH} characters).", 400)
 
     sources = parse_str_list(
         body.get("sources"),
@@ -278,6 +300,22 @@ def parse_search_query(body: dict) -> SearchQuery:
 # Base-record precedence, explicit for every valid source. osv-native
 # used to fall to the default 99 and tie with a record whose `source`
 # was missing or misspelt, leaving fetch order to break the tie.
+# Base-record priority, keyed by a record's own `source`.
+#
+# "osv-native" is here and no record currently carries it: normalize_osv
+# hard-codes "source": "osv" and fetch_osv_native only adds native=True. It
+# stays deliberately. The entry costs nothing, and the day a record IS
+# stamped that way the alternative is a silent fall to the default 99,
+# where it ties with a record whose source is missing or misspelt and fetch
+# order breaks the tie -- which is the defect
+# `test_every_valid_source_has_an_explicit_base_priority` was written for.
+# Every selectable source has an explicit rank, whether or not a record
+# carries it today.
+#
+# The real inconsistency is elsewhere and is reported, not papered over: a
+# row's `sources` says ["osv"] while `per_source` names "osv-native"
+# separately, because one is record provenance and the other is a fetch
+# mode. See docs/open-findings.md.
 _SOURCE_PRIORITY = {name: index for index, name in
                     enumerate(("ghsa", "osv", "osv-native", "nvd"))}
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -338,6 +376,42 @@ def _unique_dicts(items: list[dict]) -> list[dict]:
             seen.add(key)
             out.append(copy.deepcopy(item))
     return out
+
+
+def _instant(value: str) -> datetime:
+    """The parsed timestamp. Only called on values _by_instant kept, so the
+    None branch is unreachable -- stated rather than assumed, because a
+    sort key that can return None raises inside min()/max() with a message
+    naming neither the field nor the record."""
+    parsed = parse_timestamp(value)
+    if parsed is None:                                  # pragma: no cover
+        raise ValueError(f"unparseable timestamp reached _instant: {value!r}")
+    return parsed
+
+
+def _by_instant(values: list[str]) -> list[str]:
+    """Only the values that parse as timestamps.
+
+    A single sort key cannot put unparseable values last under both min()
+    and max() -- whichever end it pushes them to, the other end pulls them
+    back. So they are excluded from the comparison instead: a value nobody
+    can read does not get to decide which date is the earliest.
+    """
+    return [value for value in values if parse_timestamp(value) is not None]
+
+
+def _earliest(values: list[str]) -> str | None:
+    usable = _by_instant(values)
+    if usable:
+        return min(usable, key=_instant)
+    return values[0] if values else None
+
+
+def _latest(values: list[str]) -> str | None:
+    usable = _by_instant(values)
+    if usable:
+        return max(usable, key=_instant)
+    return values[0] if values else None
 
 
 def _vector_for_score(records: list[dict], score: float | None) -> str | None:
@@ -512,9 +586,15 @@ def _merge_group(records: list[dict]) -> dict:
     # backdates a 2025 GHSA advisory to its 2019 CVE, which then sorts and
     # displays under a year in which that advisory did not yet exist.  Every
     # source's own date stays available under source_records.
-    merged["published_at"] = base.get("published_at") or (min(published) if published else None)
-    merged["updated_at"] = max(updated) if updated else None
-    merged["withdrawn_at"] = max(withdrawn) if withdrawn else None
+    # Keyed on the parsed instant, not the raw string. GHSA and OSV send
+    # "...Z" and NVD sends a naive "...253", so a byte comparison is right
+    # to the second for UTC values and wrong on sub-second ties and on any
+    # non-UTC offset. query_filters.parse_timestamp exists for exactly this
+    # and was not used. The stored value stays the original string, so
+    # nothing downstream sees a reformatted date.
+    merged["published_at"] = base.get("published_at") or _earliest(published)
+    merged["updated_at"] = _latest(updated)
+    merged["withdrawn_at"] = _latest(withdrawn)
     merged["kev"] = any(bool(record.get("kev")) for record in records)
     merged["native"] = any(bool(record.get("native")) for record in records)
     for key in ("nvd_status", "osv_id"):
@@ -639,6 +719,12 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     # opposed to having nothing to return. A partial failure is reported here
     # and in `warnings`; a total one is a 502 (see below).
     failed_sources: list[str] = []
+    # Which sources were actually tried. A source that is skipped -- OSV
+    # with ecosystem="any", say -- is neither a success nor a failure, and
+    # comparing failures against the *requested* set meant that if every
+    # source that ran had failed but one had been skipped, the response was
+    # 200 with count: 0 instead of the 502 docs/api.md documents.
+    attempted_sources: list[str] = []
     first_error: Exception | None = None
     collected: list[dict] = []
     # 'osv' and 'osv-native' read the same bulk export. Honour the refresh
@@ -647,6 +733,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
 
     # --- GHSA (server-side CWE filter) ---
     if "ghsa" in q.sources:
+        attempted_sources.append('ghsa')
         # GHSA sorts by cve_id natively (see ghsa_client.SearchParams), and
         # throwing that away meant the pool was cut to max_results by
         # *published* and only then re-sorted by the field asked for.
@@ -698,6 +785,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 f"'{q.ecosystem}' skipped. Supported: {', '.join(osv_client.ECOSYSTEM_MAP)}."
             )
         else:
+            attempted_sources.append("osv")
             refresh, osv_refresh_pending = osv_refresh_pending, False
             try:
                 o = osv_client.fetch_osv(q.ecosystem, q.cwes, affects=q.affects,
@@ -714,6 +802,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
 
     # --- NVD (server-side CWE filter via NIST API v2) ---
     if "nvd" in q.sources:
+        attempted_sources.append('nvd')
         nvd_params = nvd_client.NvdSearchParams(
             cwes=q.cwes,
             keyword=q.affects,
@@ -764,6 +853,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 f"'{q.ecosystem}' skipped."
             )
         else:
+            attempted_sources.append("osv-native")
             refresh, osv_refresh_pending = osv_refresh_pending, False
             try:
                 on = osv_client.fetch_osv_native(q.ecosystem, q.categories,
@@ -791,7 +881,8 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     # failure, so a script could rely on neither. The rule is the same for
     # all four now, and it also covers the multi-source case, where 200 with
     # count: 0 could not be told apart from "nothing matched".
-    if failed_sources and set(failed_sources) >= set(q.sources):
+    if (failed_sources and attempted_sources
+            and set(failed_sources) >= set(attempted_sources)):
         # One failed source keeps its own message, which docs/api.md
         # documents verbatim; several are joined.
         failures = [w for w in warnings if w.endswith("fetch failed.")]

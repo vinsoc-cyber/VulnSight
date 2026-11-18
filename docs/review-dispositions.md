@@ -24,12 +24,12 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 828 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 882 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **167/167 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **189/189 caught** |
 
 The `caught` figure is read from `docs/revert-results.json`, which
 `tools/revert_checks.py` writes when it runs the whole battery.
@@ -46,7 +46,7 @@ module unpatched first now and reports `BASELINE RED` instead.
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 167 named bugs in the working tree, runs the test module that is
+each of 189 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -295,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 167 checks, by area
+## The 189 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -497,5 +497,32 @@ codebase and the test module that now refuses to let it back in.
 | a conditional request with a tag list re-serves the whole body | `tests/test_app.py` |
 | a 304 drops the validators that make the next request conditional | `tests/test_app.py` |
 | an empty token file crashes startup with the wrong reason | `tests/test_security.py` |
+
+### Deployment, the published contract, and tools that could not fail (22)
+
+| Reverting this | is caught by |
+|---|---|
+| the image makes its own source writable by the runtime user | `tests/test_deployment.py` |
+| dependencies go back to floating ranges | `tests/test_deployment.py` |
+| run.sh swallows the failure of its one credential check | `tests/test_deployment.py` |
+| the credential check moves back behind the slow work | `tests/test_deployment.py` |
+| the OpenAPI document stops using its own components | `tests/test_openapi.py` |
+| the spec claims /ai/test takes no body again | `tests/test_openapi.py` |
+| the spec restates a limit instead of importing it | `tests/test_openapi.py` |
+| a 415 from the shared body helper goes back undocumented | `tests/test_openapi.py` |
+| the test auditor stops detecting a self-fulfilling test | `tests/test_cleanup_stays_clean.py` |
+| the test auditor stops detecting a recomputed expectation | `tests/test_cleanup_stays_clean.py` |
+| the test auditor reports a clean sweep of nothing | `tests/test_cleanup_stays_clean.py` |
+| write_atomic narrows every file it touches to 0600 | `tests/test_cleanup_stays_clean.py` |
+| the module map reports accurate on a block it cannot parse | `tests/test_doc_sync_tools.py` |
+| a missing browser makes the design audit report success | `tests/test_doc_sync_tools.py` |
+| the design audit stops checking the page it asked for | `tests/test_doc_sync_tools.py` |
+| an unsupported sort is silently coerced to the default | `tests/test_search_service.py` |
+| timestamps are compared as raw strings again | `tests/test_search_service.py` |
+| a total failure is measured against requested, not attempted, sources | `tests/test_search_service.py` |
+| an empty verdict set is reported as a confident no | `tests/test_ai_classifier.py` |
+| the catalog generator accepts a truncated catalog | `tests/test_generate_cwe_catalog.py` |
+| the forbidden keyword trap comes back | `tests/test_cwe_categories.py` |
+| the overflows keyword trap comes back | `tests/test_cwe_categories.py` |
 
 <!-- end generated check index -->

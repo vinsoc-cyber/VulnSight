@@ -212,6 +212,14 @@ def upsert_advisories(records: list[dict], path: str | None = None) -> None:
 
 
 def get_advisory(advisory_id: str, path: str | None = None) -> dict | None:
+    """One row by id. **No production caller** -- use get_advisories.
+
+    classify_batch opened one connection per id through this until it moved
+    to the batched form, and nothing in app.py or search_service has called
+    it since. It stays because the tests use it as a single-row reader and
+    a revert check reintroduces the per-id loop through it; it is not a
+    path to wire new code onto.
+    """
     with _db(path) as conn:
         row = conn.execute(
             "SELECT data FROM advisories WHERE advisory_id=?", (advisory_id,)
@@ -234,14 +242,9 @@ def get_advisories(advisory_ids, path: str | None = None) -> dict[str, dict]:
     found: dict[str, dict] = {}
     with _db(path) as conn:
         # Chunked so a large batch cannot trip SQLITE_LIMIT_VARIABLE_NUMBER.
-        # That limit was 999 until SQLite 3.32 (2020) and is 32766 on
-        # anything current -- the old comment said 999 flatly, which is the
-        # number people then write tests against, and a 1,500-id test
-        # "proving" the chunking passed with the chunking removed. The
-        # chunk stays at 500 because the floor is what has to be safe: a
-        # build may still be compiled with the old limit.
-        for start in range(0, len(ids), 500):
-            chunk = ids[start:start + 500]
+        # See _IN_CLAUSE_CHUNK.
+        for start in range(0, len(ids), _IN_CLAUSE_CHUNK):
+            chunk = ids[start:start + _IN_CLAUSE_CHUNK]
             placeholders = ",".join("?" * len(chunk))
             rows = conn.execute(
                 # Only placeholders are interpolated; every value is bound.
@@ -470,6 +473,16 @@ def prune_jobs(max_age_seconds: float, path: str | None = None) -> int:
         return cursor.rowcount or 0
 
 
+# How many bind parameters one IN clause may carry.
+#
+# SQLITE_LIMIT_VARIABLE_NUMBER was 999 until SQLite 3.32 (2020) and is
+# 32766 on anything current. An older comment said 999 flatly, which is the
+# number people then write tests against -- and a 1,500-id test "proving"
+# the chunking passed with the chunking removed. 500 because the floor is
+# what has to be safe: a build may still be compiled with the old limit.
+_IN_CLAUSE_CHUNK = 500
+
+
 def get_classifications(
     advisory_ids: list[str],
     category: str,
@@ -479,13 +492,22 @@ def get_classifications(
 ) -> dict[str, dict]:
     if not advisory_ids:
         return {}
-    placeholders = ",".join("?" * len(advisory_ids))
+    # Chunked, like get_advisories ten lines above, and for the same reason
+    # its comment gives. Bounded at 501 bind parameters today
+    # (MAX_AI_BATCH is 100, max_results caps at 500), so this could not
+    # fire -- but the two functions sat side by side doing the same thing
+    # two different ways, and only one of them was safe to call with a
+    # longer list.
+    rows = []
     with _db(path) as conn:
-        rows = conn.execute(
-            f"""SELECT * FROM ai_classification
-                WHERE category=? AND advisory_id IN ({placeholders})""",
-            [category, *advisory_ids],
-        ).fetchall()
+        for start in range(0, len(advisory_ids), _IN_CLAUSE_CHUNK):
+            chunk = advisory_ids[start:start + _IN_CLAUSE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                f"""SELECT * FROM ai_classification
+                    WHERE category=? AND advisory_id IN ({placeholders})""",
+                [category, *chunk],
+            ).fetchall())
     out: dict[str, dict] = {}
     for r in rows:
         if expected_fingerprints is not None:

@@ -217,5 +217,41 @@ class TestTheCommittedCatalogMatchesItsGenerator(unittest.TestCase):
                     f"EXTRA_ALIASES[{cwe_id}] lost {term!r}")
 
 
+class TestTheGeneratorRefusesADegradedCatalog(unittest.TestCase):
+    """compile() proves the output is valid Python, which is not the same
+    as proving it is a usable catalog. A filtered, truncated or partially
+    downloaded XML would have been written and only noticed on the next CI
+    run -- after the file the server imports had been replaced."""
+
+    def test_a_truncated_catalog_is_refused(self):
+        with self.assertRaises(SystemExit) as caught:
+            gen._check_catalog({"79": "XSS"}, {})
+        self.assertIn("expected at least", str(caught.exception))
+
+    def test_a_catalog_missing_a_curated_id_is_refused(self):
+        """~150 CWE ids are hard-coded in modules/cwe_categories.py and
+        nothing checked that the new catalog still defines them."""
+        from modules.cwe_categories import CATEGORIES
+
+        curated = {cwe_id for spec in CATEGORIES.values()
+                   for cwe_id in (*spec["core"], *spec["extended"])}
+        names = dict.fromkeys(curated, "x")
+        names.update({str(n): "filler" for n in range(100000, 100000 + 900)})
+        dropped = sorted(curated)[0]
+        del names[dropped]
+        with self.assertRaises(SystemExit) as caught:
+            gen._check_catalog(names, {})
+        self.assertIn("curated classes use", str(caught.exception))
+
+    def test_the_real_catalog_passes(self):
+        """The floor must not fire on the catalog as it ships: a guard that
+        rejects the real thing is worse than no guard. This is a
+        does-not-raise assertion, and the count below says what it saw."""
+        from modules import cwe_catalog
+
+        gen._check_catalog(dict(cwe_catalog.NAMES), dict(cwe_catalog.ALIASES))
+        self.assertGreaterEqual(len(cwe_catalog.NAMES), gen.MIN_WEAKNESSES)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
