@@ -14,6 +14,25 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        # Both halves, as the reviewer's mutation did it: either guard alone
+        # still holds the dialog, so reverting one proves nothing.
+        "the auth gate stops trapping focus and inerting the page",
+        [("static/app.js",
+          "    function setAuthGateBackgroundInert(inert) {\n",
+          "    function setAuthGateBackgroundInert(inert) {\n      return;\n"),
+         ("static/app.js",
+          "    function trapAuthGateTab(e) {\n      if (e.key !== 'Tab') return;",
+          "    function trapAuthGateTab(e) {\n      return;")],
+        "test_ui_e2e",
+    ),
+    (
+        "the global [hidden] rule is removed",
+        [("static/style.css",
+          "[hidden] { display: none !important; }",
+          "")],
+        "test_frontend_js",
+    ),
+    (
         "the opening screen stops offering the classes",
         [("static/app.js",
           "      const map = $('#class-map');\n      if (!map) return;",

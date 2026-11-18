@@ -83,6 +83,20 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the auth allowlist goes back to being unreachable",
+        [("app.py",
+          "        if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:\n"
+          "            return None\n"
+          "        expected = app.config.get",
+          '        if request.method not in ("POST", "PUT", "PATCH", "DELETE") \\\n'
+          '                and request.endpoint != "api_jobs_get":\n'
+          "            return None\n"
+          "        if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:\n"
+          "            return None\n"
+          "        expected = app.config.get")],
+        "test_app",
+    ),
+    (
         "the prune sentinel means 'at boot' instead of 'never'",
         [("modules/jobs.py",
           '_last_prune = float("-inf")',

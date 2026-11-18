@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 697 tests: 651 offline + 46 browser
+.venv/bin/python -m unittest discover -s tests        # 701 tests: 653 offline + 48 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -15,13 +15,13 @@ OSV and the AI provider are all mocked.
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
 | `test_ai_classifier.py` | 74 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
-| `test_app.py` | 71 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
+| `test_app.py` | 73 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
 | `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
 | `test_nvd_client.py` | 36 | date windowing, normalisation, rate-limit and 403 handling |
 | `test_http_retry.py` | 27 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
 | `test_osv_client.py` | 32 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
-| `test_ui_e2e.py` | 46 | the real UI in a browser — *optional*, see below |
+| `test_ui_e2e.py` | 48 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
 | `test_jobs.py` | 23 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
@@ -34,9 +34,9 @@ OSV and the AI provider are all mocked.
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 13 | batching, malformed responses |
 | `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
-| `test_config.py` | 9 | `.env` parsing, `DATA_DIR`, numeric knobs |
+| `test_config.py` | 8 | `.env` parsing, `DATA_DIR`, numeric knobs |
 | `test_query_filters.py` | 5 | shared published/affects/severity predicates |
-| `test_frontend_js.py` | 8 | runs every `tests/*.js` under node |
+| `test_frontend_js.py` | 9 | runs every `tests/*.js` under node |
 
 ## Frontend helper tests (node)
 
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 697 tests` / `OK (skipped=46)`, and every other test still runs.
+`Ran 701 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -207,7 +207,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 111 named bugs it re-introduces the bug in the working tree, runs the
+For each of 114 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

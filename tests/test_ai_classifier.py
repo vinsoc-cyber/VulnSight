@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -969,9 +970,11 @@ class TestConfigReuse(unittest.TestCase):
             "GLM_BASE_URL": "https://x", "GLM_MODEL": "m",
         }, clear=False)
         self.env.start()
+        self._cooldown_dir = tempfile.mkdtemp(prefix="vulnsight-cooldown-")
+        self.addCleanup(shutil.rmtree, self._cooldown_dir, ignore_errors=True)
         self.cooldown = mock.patch.object(
             ai_classifier, "COOLDOWN_PATH",
-            os.path.join(tempfile.mkdtemp(), "cooldown.json"))
+            os.path.join(self._cooldown_dir, "cooldown.json"))
         self.cooldown.start()
 
     def tearDown(self):

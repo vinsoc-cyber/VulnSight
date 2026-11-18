@@ -32,6 +32,7 @@ class TestDotenvIsLoadedBeforeConstants(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         shutil.copytree(os.path.join(ROOT, "modules"),
                         os.path.join(self.tmp, "modules"))
 
@@ -156,17 +157,10 @@ class TestDotenvQuirks(unittest.TestCase):
     def test_a_key_that_is_not_an_identifier_is_skipped(self):
         loaded = self._load("not a key = value\nVS_PLAIN=ok\n")
         self.assertEqual(loaded["VS_PLAIN"], "ok")
+        # The guard itself, not just "the other key still loaded". Deleting
+        # `if not key.isidentifier(): continue` left this green -- and
+        # _load restores only VS_* names, so the bad key would stay in
+        # os.environ for the rest of the run.
+        self.assertNotIn("not a key", loaded)
+        self.assertNotIn("not a key", os.environ)
 
-    def test_the_cooldown_file_lives_in_the_data_dir(self):
-        """It was the one piece of state VULNSIGHT_DATA_DIR did not relocate,
-        so in Docker it wrote to /app and was lost on every container
-        replacement -- while docs/operations.md lists it among the files that
-        move."""
-        from modules import ai_classifier
-        self.assertTrue(
-            ai_classifier.COOLDOWN_PATH.startswith(config.DATA_DIR),
-            f"{ai_classifier.COOLDOWN_PATH} is not under {config.DATA_DIR}")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

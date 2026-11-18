@@ -88,6 +88,24 @@ class TestFrontendJavaScript(unittest.TestCase):
                 self.assertEqual(sizes, set(),
                                  f"{name} sets sizes outside the scale: {sorted(sizes)}")
 
+    def test_the_global_hidden_rule_is_present(self):
+        """Every [hidden] in this app is hidden by one declaration. The UA
+        stylesheet's own `[hidden] { display: none }` loses to any rule with
+        a class selector, and several components set display: .combo-list is
+        flex, .auth-gate is flex, .cat is grid. Without this rule the CWE
+        popup stays painted with hidden=true on it, and the auth scrim
+        covers the whole app permanently.
+
+        No test referenced it, and the browser assertions that would have
+        noticed were reading el.hidden -- the attribute, which is true
+        either way. They read computed display now; this is the cheap
+        guard that fails in milliseconds instead of minutes."""
+        css = self._stylesheet()
+        self.assertRegex(
+            css, r"\[hidden\]\s*\{[^}]*display:\s*none\s*!important",
+            "the global [hidden] rule is gone; components that set display "
+            "will stay painted when hidden")
+
     def test_both_stylesheets_agree_on_the_scale(self):
         """Restating the tokens is fine -- apidocs.css is standalone on
         purpose -- but the values have to match, or "one scale" is a claim

@@ -32,7 +32,14 @@ class TestAdvisoryIdBackfill(unittest.TestCase):
         self.path = self.tmp.name
 
     def tearDown(self):
-        os.unlink(self.path)
+        # The -wal/-shm sidecars too: `with sqlite3.connect(...)` commits but
+        # does not close, so SQLite leaves them behind. Every other class in
+        # this file already removed them; this one leaked four per run.
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self.path + suffix)
+            except OSError:
+                pass
 
     def _rows_missing_id(self):
         with sqlite3.connect(self.path) as conn:

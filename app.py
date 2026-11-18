@@ -186,19 +186,20 @@ def create_app():
 
     @app.before_request
     def _auth_check():
-        # Job polling is the one GET that is guarded. Every other GET serves
-        # public reference data (the CWE catalog, the taxonomy); a job result is
-        # the output of the operator's own query, and the id alone should not be
-        # the only thing standing between a reader and it.
-        guarded_read = request.endpoint == "api_jobs_get"
-        if request.method not in ("POST", "PUT", "PATCH", "DELETE") and not guarded_read:
+        # OPTIONS is protocol, not data: it returns Flask's method list and
+        # no application content, and refusing it would only break a
+        # preflight that CSRF already refuses on its own terms.
+        if request.method == "OPTIONS":
             return None
-        # An allowlist of endpoints that may be reached without a token,
-        # not a path prefix. The rate limiter already matches on the endpoint
-        # and says why; auth matching on the path meant the two guards held
-        # different notions of "protected", and a future route outside /api/
-        # would have been unauthenticated by default rather than failing
-        # closed. Unknown endpoint (404) also lands here and is guarded.
+        # One allowlist decides, for every method. There used to be a method
+        # check above this -- "anything that is not a write, except job
+        # polling, is public" -- which returned before the allowlist was
+        # ever consulted. Since every allowlisted endpoint is GET-only and
+        # api_jobs_get was the one GET excluded by name, the allowlist was
+        # unreachable: dead code whose own comment claimed it was what made
+        # a new route fail closed. It is now. A GET added later is guarded
+        # until it is listed here, which is the behaviour this was written
+        # for; an unknown endpoint (404) lands here and is guarded too.
         if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:
             return None
         expected = app.config.get("VULNSIGHT_TOKEN") or ""

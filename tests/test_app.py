@@ -2,6 +2,7 @@
 cache pointed at a temp SQLite DB before the app module is imported)."""
 
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -955,6 +956,37 @@ class TestAppAuthAndLimits(unittest.TestCase):
                 except OSError:
                     pass
 
+    def test_a_route_added_later_is_guarded_until_it_is_listed(self):
+        """The allowlist used to be unreachable. A method check above it --
+        "anything that is not a write, except job polling, is public" --
+        returned first, and since every allowlisted endpoint is GET-only,
+        the list never decided anything. Emptying it changed no test.
+
+        What that cost: a GET route added later was public by default. The
+        comment above the list claimed the opposite."""
+        self._make({"VULNSIGHT_API_TOKEN": "s3cret"})
+
+        @self.app.route("/api/v1/secrets")
+        def api_secrets():
+            return {"ok": True}
+
+        client = self.app.test_client()
+        self.assertEqual(client.get("/api/v1/secrets").status_code, 401,
+                         "a new GET route is public by default again")
+        self.assertEqual(
+            client.get("/api/v1/secrets",
+                       headers={"X-VulnSight-Token": "s3cret"}).status_code, 200)
+
+    def test_the_allowlist_is_what_keeps_public_data_public(self):
+        """The other half: the listed endpoints must stay reachable."""
+        self._make({"VULNSIGHT_API_TOKEN": "s3cret"})
+        client = self.app.test_client()
+        with mock.patch("modules.ghsa_client.gh_auth_ok", return_value=True):
+            for path in ("/", "/api/v1/cwes", "/api/v1/meta",
+                         "/api/v1/openapi.json", "/api/v1/osv/status"):
+                with self.subTest(path=path):
+                    self.assertEqual(client.get(path).status_code, 200)
+
     def test_token_required_on_post_not_get(self):
         self._make({"VULNSIGHT_API_TOKEN": "test-secret-token"})
         self.assertEqual(
@@ -1136,6 +1168,7 @@ class TestAppAuthAndLimits(unittest.TestCase):
 
     def test_non_loopback_autogens_token(self):
         data_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, data_dir, ignore_errors=True)
         self._make({
             "HOST": "0.0.0.0",
             "VULNSIGHT_BIND": "0.0.0.0",

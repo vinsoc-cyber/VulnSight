@@ -8,7 +8,7 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                     591   Flask routes, request guards, response headers
+app.py                     592   Flask routes, request guards, response headers
 modules/
   config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
   search_service.py        879   the pipeline: parse -> fetch -> merge -> sort -> enrich

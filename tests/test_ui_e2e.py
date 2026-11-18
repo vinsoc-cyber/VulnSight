@@ -24,6 +24,7 @@ import socket
 import sys
 import threading
 import unittest
+import urllib.request
 from unittest import mock
 import wsgiref.simple_server
 from wsgiref.simple_server import WSGIRequestHandler
@@ -264,7 +265,8 @@ class TestCweFinder(UITestCase):
         self.page.press("#cwe-search", "Tab")
         self.page.wait_for_timeout(150)
         self.assertTrue(self.page.evaluate(
-            "() => document.querySelector('#cwe-options').hidden"))
+            "() => getComputedStyle(document.querySelector('#cwe-options'))"
+            "        .display === 'none'"))
 
 
 class TestTheComboboxSaysWhatEnterWillDo(UITestCase):
@@ -490,7 +492,8 @@ class TestVerdictsFollowTheQuery(UITestCase):
         self.page.click("#ai-btn")
         self.page.wait_for_timeout(600)
         self.assertTrue(self.page.evaluate(
-            "() => document.querySelector('#stale-banner').hidden"))
+            "() => getComputedStyle(document.querySelector('#stale-banner'))"
+            "        .display === 'none'"))
 
         self.page.evaluate("""() => {
           const boxes = [...document.querySelectorAll('input[name=category]')];
@@ -501,7 +504,8 @@ class TestVerdictsFollowTheQuery(UITestCase):
         }""")
         self.page.wait_for_timeout(200)
         self.assertFalse(self.page.evaluate(
-            "() => document.querySelector('#stale-banner').hidden"),
+            "() => getComputedStyle(document.querySelector('#stale-banner'))"
+            "        .display === 'none'"),
             "stale verdicts were not flagged")
         self.assertTrue(self.page.is_disabled("#only_match"),
                         "filtering on stale verdicts must be blocked")
@@ -553,7 +557,8 @@ class TestVerdictsFollowTheQuery(UITestCase):
         self.page.click("#ai-btn")
         self.page.wait_for_timeout(600)
         self.assertTrue(self.page.evaluate(
-            "() => document.querySelector('#stale-banner').hidden"),
+            "() => getComputedStyle(document.querySelector('#stale-banner'))"
+            "        .display === 'none'"),
             "verdicts scored for the current selection are not stale")
 
         # Switch the query. Every verdict now answers the wrong question.
@@ -566,7 +571,8 @@ class TestVerdictsFollowTheQuery(UITestCase):
         }""")
         self.page.wait_for_timeout(200)
         self.assertFalse(self.page.evaluate(
-            "() => document.querySelector('#stale-banner').hidden"))
+            "() => getComputedStyle(document.querySelector('#stale-banner'))"
+            "        .display === 'none'"))
 
         # Re-score ONLY the errored advisory against the new selection.
         self.page.click("#retry-btn")
@@ -574,7 +580,8 @@ class TestVerdictsFollowTheQuery(UITestCase):
         self.assertEqual(len(self.classifies[-1]["advisory_ids"]), 1,
                          "retry should re-score only the failed advisory")
         self.assertFalse(self.page.evaluate(
-            "() => document.querySelector('#stale-banner').hidden"),
+            "() => getComputedStyle(document.querySelector('#stale-banner'))"
+            "        .display === 'none'"),
             "a one-row rescore cleared the banner for rows still scored "
             "against the previous selection")
         self.assertTrue(self.page.is_disabled("#only_match"),
@@ -683,44 +690,87 @@ class TestAuthGateTrapsFocus(UITestCase):
     the scrim -- invisible, focus ring under the overlay, and every control
     they reached would 401. A screen reader honouring aria-modal was
     meanwhile told there was nothing outside the dialog.
+
+    These used to set `inert` from the test and then assert it was there,
+    which is the test performing the behaviour it is checking: with
+    `setAuthGateBackgroundInert` reduced to a no-op *and* `trapAuthGateTab`
+    returning immediately, both still passed. They drive the real path now
+    -- the page is served with AUTH_REQUIRED true and no stored token, so
+    app.js calls showAuthGate() on init exactly as it would in production.
     """
 
-    def _open_gate(self):
-        self.page.evaluate("""() => {
-          const gate = document.getElementById('auth-gate');
-          gate.hidden = false;
-          return true;
-        }""")
+    def _page_with_auth_required(self):
+        """A page whose BOOT says a token is required, so the gate opens
+        through showAuthGate() rather than by the test opening it."""
+        with urllib.request.urlopen(self.base, timeout=10) as response:
+            html = response.read().decode("utf-8")
+        self.assertIn("AUTH_REQUIRED: false", html,
+                      "the e2e server is already requiring a token")
+        html = html.replace("AUTH_REQUIRED: false", "AUTH_REQUIRED: true")
+
+        page = self.browser.new_page(viewport={"width": 1400, "height": 1000})
+        # Fulfilled from here rather than route.fetch(): fetching through the
+        # same page that is blocked on the route deadlocks.
+        page.route(self.base,
+                   lambda route: route.fulfill(status=200, body=html,
+                                               content_type="text/html"))
+        page.goto(self.base, wait_until="networkidle")
+        page.wait_for_function(
+            "() => !document.getElementById('auth-gate').hidden", timeout=5000)
+        return page
+
+    def test_the_gate_opens_by_itself_when_a_token_is_required(self):
+        """If this fails the other two prove nothing."""
+        self.open()
+        page = self._page_with_auth_required()
+        try:
+            self.assertFalse(page.evaluate(
+                "() => document.getElementById('auth-gate').hidden"))
+        finally:
+            page.close()
 
     def test_the_background_is_inert_while_the_gate_is_open(self):
         self.open()
-        self.page.evaluate("""() => {
-          document.querySelectorAll('.topbar, .layout')
-            .forEach(el => el.setAttribute('inert', ''));
-          document.getElementById('auth-gate').hidden = false;
-        }""")
-        self.page.wait_for_timeout(100)
-        inert = self.page.evaluate(
-            "() => [...document.querySelectorAll('.topbar, .layout')]"
-            "        .every(el => el.hasAttribute('inert'))")
-        self.assertTrue(inert, "the page behind the gate stayed interactive")
+        page = self._page_with_auth_required()
+        try:
+            inert = page.evaluate(
+                "() => [...document.querySelectorAll('.topbar, .layout')]"
+                "        .every(el => el.hasAttribute('inert'))")
+            self.assertTrue(inert, "the page behind the gate stayed interactive")
+        finally:
+            page.close()
 
     def test_tabbing_cannot_reach_the_page_behind_the_gate(self):
         self.open()
-        self.page.evaluate("""() => {
-          document.querySelectorAll('.topbar, .layout')
-            .forEach(el => el.setAttribute('inert', ''));
-          document.getElementById('auth-gate').hidden = false;
-          document.getElementById('auth-token').focus();
-        }""")
-        for _ in range(6):
-            self.page.keyboard.press("Tab")
-        inside = self.page.evaluate("""() => {
-          const gate = document.getElementById('auth-gate');
-          return gate.contains(document.activeElement)
-              || document.activeElement === document.body;
-        }""")
-        self.assertTrue(inside, "Tab escaped into the page behind the scrim")
+        page = self._page_with_auth_required()
+        try:
+            page.evaluate("() => document.getElementById('auth-token').focus()")
+            for _ in range(8):
+                page.keyboard.press("Tab")
+                # No `|| activeElement === body` escape hatch: focus landing
+                # nowhere is a trap that lost the user, not a trap that held.
+                self.assertTrue(
+                    page.evaluate(
+                        "() => document.getElementById('auth-gate')"
+                        "        .contains(document.activeElement)"),
+                    "Tab escaped into the page behind the scrim")
+        finally:
+            page.close()
+
+    def test_shift_tab_is_trapped_too(self):
+        self.open()
+        page = self._page_with_auth_required()
+        try:
+            page.evaluate("() => document.getElementById('auth-token').focus()")
+            for _ in range(8):
+                page.keyboard.press("Shift+Tab")
+                self.assertTrue(
+                    page.evaluate(
+                        "() => document.getElementById('auth-gate')"
+                        "        .contains(document.activeElement)"),
+                    "Shift+Tab escaped backwards out of the dialog")
+        finally:
+            page.close()
 
 
 class TestFailureStates(UITestCase):

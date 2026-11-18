@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 697 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 701 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **111/111 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **114/114 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 111 named bugs in the working tree, runs the test module that is
+each of 114 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 111 checks, by area
+## The 114 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -315,10 +315,11 @@ codebase and the test module that now refuses to let it back in.
 | app.js loses its scope wrapper | `tests/test_frontend_js.py` |
 | module-map drift test stops deriving | `tests/test_docs.py` |
 
-### HTTP layer, jobs, cache, config, AI classifier (22)
+### HTTP layer, jobs, cache, config, AI classifier (23)
 
 | Reverting this | is caught by |
 |---|---|
+| the auth allowlist goes back to being unreachable | `tests/test_app.py` |
 | the prune sentinel means 'at boot' instead of 'never' | `tests/test_jobs.py` |
 | a job stays running when recording its terminal state raises | `tests/test_jobs.py` |
 | a job that cannot be marked running is abandoned in queued | `tests/test_jobs.py` |
@@ -372,10 +373,12 @@ codebase and the test module that now refuses to let it back in.
 | a failing later page discards the advisories already fetched | `tests/test_ghsa_client.py` |
 | EPSS is queried with the publisher's casing | `tests/test_epss_client.py` |
 
-### CWE taxonomy and the browser code (18)
+### CWE taxonomy and the browser code (20)
 
 | Reverting this | is caught by |
 |---|---|
+| the auth gate stops trapping focus and inerting the page | `tests/test_ui_e2e.py` |
+| the global [hidden] rule is removed | `tests/test_frontend_js.py` |
 | the opening screen stops offering the classes | `tests/test_ui_e2e.py` |
 | the map stops following the rail | `tests/test_ui_e2e.py` |
 | picking a class throws focus back to the rail | `tests/test_ui_e2e.py` |

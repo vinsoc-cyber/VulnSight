@@ -5,6 +5,7 @@ import io
 import os
 import re
 import sys
+import shutil
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -333,6 +334,9 @@ class TestClientKey(unittest.TestCase):
     def test_ensure_token_autogens_on_public_bind(self):
         import tempfile
         data_dir = tempfile.mkdtemp()
+        # Holds a generated API token; every other case here uses a
+        # TemporaryDirectory and this one leaked a token per run.
+        self.addCleanup(shutil.rmtree, data_dir, ignore_errors=True)
         env = {
             "GLM_TOKEN": "live",
             "VULNSIGHT_API_TOKEN": "",
