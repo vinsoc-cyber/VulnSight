@@ -156,8 +156,13 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
           "        return {}\n"
           "    found: dict[str, dict] = {}\n"
           "    with _db(path) as conn:\n"
-          "        # SQLite's default parameter limit is 999; chunk so a large batch\n"
-          "        # cannot trip it.\n"
+          "        # Chunked so a large batch cannot trip SQLITE_LIMIT_VARIABLE_NUMBER.\n"
+          "        # That limit was 999 until SQLite 3.32 (2020) and is 32766 on\n"
+          "        # anything current -- the old comment said 999 flatly, which is the\n"
+          "        # number people then write tests against, and a 1,500-id test\n"
+          '        # \"proving\" the chunking passed with the chunking removed. The\n'
+          "        # chunk stays at 500 because the floor is what has to be safe: a\n"
+          "        # build may still be compiled with the old limit.\n"
           "        for start in range(0, len(ids), 500):\n"
           "            chunk = ids[start:start + 500]\n"
           '            placeholders = ",".join("?" * len(chunk))\n'

@@ -42,8 +42,13 @@ def fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
     if not cve_ids:
         return {}
 
-    # Deduplicate while preserving a deterministic order for testing.
-    unique: list[str] = list(dict.fromkeys(cve_ids))
+    # Deduplicate while preserving a deterministic order for testing, and
+    # drop blanks: a record with no CVE id reaches here as "" (merge keeps
+    # whatever the source gave), and `?cve=,,` is a paid round trip that
+    # can only come back empty.
+    unique: list[str] = [c for c in dict.fromkeys(cve_ids) if c and c.strip()]
+    if not unique:
+        return {}
 
     results: dict[str, dict] = {}
     for batch in _batches(unique, BATCH_SIZE):

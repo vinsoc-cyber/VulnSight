@@ -240,6 +240,36 @@ class TestWithRetries(unittest.TestCase):
             len({round(http_retry.backoff_delay(0), 4) for _ in range(20)}), 1)
 
 
+class TestTheBackoffClockCanBeMocked(unittest.TestCase):
+    """`sleep` used to be bound as a default argument, `sleep=time.sleep`,
+    which Python evaluates once at import. Patching `time.sleep` afterwards
+    therefore did nothing, and every caller that thought it had mocked the
+    clock waited the real backoff: one test module spent 4.9 of its 5.3
+    seconds asleep while appearing to be instant. The whole offline suite
+    dropped from ~17s to 8.5s when this was resolved at call time instead.
+    """
+
+    def test_patching_time_sleep_is_honoured(self):
+        slept = []
+        with mock.patch.object(http_retry.time, "sleep", slept.append):
+            with self.assertRaises(urllib.error.HTTPError):
+                http_retry.with_retries(
+                    lambda: (_ for _ in ()).throw(http_error(503)),
+                    what="t", attempts=3, base_delay=30)
+        self.assertEqual(len(slept), 2, "the retries did not sleep at all")
+        self.assertTrue(all(s > 0 for s in slept))
+
+    def test_an_explicit_sleep_still_wins(self):
+        mine = []
+        with mock.patch.object(http_retry.time, "sleep",
+                               lambda s: self.fail("used the module clock")):
+            with self.assertRaises(urllib.error.HTTPError):
+                http_retry.with_retries(
+                    lambda: (_ for _ in ()).throw(http_error(503)),
+                    what="t", attempts=2, base_delay=1, sleep=mine.append)
+        self.assertEqual(len(mine), 1)
+
+
 class TestClientsShareThePolicy(unittest.TestCase):
     def test_ai_classifier_does_not_keep_a_second_copy(self):
         from modules import ai_classifier

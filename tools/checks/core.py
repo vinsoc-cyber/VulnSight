@@ -11,6 +11,16 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the retry backoff clock is bound at import again",
+        [("modules/http_retry.py",
+          "    sleep: Callable[[float], None] | None = None,\n) -> T:",
+          "    sleep: Callable[[float], None] = time.sleep,\n) -> T:"),
+         ("modules/http_retry.py",
+          "    if sleep is None:\n        sleep = time.sleep\n\n",
+          "")],
+        "test_http_retry",
+    ),
+    (
         "bind guard trusts HOST again",
         [("modules/security.py",
           "    if _declared_bind is not None:\n        return _declared_bind",

@@ -14,13 +14,13 @@ modules/
   search_service.py        879   the pipeline: parse -> fetch -> merge -> sort -> enrich
   query_filters.py         149   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
-  http_retry.py            165   one retry/backoff policy for all four upstreams
+  http_retry.py            173   one retry/backoff policy for all four upstreams
   cwe_categories.py        754   bug classes, labels, cwe:<id> ad-hoc classes, keywords
   cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py           326   `gh api /advisories`, cursor pagination, normalize()
   nvd_client.py            396   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            500   bulk export download, parse, CWE + keyword filters
-  epss_client.py           120   FIRST EPSS scores, batched
+  epss_client.py           125   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
   cache.py                 488   SQLite: advisories + verdicts, jobs, migrations
   jobs.py                  223   submit/poll queue for searches too slow to hold open

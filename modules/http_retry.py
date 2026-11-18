@@ -125,7 +125,7 @@ def with_retries(
     base_delay: float = DEFAULT_BASE_DELAY,
     deadline: float | None = None,
     retryable: Callable[[BaseException], bool] = is_retryable,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Callable[[float], None] | None = None,
 ) -> T:
     """Run *call*, retrying transient failures.
 
@@ -141,6 +141,14 @@ def with_retries(
     Re-raises the last exception when the budget runs out, so the caller's own
     error handling is unchanged.
     """
+    # Resolved here, not bound as a default: `sleep=time.sleep` in the
+    # signature is evaluated once at import, so a caller or a test patching
+    # time.sleep afterwards had no effect at all and silently waited the
+    # real backoff -- which is how one test module spent 4.9 of its 5.3
+    # seconds asleep while appearing to have mocked the clock.
+    if sleep is None:
+        sleep = time.sleep
+
     last: BaseException | None = None
     for attempt in range(max(1, attempts)):
         if deadline is not None and attempt and time.monotonic() >= deadline:

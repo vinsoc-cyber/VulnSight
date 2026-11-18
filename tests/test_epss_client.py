@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import io
 import unittest
+from typing import Any, cast
 from unittest import mock
 
 from modules import epss_client
@@ -176,15 +177,53 @@ class TestEmptyInput(unittest.TestCase):
         mock_open.assert_not_called()
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
-    def test_none_like_empty(self, mock_open):
-        """Passing an empty list does not make any HTTP request."""
-        result = epss_client.fetch_epss([])
-        self.assertEqual(result, {})
+    def test_none_itself_is_treated_as_empty(self, mock_open):
+        """This was a verbatim copy of the test above -- same body, same
+        empty list -- under a name promising None. fetch_epss(None) was
+        never exercised."""
+        self.assertEqual(epss_client.fetch_epss(cast(Any, None)), {})
+        mock_open.assert_not_called()
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_only_blank_ids_makes_no_request(self, mock_open):
+        self.assertEqual(epss_client.fetch_epss(["", "   "]), {})
         mock_open.assert_not_called()
 
 
 class TestErrorHandling(unittest.TestCase):
     """Network and parse failures must return an empty dict, never crash."""
+
+    def setUp(self):
+        # The retry policy's backoff is real time: 4.9 of this module's 5.3
+        # seconds were spent asleep. Nothing here is testing the clock.
+        sleep = mock.patch.object(epss_client.http_retry.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_transient_failure_is_retried_before_giving_up(self, mock_open):
+        """`== {}` is produced both by "retried twice then gave up" and by
+        "swallowed on the first failure" -- and swallowing on the first
+        failure is the bug _fetch_batch was wrapped in with_retries to fix.
+        Only the call count tells them apart."""
+        mock_open.side_effect = OSError("Connection refused")
+        self.assertEqual(epss_client.fetch_epss(["CVE-2024-1234"]), {})
+        self.assertEqual(mock_open.call_count, 2,
+                         "EPSS gave up without retrying")
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_recovered_failure_returns_the_score(self, mock_open):
+        """The other half: a retry that succeeds must not be discarded."""
+        body = json.dumps({"data": [
+            {"cve": "CVE-2024-1234", "epss": "0.5", "percentile": "0.9"}]}).encode()
+        mock_open.side_effect = [
+            OSError("Connection refused"),
+            mock.MagicMock(__enter__=lambda s: io.BytesIO(body),
+                           __exit__=lambda *a: False),
+        ]
+        out = epss_client.fetch_epss(["CVE-2024-1234"])
+        self.assertIn("CVE-2024-1234", out)
+        self.assertEqual(mock_open.call_count, 2)
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
     def test_network_error_returns_empty(self, mock_open):
