@@ -23,6 +23,9 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tools import write_atomic
+
 CWE_ZIP_URL = "https://cwe.mitre.org/data/xml/cwec_latest.xml.zip"
 OUT_PATH = Path(__file__).resolve().parent.parent / "modules" / "cwe_catalog.py"
 
@@ -218,7 +221,7 @@ def main() -> None:
             f"refusing to write {OUT_PATH}: generated module does not compile "
             f"({exc.msg} at line {exc.lineno})"
         ) from exc
-    OUT_PATH.write_text(text, encoding="utf-8")
+    write_atomic(OUT_PATH, text)
     print(f"wrote {OUT_PATH} ({len(text) / 1024:.1f} KiB)")
 
 

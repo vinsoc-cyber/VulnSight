@@ -20,6 +20,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from tools import write_atomic
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOC = ROOT / "docs" / "testing.md"
 TESTS = ROOT / "tests"
@@ -95,7 +98,7 @@ def main(argv: list[str]) -> int:
 
     unwritable = [line for line in drift
                   if "missing from the table" in line or "not in tests/" in line]
-    DOC.write_text(text, encoding="utf-8")
+    write_atomic(DOC, text)
     print(f"\nrewrote {len(drift) - len(unwritable)} count(s) in {DOC.name}")
     return 2 if unwritable else 0
 

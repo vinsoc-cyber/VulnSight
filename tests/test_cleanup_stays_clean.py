@@ -22,13 +22,16 @@ import inspect
 import os
 import re
 import subprocess
+import pathlib
 import sys
+import tempfile
 import unittest
 from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules import ai_classifier, ghsa_client, openapi, query_filters
+from tools import write_atomic
 from modules.config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -263,6 +266,82 @@ class TestTheRevertHarnessCannotTouchTheCheckout(unittest.TestCase):
         self.assertIn("editing the checkout", source)
         # The default path must build a sandbox.
         self.assertIn("tree = sandbox(REPO)", source)
+
+
+class TestTheGeneratorsCannotTruncateWhatTheyRewrite(unittest.TestCase):
+    """Five tools rewrite a file in place, and `Path.write_text` truncates
+    first and writes second. An interruption between the two -- a full
+    disk, a Ctrl-C, an OOM kill -- leaves a half-written file. For
+    `modules/cwe_catalog.py` that is a module the running server imports,
+    so the next start fails on a SyntaxError in generated code nobody
+    edited. The codebase already knew the careful pattern; it was used for
+    the AI cooldown file and nowhere else."""
+
+    def test_a_failed_write_leaves_the_original_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "catalog.py"
+            target.write_text("ORIGINAL\n", encoding="utf-8")
+
+            class Boom(Exception):
+                pass
+
+            real_fdopen = os.fdopen
+
+            def failing_fdopen(fd, *args, **kwargs):
+                handle = real_fdopen(fd, *args, **kwargs)
+
+                class Failing:
+                    """Writes half of what it is given, then fails -- the
+                    shape of a full disk. Not a TextIOBase subclass: the
+                    three methods write_atomic uses are the whole contract
+                    here, and inheriting the rest only invites a signature
+                    mismatch."""
+
+                    def write(self, s):            # half of it lands
+                        handle.write(s[: len(s) // 2])
+                        raise Boom("disk full")
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *exc):
+                        handle.close()
+                        return False
+
+                return Failing()
+
+            os.fdopen = failing_fdopen
+            try:
+                with self.assertRaises(Boom):
+                    write_atomic(target, "NEW CONTENT THAT NEVER ARRIVES\n")
+            finally:
+                os.fdopen = real_fdopen
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "ORIGINAL\n",
+                             "a failed write damaged the original")
+            leftovers = [p.name for p in pathlib.Path(directory).iterdir()
+                         if p.name != "catalog.py"]
+            self.assertEqual(leftovers, [], "a temp file was orphaned")
+
+    def test_a_normal_write_replaces_the_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "x.txt"
+            target.write_text("old", encoding="utf-8")
+            write_atomic(target, "new")
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+    def test_every_generator_uses_it(self):
+        """A generator that goes back to write_text is one truncation away
+        from leaving a doc, or an imported module, half-written."""
+        generators = ("tools/sync_module_map.py", "tools/sync_bug_classes_doc.py",
+                      "tools/sync_testing_doc.py", "tools/sync_check_counts.py",
+                      "tools/generate_cwe_catalog.py")
+        for name in generators:
+            with self.subTest(tool=name):
+                source = _source(name)
+                self.assertIn("write_atomic", source)
+                self.assertNotIn(".write_text(", source,
+                                 f"{name} writes a file without the rename")
 
 
 class TestEveryFixedRowHasAGuard(unittest.TestCase):

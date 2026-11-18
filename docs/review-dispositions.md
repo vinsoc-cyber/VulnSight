@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 691 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 694 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **107/107 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **109/109 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 107 named bugs in the working tree, runs the test module that is
+each of 109 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 107 checks, by area
+## The 109 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -395,10 +395,12 @@ codebase and the test module that now refuses to let it back in.
 | an empty listbox row stops being presentational | `tests/test_ui_e2e.py` |
 | toasts stop sharing one live region | `tests/test_ui_e2e.py` |
 
-### Removals, extractions and caches (property-asserted) (15)
+### Removals, extractions and caches (property-asserted) (17)
 
 | Reverting this | is caught by |
 |---|---|
+| a generator truncates the file it rewrites | `tests/test_cleanup_stays_clean.py` |
+| the atomic write stops being atomic | `tests/test_cleanup_stays_clean.py` |
 | a test's only assertion hides behind an if | `tests/test_cleanup_stays_clean.py` |
 | a test compares a value with itself | `tests/test_cleanup_stays_clean.py` |
 | the image stops declaring the bind it chose | `tests/test_deployment.py` |

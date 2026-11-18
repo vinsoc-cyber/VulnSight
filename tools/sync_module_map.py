@@ -20,6 +20,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from tools import write_atomic
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ARCH = ROOT / "docs" / "architecture.md"
 CANDIDATE_DIRS = ("", "modules/", "static/", "templates/", "tools/")
@@ -114,8 +117,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     missing = [line for line in unique if "not on disk" in line]
-    ARCH.write_text(text[:block.start(2)] + body + text[block.end(2):],
-                    encoding="utf-8")
+    write_atomic(ARCH, text[:block.start(2)] + body + text[block.end(2):])
     print(f"\nrewrote {len(unique) - len(missing)} row(s) in docs/architecture.md")
     return 2 if missing else 0
 

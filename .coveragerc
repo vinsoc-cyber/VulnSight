@@ -10,10 +10,13 @@ source =
     tools
 branch = True
 omit =
-    # The revert-check harness edits tracked source files and runs unittest
-    # in a subprocess. It is verification *of* the suite, so it cannot be
-    # measured *by* the suite; run it directly: python tools/revert_checks.py
+    # Both run unittest in a subprocess, which `coverage run` does not
+    # trace, so they would report 0% however thoroughly they are exercised.
+    # They are verification *of* the suite rather than part of it; run them
+    # directly (tools/revert_checks.py, tools/audit_tests.py --strict), and
+    # tests/test_cleanup_stays_clean.py drives both from the suite.
     tools/revert_checks.py
+    tools/audit_tests.py
 
 [report]
 skip_covered = False

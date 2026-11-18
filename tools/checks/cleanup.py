@@ -13,6 +13,20 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "a generator truncates the file it rewrites",
+        [("tools/generate_cwe_catalog.py",
+          "    write_atomic(OUT_PATH, text)",
+          '    OUT_PATH.write_text(text, encoding="utf-8")')],
+        "test_cleanup_stays_clean",
+    ),
+    (
+        "the atomic write stops being atomic",
+        [("tools/__init__.py",
+          "        os.replace(tmp, path)",
+          "        shutil.copyfile(tmp, path)\n        os.unlink(tmp)")],
+        "test_cleanup_stays_clean",
+    ),
+    (
         # The gated categories, not the advisory one: `loop-only` is
         # reported and deliberately does not fail the build, so a revert
         # that only produces it proves nothing. A first attempt at these

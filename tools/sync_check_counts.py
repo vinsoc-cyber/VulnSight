@@ -23,6 +23,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tools import write_atomic  # noqa: E402
+
 from tools.checks import GROUPS  # noqa: E402  (needs the path above)
 
 DISPOSITIONS = ROOT / "docs" / "review-dispositions.md"
@@ -121,7 +123,7 @@ def main(argv: list[str]) -> int:
                 text = text.rstrip("\n") + "\n\n" + index + "\n"
 
         if text != original and "--check" not in argv:
-            path.write_text(text, encoding="utf-8")
+            write_atomic(path, text)
 
     if not drift:
         print("the revert-check figures in the docs are already accurate")

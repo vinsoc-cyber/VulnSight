@@ -34,12 +34,12 @@ tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           211   finds tests that can no longer fail
   design_audit.py          359   measures contrast/targets/focus in a real browser
-  generate_cwe_catalog.py  226   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     138   rewrites the revert-check figures and their index
+  generate_cwe_catalog.py  229   regenerates modules/cwe_catalog.py from MITRE XML
+  sync_check_counts.py     140   rewrites the revert-check figures and their index
   revert_checks.py         157   reverts each fix, asserts the suite goes red
-  sync_bug_classes_doc.py   93   rewrites the class tables in bug-classes.md
-  sync_module_map.py       124   rewrites the line counts in this very table
-  sync_testing_doc.py      104   rewrites the per-file test counts in testing.md
+  sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
+  sync_module_map.py       126   rewrites the line counts in this very table
+  sync_testing_doc.py      107   rewrites the per-file test counts in testing.md
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

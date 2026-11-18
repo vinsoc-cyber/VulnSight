@@ -19,6 +19,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tools import write_atomic  # noqa: E402
+
 from modules.cwe_categories import CATEGORIES, resolve_cwes  # noqa: E402
 
 DOC = ROOT / "docs" / "bug-classes.md"
@@ -84,7 +86,7 @@ def main(argv: list[str]) -> int:
     if "--check" in argv:
         print("docs/bug-classes.md class tables are out of date")
         return 1
-    DOC.write_text(new_text, encoding="utf-8")
+    write_atomic(DOC, new_text)
     print(f"rewrote the class tables in {DOC}")
     return 0
 
