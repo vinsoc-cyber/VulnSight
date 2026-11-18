@@ -343,7 +343,10 @@ class TestClassify(unittest.TestCase):
              mock.patch("modules.ai_classifier.time.sleep", lambda *_: None):
             v = ai_classifier.classify_one(cfg, adv, "bac")
         self.assertTrue(v["is_match"])
-        self.assertEqual(calls[-1], "good3")
+        # The whole sequence: asserting only calls[-1] would also pass for
+        # ["bad1", "bad1", "good3"] -- a key retried rather than rotated,
+        # which is precisely what this test exists to rule out.
+        self.assertEqual(calls, ["bad1", "bad2", "good3"])
 
     def test_all_keys_exhausted_raises(self):
         """When every key fails, the error propagates after trying them all."""
@@ -360,7 +363,34 @@ class TestClassify(unittest.TestCase):
              mock.patch("modules.ai_classifier.time.sleep", lambda *_: None):
             with self.assertRaises(ai_classifier.AIError):
                 ai_classifier.classify_one(cfg, adv, "bac")
-        self.assertGreaterEqual(calls["n"], 3)
+        # Four, not ">= 3": classify_one sets
+        # max_attempts = max(retries + 1, nkeys) = max(4, 3), so three keys
+        # get one pass plus one further attempt. The old bound also passed
+        # at 30, which would be a dead provider charged ten times over.
+        self.assertEqual(calls["n"], 4)
+
+    def test_every_key_is_tried_even_when_there_are_more_than_retries(self):
+        """max_attempts = max(retries + 1, nkeys). With three keys both
+        halves give four, so the `nkeys` half was never exercised -- and
+        dropping it left the suite green while four of eight keys went
+        untried on a dead provider."""
+        cfg = ai_classifier.AIConfig("glm", "https://x",
+                                     [f"k{i}" for i in range(8)], "m")
+        adv = ghsa.normalize(SAMPLE)
+        tried = []
+
+        def always_fail(cfg, system, user, max_tokens=512, timeout=45, **kwargs):
+            tried.append(kwargs.get("auth") or len(tried))
+            raise ai_classifier.AIError("503", status=503, retryable=True)
+
+        with mock.patch("modules.ai_classifier._call_messages",
+                        side_effect=always_fail), \
+             mock.patch("modules.ai_classifier.time.sleep", lambda *_: None):
+            with self.assertRaises(ai_classifier.AIError):
+                ai_classifier.classify_one(cfg, adv, "bac")
+        self.assertEqual(len(tried), 8,
+                         "with eight keys and three retries, every key must "
+                         "still get one attempt")
 
     def test_classify_many_unexpected_exception_isolated(self):
         # Regression: a non-AIError bug used to escape fut.result() and kill
@@ -820,6 +850,46 @@ class TestVerdictShapeAndFingerprint(unittest.TestCase):
     def test_a_different_category_gives_a_different_key(self):
         self.assertNotEqual(self._fp(self._cfg(), "bac"),
                             self._fp(self._cfg(), "sqli"))
+
+
+class TestAPartlyFailedScoreIsNotAConfidentNo(unittest.TestCase):
+    """`aggregate_category_verdicts` returns `is_match: None` when some
+    categories scored, none matched, and at least one errored. That branch
+    was never asserted: changing the None to False left the suite green,
+    and a failed classification would then be reported to the operator as
+    a confident "not a match" -- which is exactly what the docstring
+    promises not to do.
+    """
+
+    OK_NO = {"is_match": False, "confidence": 0.8, "vuln_type": "t", "reason": "r"}
+    OK_YES = {"is_match": True, "confidence": 0.9, "vuln_type": "t", "reason": "r"}
+    BAD = {"error": "provider exploded"}
+
+    def test_some_scored_none_matched_and_one_errored_is_unknown(self):
+        out = ai_classifier.aggregate_category_verdicts(
+            {"bac": dict(self.OK_NO), "xss": dict(self.BAD)})
+        self.assertIsNone(out["is_match"],
+                          "a partly failed score was reported as a confident no")
+
+    def test_every_category_failing_is_unknown_and_says_why(self):
+        out = ai_classifier.aggregate_category_verdicts(
+            {"bac": dict(self.BAD), "xss": {"error": "also exploded"}})
+        self.assertIsNone(out["is_match"])
+        self.assertIn("provider exploded", out.get("error", ""))
+
+    def test_a_match_still_wins_over_an_error(self):
+        """A confirmed match is an answer; the failure beside it is not a
+        reason to withhold it."""
+        out = ai_classifier.aggregate_category_verdicts(
+            {"bac": dict(self.OK_YES), "xss": dict(self.BAD)})
+        self.assertTrue(out["is_match"])
+        self.assertEqual(out["matched_category"], "bac")
+
+    def test_everything_scoring_and_none_matching_is_a_real_no(self):
+        """With nothing errored, "no" is an answer rather than an unknown."""
+        out = ai_classifier.aggregate_category_verdicts(
+            {"bac": dict(self.OK_NO), "xss": dict(self.OK_NO)})
+        self.assertIs(out["is_match"], False)
 
 
 class TestWhatActuallyReachesTheProvider(unittest.TestCase):

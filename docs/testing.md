@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 730 tests: 682 offline + 48 browser
+.venv/bin/python -m unittest discover -s tests        # 735 tests: 687 offline + 48 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -14,7 +14,7 @@ OSV and the AI provider are all mocked.
 | File | Tests | Covers |
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
-| `test_ai_classifier.py` | 82 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_ai_classifier.py` | 87 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
 | `test_app.py` | 77 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
 | `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 730 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 735 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -217,7 +217,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 126 named bugs it re-introduces the bug in the working tree, runs the
+For each of 128 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

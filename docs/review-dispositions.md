@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 730 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 735 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **126/126 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **128/128 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 126 named bugs in the working tree, runs the test module that is
+each of 128 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 126 checks, by area
+## The 128 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -316,10 +316,12 @@ codebase and the test module that now refuses to let it back in.
 | app.js loses its scope wrapper | `tests/test_frontend_js.py` |
 | module-map drift test stops deriving | `tests/test_docs.py` |
 
-### HTTP layer, jobs, cache, config, AI classifier (29)
+### HTTP layer, jobs, cache, config, AI classifier (31)
 
 | Reverting this | is caught by |
 |---|---|
+| a partly failed score is reported as a confident no | `tests/test_ai_classifier.py` |
+| a key is retried instead of rotated | `tests/test_ai_classifier.py` |
 | the request body size cap is removed | `tests/test_app.py` |
 | the AI rate limiter matches the path, so /api/v1 is unlimited | `tests/test_app.py` |
 | the system prompt stops reaching the provider | `tests/test_ai_classifier.py` |

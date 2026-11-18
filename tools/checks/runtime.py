@@ -83,6 +83,22 @@ _AI_PATHS = """            "/api/v1/ai/classify": {
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "a partly failed score is reported as a confident no",
+        [("modules/ai_classifier.py",
+          '        aggregate["is_match"] = None\n'
+          "        if not successes:",
+          '        aggregate["is_match"] = False\n'
+          "        if not successes:")],
+        "test_ai_classifier",
+    ),
+    (
+        "a key is retried instead of rotated",
+        [("modules/ai_classifier.py",
+          "    max_attempts = max(retries + 1, nkeys)",
+          "    max_attempts = retries + 1")],
+        "test_ai_classifier",
+    ),
+    (
         "the request body size cap is removed",
         [("app.py",
           '    app.config["MAX_CONTENT_LENGTH"] = max(1024, _max_request_bytes)',

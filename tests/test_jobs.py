@@ -204,7 +204,12 @@ class TestJobLifecycle(unittest.TestCase):
             with self.subTest(job_id=bad):
                 # The int in that list is the wrong type on purpose: an id that
                 # is not a str must be rejected like any other malformed one.
-                self.assertIsNone(jobs.get(cast(Any, bad), path=self.tmp.name))
+                # `is None` alone is what a valid-but-absent id returns
+                # too. The point of the guard is that a malformed id never
+                # reaches the database at all.
+                with mock.patch.object(cache, "get_job") as queried:
+                    self.assertIsNone(jobs.get(cast(Any, bad), path=self.tmp.name))
+                queried.assert_not_called()
 
     def test_job_ids_are_unguessable(self):
         ids = {jobs.new_job_id() for _ in range(200)}

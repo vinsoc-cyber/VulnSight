@@ -135,11 +135,22 @@ class TestGeneratedModuleIsValid(unittest.TestCase):
     def test_render_is_deterministic(self):
         """docs/cwe-catalog.md promises byte-identical output for the same
         input, which is what makes a drift check possible at all."""
-        root = _xml(weaknesses=[
+        # Two trees carrying the same weaknesses in a different order,
+        # not one tree rendered twice: within a single process with a fixed
+        # PYTHONHASHSEED, set and dict iteration is identical by
+        # construction, so rendering the same object twice proves nothing
+        # about the `sorted(..., key=...)` the output relies on.
+        forward = _xml(weaknesses=[
             ("639", "Authorization Bypass", "Stable", ["IDOR"]),
             ("79", "Cross-site Scripting", "Stable", ["XSS"]),
+            ("862", "Missing Authorization", "Stable", []),
         ])
-        self.assertEqual(gen.render(root), gen.render(root))
+        shuffled = _xml(weaknesses=[
+            ("862", "Missing Authorization", "Stable", []),
+            ("79", "Cross-site Scripting", "Stable", ["XSS"]),
+            ("639", "Authorization Bypass", "Stable", ["IDOR"]),
+        ])
+        self.assertEqual(gen.render(forward), gen.render(shuffled))
 
     def test_ids_are_sorted_numerically_not_lexicographically(self):
         root = _xml(weaknesses=[
