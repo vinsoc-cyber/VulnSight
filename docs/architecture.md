@@ -29,7 +29,7 @@ modules/
   security.py              439   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html       372   page shell -- HTML and Jinja only
 static/app.js             1751   all UI logic; server data arrives via window.BOOT
-static/style.css          1767   design tokens + components, light and dark
+static/style.css          1774   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   design_audit.py          349   measures contrast/targets/focus in a real browser

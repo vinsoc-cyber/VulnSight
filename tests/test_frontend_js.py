@@ -6,6 +6,7 @@ runnable only by hand, so regressions in them went unnoticed.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,10 @@ class TestFrontendJavaScript(unittest.TestCase):
                     msg=f"{script} failed:\n{proc.stdout}\n{proc.stderr}",
                 )
 
+    def _stylesheet(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            return fh.read()
+
     def test_the_shipped_javascript_parses(self):
         """`node --check` is the one syntax check this file has: nothing
         compiles it, and the helper tests read it as text, so a broken
@@ -62,6 +67,50 @@ class TestFrontendJavaScript(unittest.TestCase):
         self.assertIn("'use strict';", source)
         self.assertTrue(source.rstrip().endswith("})();"),
                         "the scope wrapper is not closed at the end of the file")
+
+    def test_the_stylesheet_sets_no_size_or_radius_by_hand(self):
+        """The sheet declared nine type tokens, referenced three, and then
+        set 14 hard-coded font sizes -- ten of which landed inside a 6px
+        band. A scale that nothing uses is worse than no scale: it reads as
+        intentional while the page is ad hoc. Same story for radius, which
+        had five tokens, two references, and both `99px` and `999px` for
+        the same pill. Tokens or nothing."""
+        css = self._stylesheet()
+        sizes = set(re.findall(r"font-size:\s*([\d.]+px)", css))
+        sizes |= set(re.findall(r"font:[^;]*?\b([\d.]+px)(?=[/ ])", css))
+        self.assertEqual(sizes, set(),
+                         f"hard-coded font sizes outside the scale: {sorted(sizes)}")
+
+        radii = {v.strip() for v in re.findall(r"border-radius:\s*([^;]+);", css)}
+        # 0 and 50% are not steps on a scale: one is "no corner", the other
+        # is "a circle", and neither has a smaller or larger sibling.
+        radii -= {"0", "50%"}
+        raw = {r for r in radii if not r.startswith("var(")}
+        self.assertEqual(raw, set(), f"hard-coded radii: {sorted(raw)}")
+
+    def test_every_declared_type_token_is_used(self):
+        """The other half of the same defect: six of the nine declared type
+        tokens were dead. A token nobody references is a decision nobody
+        made."""
+        css = self._stylesheet()
+        declared = set(re.findall(r"--text-([\w-]+):", css))
+        used = set(re.findall(r"var\(--text-([\w-]+)\)", css))
+        self.assertEqual(declared - used, set(),
+                         f"declared type tokens nobody uses: "
+                         f"{sorted(declared - used)}")
+
+    def test_the_type_scale_has_distinct_steps(self):
+        """Ten sizes inside a 6px band is not a hierarchy. Each step must be
+        far enough from the last to read as a different rank."""
+        css = self._stylesheet()
+        steps = [float(px) for px in
+                 re.findall(r"--text-(?:xs|sm|base|lg|xl):\s*([\d.]+)px", css)]
+        self.assertGreaterEqual(len(steps), 5, "the scale lost steps")
+        steps.sort()
+        for smaller, larger in zip(steps, steps[1:]):
+            self.assertGreaterEqual(
+                larger / smaller, 1.10,
+                f"{smaller}px and {larger}px are too close to read as ranks")
 
 
 if __name__ == "__main__":

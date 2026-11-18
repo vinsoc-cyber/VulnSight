@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 642 tests: 603 offline + 39 browser
+.venv/bin/python -m unittest discover -s tests        # 645 tests: 606 offline + 39 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -34,7 +34,7 @@ OSV and the AI provider are all mocked.
 | `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
 | `test_config.py` | 9 | `.env` parsing, `DATA_DIR`, numeric knobs |
 | `test_query_filters.py` | 5 | shared published/affects/severity predicates |
-| `test_frontend_js.py` | 3 | runs every `tests/*.js` under node |
+| `test_frontend_js.py` | 6 | runs every `tests/*.js` under node |
 
 ## Frontend helper tests (node)
 
@@ -205,7 +205,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 82 named bugs it re-introduces the bug in the working tree, runs the
+For each of 85 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It writes to tracked files — it restores

@@ -51,6 +51,30 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
 
     # -- static/app.js -----------------------------------------------------
     (
+        "the type scale goes back to hard-coded sizes",
+        [("static/style.css",
+          "  font-size: var(--text-lg);\n  font-weight: 750;",
+          "  font-size: 16px;\n  font-weight: 750;")],
+        "test_frontend_js",
+    ),
+    (
+        "a declared type token stops being used",
+        [("static/style.css",
+          "  --text-xl:      22px;     /* section and dialog headings */",
+          "  --text-xl:      22px;     /* section and dialog headings */\n"
+          "  --text-unused:  18px;     /* nothing references this */")],
+        "test_frontend_js",
+    ),
+    (
+        "two spellings of the same pill radius come back",
+        [("static/style.css",
+          "  border-radius: var(--radius-pill);\n"
+          "  font: 650 var(--text-xs)/1 var(--mono);",
+          "  border-radius: 99px;\n"
+          "  font: 650 var(--text-xs)/1 var(--mono);")],
+        "test_frontend_js",
+    ),
+    (
         "safeAttr throws on a non-string again",
         [("static/app.js",
           "    const safeAttr = esc;",

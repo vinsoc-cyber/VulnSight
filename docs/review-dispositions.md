@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 642 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 645 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **82/82 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **85/85 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 82 named bugs in the working tree, runs the test module that is
+each of 85 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -43,6 +43,39 @@ Two numbers in this document were themselves wrong until measured. The
 module map's line counts drifted on every row; `tools/sync_module_map.py`
 derives them now and `tests/test_docs.py` fails if they drift again. The same
 is true of the class tables in [bug classes](bug-classes.md).
+
+## What is mechanically locked, and what cannot be
+
+118 rows below say `fixed`. The revert checks lock most of them; this says
+plainly which ones they do not, because a table that implies full coverage
+is the same problem as a table that asserts a fix.
+
+A revert check needs an edit that puts a **defect** back. Some fixes have no
+such edit, and no amount of effort invents one:
+
+- **Dead-code removals.** An unreachable severity branch, `_build_date_params`
+  with no caller, a `resultsPerPage` assignment every call site overrode, a
+  second advisory-id length limit that could never be reached, an unused
+  `noqa`. Restoring them changes nothing observable. They are verified by
+  the suite that still passes without them, not by a revert.
+- **Pure refactors.** `g` shadowing the Flask global (the genexp has its own
+  scope), `classify_batch` extracted from a 115-line view, the second
+  key-rotation implementation deleted, hand-copied limits in `openapi.py`
+  replaced by the constants they duplicated. The behaviour is identical by
+  construction; only future drift is the defect, and drift cannot be
+  reintroduced without inventing a wrong value.
+- **Performance-only fixes.** `published_bounds` re-parsing per record,
+  `isPicked()` querying the document per option, the picker re-scoring on
+  every arrow key. Same output, less of it. Measured when they were made;
+  a revert produces no failing assertion.
+- **Fixes that need something we will not do in a test.** `gh` invoked by
+  bare name: `gh_executable()` falls back to `"gh"` anyway and every test
+  mocks `subprocess.run`, so no revert differs without executing a real
+  binary.
+
+Everything else is locked. The index at the end of this page lists every
+check by name with the test module that catches it; `python
+tools/revert_checks.py` runs them and must report all of them caught.
 
 ## HTTP layer, jobs, security
 
@@ -228,7 +261,7 @@ is true of the class tables in [bug classes](bug-classes.md).
 
 <!-- begin generated check index -->
 
-## The 82 checks, by area
+## The 85 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -322,7 +355,7 @@ codebase and the test module that now refuses to let it back in.
 | a failing later page discards the advisories already fetched | `tests/test_ghsa_client.py` |
 | EPSS is queried with the publisher's casing | `tests/test_epss_client.py` |
 
-### CWE taxonomy and the browser code (9)
+### CWE taxonomy and the browser code (12)
 
 | Reverting this | is caught by |
 |---|---|
@@ -330,6 +363,9 @@ codebase and the test module that now refuses to let it back in.
 | 'acl' returns as a bare substring trap | `tests/test_cwe_categories.py` |
 | junk short forms come back into the derived keywords | `tests/test_cwe_categories.py` |
 | real short search terms are rejected as noise | `tests/test_cwe_categories.py` |
+| the type scale goes back to hard-coded sizes | `tests/test_frontend_js.py` |
+| a declared type token stops being used | `tests/test_frontend_js.py` |
+| two spellings of the same pill radius come back | `tests/test_frontend_js.py` |
 | safeAttr throws on a non-string again | `tests/test_frontend_js.py` |
 | esc stops coercing its argument | `tests/test_frontend_js.py` |
 | Enter commits an option nothing highlighted | `tests/test_ui_e2e.py` |

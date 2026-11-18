@@ -90,7 +90,7 @@
           <label class="combo-input" for="cwe-search">
             <span class="combo-icon" aria-hidden="true"></span>
             <input id="cwe-search" type="text" role="combobox" autocomplete="off" spellcheck="false"
-                   placeholder="639 · IDOR · sql injection"
+                   placeholder="e.g. 639, IDOR, SQL injection"
                    aria-expanded="false" aria-controls="cwe-options" aria-autocomplete="list"
                    aria-describedby="cwe-search-help">
             <button class="combo-clear" id="cwe-clear" type="button" hidden aria-label="Clear search">×</button>
@@ -154,20 +154,20 @@
           <div class="cats">
             <label class="cat" title="GitHub Advisory Database — server-side CWE filter, any ecosystem">
               <input type="checkbox" name="source" value="ghsa" checked>
-              <span class="cat-copy"><span class="source-code">GHSA</span><span class="c-desc">GitHub · CWE filter</span></span>
+              <span class="cat-copy"><span class="source-code">GHSA</span><span class="c-desc">GitHub, filtered by CWE at the source</span></span>
             </label>
             <label class="cat" title="NIST National Vulnerability Database — CWE filter, CVSS v3/v4, CPE, KEV">
               <input type="checkbox" name="source" value="nvd">
-              <span class="cat-copy"><span class="source-code">NVD</span><span class="c-desc">NIST · CVSS, CPE, KEV</span></span>
+              <span class="cat-copy"><span class="source-code">NVD</span><span class="c-desc">NIST, with CVSS, CPE and KEV</span></span>
             </label>
             <p class="nvd-hint">Without NVD_API_KEY, queries take ~7s per CWE. Free key at nvd.nist.gov</p>
             <label class="cat" title="OSV.dev bulk export — broader coverage, filtered locally by CWE">
               <input type="checkbox" name="source" value="osv">
-              <span class="cat-copy"><span class="source-code">OSV</span><span class="c-desc">Bulk export · local CWE filter</span></span>
+              <span class="cat-copy"><span class="source-code">OSV</span><span class="c-desc">Bulk export, filtered here</span></span>
             </label>
             <label class="cat" title="OSV source-native records without a CWE tag — classified by AI">
               <input type="checkbox" name="source" value="osv-native">
-              <span class="cat-copy"><span class="source-code">OSV native</span><span class="c-desc">No CWE · AI-assisted</span></span>
+              <span class="cat-copy"><span class="source-code">OSV native</span><span class="c-desc">Untagged records, classified by AI</span></span>
             </label>
           </div>
           <label class="check advanced-check" title="Re-download the OSV bulk export even if cached">
