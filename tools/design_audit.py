@@ -49,15 +49,23 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# (name, width, height, theme)
+# (name, path, width, height, theme)
+#
+# /api/docs is a second page with its own template and its own stylesheet.
+# It was outside every earlier audit, which only ever loaded "/", so nothing
+# had measured its contrast, its tap targets or its focus rings -- on the
+# one page an integrator reads before writing a client.
 STATES = [
-    ("01-landing-dark", 1440, 900, "dark"),
-    ("02-landing-light", 1440, 900, "light"),
-    ("03-mobile-dark", 390, 844, "dark"),
-    ("04-mobile-light", 390, 844, "light"),
-    ("05-narrow", 320, 844, "dark"),
-    ("06-tablet", 820, 1180, "dark"),
-    ("07-wide", 1920, 1080, "light"),
+    ("01-landing-dark", "", 1440, 900, "dark"),
+    ("02-landing-light", "", 1440, 900, "light"),
+    ("03-mobile-dark", "", 390, 844, "dark"),
+    ("04-mobile-light", "", 390, 844, "light"),
+    ("05-narrow", "", 320, 844, "dark"),
+    ("06-tablet", "", 820, 1180, "dark"),
+    ("07-wide", "", 1920, 1080, "light"),
+    ("08-apidocs-dark", "api/docs", 1440, 900, "dark"),
+    ("09-apidocs-light", "api/docs", 1440, 900, "light"),
+    ("10-apidocs-mobile", "api/docs", 390, 844, "dark"),
 ]
 
 MEASURE = r"""
@@ -236,7 +244,7 @@ def audit(base: str, out: pathlib.Path | None) -> int:
     report, problems = {}, []
     with sync_playwright() as pw:
         browser = launch(pw)
-        for name, width, height, theme in STATES:
+        for name, path, width, height, theme in STATES:
             page = browser.new_page(viewport={"width": width, "height": height})
             errors: list[str] = []
             page.on("pageerror",
@@ -244,7 +252,7 @@ def audit(base: str, out: pathlib.Path | None) -> int:
             page.on("console",
                     lambda msg, sink=errors: sink.append(f"console: {msg.text}")
                     if msg.type == "error" else None)
-            page.goto(base, wait_until="networkidle")
+            page.goto(base + path, wait_until="networkidle")
             page.evaluate(f"() => document.documentElement.dataset.theme = '{theme}'")
             page.wait_for_timeout(300)
 
@@ -304,6 +312,8 @@ def audit(base: str, out: pathlib.Path | None) -> int:
         problems += [f"{name}: {err}" for err in data["jsErrors"]]
         if len(data["h1"]) != 1:
             problems.append(f"{name}: expected exactly one <h1>, got {data['h1']}")
+        if data["focusStops"] == 0:
+            problems.append(f"{name}: nothing is reachable by Tab")
 
     first = report[STATES[0][0]]
     print("\ntype scale (landing):",

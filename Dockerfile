@@ -6,7 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HOST=0.0.0.0 \
     PORT=5000 \
-    VULNSIGHT_DATA_DIR=/data
+    VULNSIGHT_DATA_DIR=/data \
+    VULNSIGHT_BIND=0.0.0.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -17,6 +18,7 @@ RUN apt-get update \
          > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -43,6 +45,12 @@ VOLUME ["/data"]
 ENTRYPOINT ["/entrypoint.sh"]
 # Bind every interface *inside* the container. Compose publishes
 # 127.0.0.1:5000; do not map 0.0.0.0:5000 without VULNSIGHT_API_TOKEN.
+#
+# HOST above is read only by `python app.py`. Under this CMD gunicorn owns
+# the bind and app.py's __main__ never runs, so nothing calls
+# declare_self_bind() -- which is why VULNSIGHT_BIND is set as well. Without
+# it the "is this exposed?" decision falls through to a default instead of
+# being stated by the image that chose the bind.
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--workers", "1", \

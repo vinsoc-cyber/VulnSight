@@ -16,6 +16,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VulnSight API</title>
+  <meta name="description" content="The VulnSight HTTP API: search advisories by bug class, run an AI classification pass, and poll long-running searches.">
+  <meta name="theme-color" content="#15181d">
+  <!-- The browser asks for /favicon.ico whether or not a page declares an
+       icon. index.html declares one; this page did not, so every first load
+       of /api/docs logged a 404 in the console of a tool whose job is to
+       surface problems. -->
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='apidocs.css') }}">
   <script nonce="{{ csp_nonce }}">
     // Apply the theme chosen in the app before paint, so following the "API"

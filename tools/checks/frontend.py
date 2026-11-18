@@ -13,6 +13,20 @@ from __future__ import annotations
 Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
+    (
+        "the API page goes back to its own ad-hoc sizes",
+        [("static/apidocs.css",
+          "  font: var(--text-base)/1.6 ui-sans-serif",
+          "  font: 15px/1.6 ui-sans-serif")],
+        "test_frontend_js",
+    ),
+    (
+        "the two stylesheets disagree about the scale",
+        [("static/apidocs.css",
+          "  --text-base: 14px;",
+          "  --text-base: 15px;")],
+        "test_frontend_js",
+    ),
     # -- CWE taxonomy ------------------------------------------------------
     (
         "CWE-436 separated from its own child again",

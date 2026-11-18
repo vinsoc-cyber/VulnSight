@@ -32,7 +32,7 @@ static/app.js             1751   all UI logic; server data arrives via window.BO
 static/style.css          1774   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
-  design_audit.py          349   measures contrast/targets/focus in a real browser
+  design_audit.py          359   measures contrast/targets/focus in a real browser
   generate_cwe_catalog.py  226   regenerates modules/cwe_catalog.py from MITRE XML
   sync_check_counts.py     138   rewrites the revert-check figures and their index
   revert_checks.py          99   reverts each fix, asserts the suite goes red

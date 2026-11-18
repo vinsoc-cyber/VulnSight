@@ -19,6 +19,17 @@
   --code-bg: light-dark(#f1f3f5, #171b21);
   --get:     light-dark(#1a6b4a, #4fc08d);
   --post:    light-dark(#b4500a, #ff9348);
+
+  /* The type scale, restated for the same reason the palette is: this sheet
+     is standalone, and before this it carried seven hard-coded sizes of its
+     own -- so the "design system" covered one of the product's two pages.
+     The steps are style.css's, and tests/test_frontend_js.py now checks
+     both sheets rather than only the app's. */
+  --text-xs:   11px;
+  --text-sm:   12.5px;
+  --text-base: 14px;
+  --text-lg:   17px;
+  --text-xl:   22px;
 }
 
 /* Honour the theme chosen in the app: it is stored per browser, and a reader
@@ -33,7 +44,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: var(--text-base)/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
@@ -49,8 +60,8 @@ code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   background: var(--panel);
 }
 
-.head h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
-.sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.head h1 { margin: 0; font-size: var(--text-xl); letter-spacing: -0.01em; }
+.sub { margin: 4px 0 0; color: var(--muted); font-size: var(--text-sm); }
 
 .speclink {
   color: var(--accent);
@@ -58,7 +69,7 @@ code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .speclink:hover { border-color: var(--accent); }
@@ -93,9 +104,9 @@ nav button {
 }
 nav button:hover { background: var(--code-bg); }
 nav button.on { background: var(--panel); border-color: var(--line); }
-nav button code { font-size: 13px; }
+nav button code { font-size: var(--text-sm); }
 
-.m { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; }
+.m { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em; }
 .m-get { color: var(--get); }
 .m-post { color: var(--post); }
 
@@ -107,12 +118,12 @@ section {
   min-width: 0;
 }
 
-section h2 { margin: 0 0 10px; font-size: 17px; display: flex; gap: 10px; align-items: baseline; }
-section h2 code { font-size: 15px; }
-section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
+section h2 { margin: 0 0 10px; font-size: var(--text-lg); display: flex; gap: 10px; align-items: baseline; }
+section h2 code { font-size: var(--text-base); }
+section h3 { margin: 24px 0 8px; font-size: var(--text-sm); text-transform: uppercase;
              letter-spacing: 0.07em; color: var(--muted); }
 
-.lede { margin: 0 0 8px; font-size: 15px; }
+.lede { margin: 0 0 8px; font-size: var(--text-base); }
 .desc { margin: 0 0 8px; color: var(--muted); }
 .muted { color: var(--muted); }
 
@@ -122,17 +133,17 @@ section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
   border-left: 3px solid var(--accent);
   background: var(--code-bg);
   border-radius: 0 6px 6px 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* Wide tables scroll inside their own box; the page never scrolls sideways. */
-.fields { width: 100%; border-collapse: collapse; font-size: 13px; display: block;
+.fields { width: 100%; border-collapse: collapse; font-size: var(--text-sm); display: block;
           overflow-x: auto; }
 .fields thead th {
   text-align: left;
   font-weight: 600;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 6px 10px;
@@ -165,12 +176,12 @@ section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
 
 .req {
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--post);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.dflt { color: var(--muted); font-size: 12px; }
+.dflt { color: var(--muted); font-size: var(--text-sm); }
 
 .code-2 { color: var(--get); }
 .code-4, .code-5 { color: var(--post); }

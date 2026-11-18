@@ -38,8 +38,10 @@ class TestFrontendJavaScript(unittest.TestCase):
                     msg=f"{script} failed:\n{proc.stdout}\n{proc.stderr}",
                 )
 
-    def _stylesheet(self):
-        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+    STYLESHEETS = ("style.css", "apidocs.css")
+
+    def _stylesheet(self, name="style.css"):
+        with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as fh:
             return fh.read()
 
     def test_the_shipped_javascript_parses(self):
@@ -67,6 +69,32 @@ class TestFrontendJavaScript(unittest.TestCase):
         self.assertIn("'use strict';", source)
         self.assertTrue(source.rstrip().endswith("})();"),
                         "the scope wrapper is not closed at the end of the file")
+
+    def test_no_stylesheet_sets_a_size_by_hand(self):
+        """Both sheets, not just the app's. apidocs.css carried seven
+        hard-coded sizes and zero tokens, so the design system covered one
+        of the product's two pages -- and the second one was exactly the
+        page an integrator reads before writing a client."""
+        for name in self.STYLESHEETS:
+            with self.subTest(sheet=name):
+                css = self._stylesheet(name)
+                sizes = set(re.findall(r"font-size:\s*([\d.]+px)", css))
+                sizes |= set(re.findall(r"font:[^;]*?\b([\d.]+px)(?=[/ ])", css))
+                self.assertEqual(sizes, set(),
+                                 f"{name} sets sizes outside the scale: {sorted(sizes)}")
+
+    def test_both_stylesheets_agree_on_the_scale(self):
+        """Restating the tokens is fine -- apidocs.css is standalone on
+        purpose -- but the values have to match, or "one scale" is a claim
+        rather than a fact."""
+        def steps(css):
+            return dict(re.findall(
+                r"--text-(xs|sm|base|lg|xl):\s*([\d.]+px)", css))
+        app, api = (steps(self._stylesheet(n)) for n in self.STYLESHEETS)
+        self.assertTrue(api, "apidocs.css declares no scale")
+        for step, value in api.items():
+            self.assertEqual(value, app.get(step),
+                             f"--text-{step} differs between the two sheets")
 
     def test_the_stylesheet_sets_no_size_or_radius_by_hand(self):
         """The sheet declared nine type tokens, referenced three, and then

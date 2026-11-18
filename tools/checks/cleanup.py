@@ -13,6 +13,51 @@ Edit = tuple[str, str, str]
 
 CHECKS: list[tuple[str, list[Edit], str]] = [
     (
+        "the image stops declaring the bind it chose",
+        [("Dockerfile",
+          "    VULNSIGHT_DATA_DIR=/data \\\n    VULNSIGHT_BIND=0.0.0.0",
+          "    VULNSIGHT_DATA_DIR=/data")],
+        "test_deployment",
+    ),
+    (
+        "compose publishes the port on every interface",
+        [("docker-compose.yml",
+          '      - "127.0.0.1:${PORT:-5000}:5000"',
+          '      - "${PORT:-5000}:5000"')],
+        "test_deployment",
+    ),
+    (
+        "the container goes back to running as root",
+        [("Dockerfile", "USER vulnsight", "USER root")],
+        "test_deployment",
+    ),
+    (
+        "gunicorn is given more workers than the limiter allows",
+        [("Dockerfile", '"--workers", "1",', '"--workers", "4",')],
+        "test_deployment",
+    ),
+    (
+        "curl is left in the shipped image",
+        [("Dockerfile",
+          "    && apt-get purge -y --auto-remove curl \\\n",
+          "")],
+        "test_deployment",
+    ),
+    (
+        "the entrypoint forks instead of exec'ing",
+        [("docker-entrypoint.sh", 'exec "$@"', '"$@"')],
+        "test_deployment",
+    ),
+    (
+        "an env var the code reads is documented nowhere",
+        [("modules/config.py",
+          "def load_dotenv(",
+          'def _undocumented_knob():\n'
+          '    return os.environ.get("VULNSIGHT_SECRET_KNOB", "")\n\n\n'
+          "def load_dotenv(")],
+        "test_deployment",
+    ),
+    (
         "a helper with no caller comes back",
         [("modules/nvd_client.py",
           "def _build_date_windows(",

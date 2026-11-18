@@ -178,6 +178,36 @@ label so the four bands line up with the numbers they describe. No centred
 text anywhere: this is a scanning surface, and a centred left edge destroys
 scanning.
 
+## The second page
+
+`/api/docs` is the other rendered page, and it was outside every earlier
+audit — those only ever loaded `/`. Reviewing it found that the design
+system covered one of the product's two pages: `static/apidocs.css` carried
+seven hard-coded font sizes and no scale tokens at all, on the page an
+integrator reads before writing a client.
+
+The sheet is standalone on purpose — `style.css` is 1,700 lines of app UI
+and this page needs a few dozen rules — and it already restated the palette
+as the small subset it uses. It now restates the type scale the same way,
+and `tests/test_frontend_js.py` checks **both** sheets: no hard-coded sizes
+in either, and the steps they declare must be equal, or "one scale" is a
+claim rather than a fact.
+
+It also had no `rel="icon"`, so every first load of `/api/docs` logged a
+404 for `/favicon.ico` — in the console of a tool whose job is to surface
+problems. Both templates now declare the same head, and a test fails if they
+diverge again.
+
+**One deliberate exception to the tell list.** This page uses tracked-out
+small-caps for three things: table column heads (`FIELD` / `TYPE` /
+`NOTES`), the `REQUIRED` badge, and section labels (`REQUEST BODY`,
+`RESPONSES`). The brief lists ALL-CAPS eyebrows as a tell, and on the app
+page there is exactly one such rule (severity badges, where the label is a
+code). Here they are kept: in an API reference they are column headers and
+status badges in a dense table, not decoration above a heading, and the
+convention is what a reader of any API reference already scans for. Noted
+rather than silently kept, so the next reviewer can disagree.
+
 ## Principles
 
 1. **Severity is the only chroma that means anything.** Chrome stays

@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 662 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 680 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **92/92 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **101/101 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 92 named bugs in the working tree, runs the test module that is
+each of 101 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -277,7 +277,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 92 checks, by area
+## The 101 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -372,10 +372,12 @@ codebase and the test module that now refuses to let it back in.
 | a failing later page discards the advisories already fetched | `tests/test_ghsa_client.py` |
 | EPSS is queried with the publisher's casing | `tests/test_epss_client.py` |
 
-### CWE taxonomy and the browser code (12)
+### CWE taxonomy and the browser code (14)
 
 | Reverting this | is caught by |
 |---|---|
+| the API page goes back to its own ad-hoc sizes | `tests/test_frontend_js.py` |
+| the two stylesheets disagree about the scale | `tests/test_frontend_js.py` |
 | CWE-436 separated from its own child again | `tests/test_cwe_categories.py` |
 | 'acl' returns as a bare substring trap | `tests/test_cwe_categories.py` |
 | junk short forms come back into the derived keywords | `tests/test_cwe_categories.py` |
@@ -389,10 +391,17 @@ codebase and the test module that now refuses to let it back in.
 | an empty listbox row stops being presentational | `tests/test_ui_e2e.py` |
 | toasts stop sharing one live region | `tests/test_ui_e2e.py` |
 
-### Removals, extractions and caches (property-asserted) (6)
+### Removals, extractions and caches (property-asserted) (13)
 
 | Reverting this | is caught by |
 |---|---|
+| the image stops declaring the bind it chose | `tests/test_deployment.py` |
+| compose publishes the port on every interface | `tests/test_deployment.py` |
+| the container goes back to running as root | `tests/test_deployment.py` |
+| gunicorn is given more workers than the limiter allows | `tests/test_deployment.py` |
+| curl is left in the shipped image | `tests/test_deployment.py` |
+| the entrypoint forks instead of exec'ing | `tests/test_deployment.py` |
+| an env var the code reads is documented nowhere | `tests/test_deployment.py` |
 | a helper with no caller comes back | `tests/test_cleanup_stays_clean.py` |
 | the second key-rotation implementation comes back | `tests/test_cleanup_stays_clean.py` |
 | the published-window cache is removed | `tests/test_cleanup_stays_clean.py` |
