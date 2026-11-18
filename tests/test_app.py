@@ -871,6 +871,7 @@ class TestJobEndpoints(unittest.TestCase):
     def tearDown(self):
         from modules import jobs
         jobs.shutdown(wait=True)
+        jobs.resume()
         if hasattr(self, "_env"):
             self._env.stop()
         if hasattr(self, "_orig_db"):

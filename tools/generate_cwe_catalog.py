@@ -93,11 +93,15 @@ def split_terms(text: str) -> list[str]:
     return [part.strip() for part in text.split("/") if part.strip()]
 
 
-def collect(root: ET.Element) -> tuple[dict, dict, list[str], str, str]:
+def collect(root: ET.Element) -> tuple[dict, dict, list[str], list[str], str, str]:
     namespace = {"c": root.tag.split("}")[0].strip("{")}
     names: dict[str, str] = {}
     aliases: dict[str, list[str]] = {}
     deprecated: list[str] = []
+    # Categories and Views. They carry a name so an advisory tagged with
+    # one renders a label, and they are not weaknesses, so they have no
+    # abstraction level and are never offered as a search target.
+    non_weakness: list[str] = []
 
     weaknesses = root.findall("c:Weaknesses/c:Weakness", namespace)
     for weakness in weaknesses:
@@ -130,14 +134,62 @@ def collect(root: ET.Element) -> tuple[dict, dict, list[str], str, str]:
         if unique:
             aliases[cwe_id] = unique
 
+    # Categories and Views, for their labels only.
+    #
+    # MITRE ships three kinds of entry and this read one of them, so an
+    # advisory tagged with a Category id -- CWE-1035, "OWASP Top Ten 2017
+    # Category A9" -- rendered as a bare "CWE-1035" in the UI and in every
+    # CSV export, which looks like a missing label rather than the kind of
+    # id it is.
+    #
+    # They are NOT search targets: a Category is a bucket, not a weakness,
+    # and picker_catalog() builds its rows from ABSTRACTION, which only
+    # Weakness entries have. So adding them here gives them a name without
+    # offering them as something to search for.
+    # CWE 5.0 renamed <Categories><Category> to <Groupings><Grouping>.
+    # Both spellings are read, because the generator has to keep working
+    # against an older XML a user may already have on disk -- and because
+    # the failure mode of guessing one was silent: `findall` on a path that
+    # no longer exists returns `[]`, which is indistinguishable from "this
+    # release has none". The 5.0 regeneration therefore dropped all 431
+    # Groupings, kept the 62 Views, and reported success. `_require_any`
+    # below turns that silence into an error.
+    found_non_weakness = 0
+    for path in ("c:Groupings/c:Grouping", "c:Categories/c:Category",
+                 "c:Views/c:View"):
+        for entry in root.findall(path, namespace):
+            found_non_weakness += 1
+            entry_id = entry.get("ID") or ""
+            name = (entry.get("Name") or "").strip()
+            if not entry_id or not name or entry_id in names:
+                continue
+            status = (entry.get("Status") or "").strip()
+            names[entry_id] = name
+            non_weakness.append(entry_id)
+            if status == "Deprecated" or name.upper().startswith("DEPRECATED"):
+                deprecated.append(entry_id)
+
     unknown_aliases = sorted(set(EXTRA_ALIASES) - set(names))
     if unknown_aliases:
         raise SystemExit(f"EXTRA_ALIASES references unknown CWEs: {unknown_aliases}")
+
+    # Every real CWE release carries hundreds of these, so zero means the
+    # element was renamed again rather than emptied. Scoped to a catalog
+    # big enough to be a real one: the unit fixtures are a handful of
+    # <Weakness> elements with no Groupings at all, and that is legitimate.
+    if len(weaknesses) >= 100 and found_non_weakness < 100:
+        raise SystemExit(
+            f"only {found_non_weakness} Grouping/Category/View entries were "
+            f"found; the catalog has always had hundreds. The element was "
+            f"most likely renamed again -- check the top-level children of "
+            f"<Weakness_Catalog>: "
+            f"{[child.tag.split('}')[-1] for child in root]}")
 
     return (
         names,
         aliases,
         deprecated,
+        non_weakness,
         _checked_attribute(root.get("Version") or "?", "Version"),
         _checked_attribute(root.get("Date") or "?", "Date"),
     )
@@ -145,7 +197,7 @@ def collect(root: ET.Element) -> tuple[dict, dict, list[str], str, str]:
 
 def render(root: ET.Element) -> str:
     namespace = {"c": root.tag.split("}")[0].strip("{")}
-    names, aliases, deprecated, version, date = collect(root)
+    names, aliases, deprecated, non_weakness, version, date = collect(root)
 
     abstraction_by_id = {
         (weakness.get("ID") or ""): (weakness.get("Abstraction") or "")
@@ -168,9 +220,13 @@ def render(root: ET.Element) -> str:
         f"Source: CWE {version} ({date}) from https://cwe.mitre.org/data/xml/cwec_latest.xml.zip",
         "Regenerate with: python tools/generate_cwe_catalog.py",
         "",
-        "``NAMES`` maps every CWE ID (including deprecated ones, so historical",
-        "advisory tags still render) to its official name. ``ALIASES`` adds the",
-        "community terms people actually search for (IDOR, SSRF, XXE, ...).",
+        "``NAMES`` maps every CWE ID to its official name: Weaknesses, and",
+        "also Categories and Views, so an advisory tagged with one of those",
+        "renders a label instead of a bare id. Deprecated ids are kept for",
+        "the same reason. Only Weaknesses are offered in the picker.",
+        "",
+        "``ALIASES`` adds the community terms people actually search for",
+        "(IDOR, SSRF, XXE, ...).",
         '"""',
         "",
         "from __future__ import annotations",
@@ -200,6 +256,13 @@ def render(root: ET.Element) -> str:
         lines.append(f"    {level!r}: {ids!r},")
     lines.append("}")
     lines.append("")
+    lines.append("# Categories and Views: named so a tag renders a label, and")
+    lines.append("# deliberately absent from ABSTRACTION so the picker never offers")
+    lines.append("# them -- a bucket is not a weakness you can search for.")
+    lines.append("NON_WEAKNESS: frozenset[str] = frozenset({")
+    lines.extend(f"    {cwe_id!r}," for cwe_id in sorted(non_weakness, key=key))
+    lines.append("})")
+    lines.append("")
     lines.append("DEPRECATED: frozenset[str] = frozenset({")
     lines.extend(f"    {cwe_id!r}," for cwe_id in sorted(deprecated, key=key))
     lines.append("})")
@@ -214,7 +277,7 @@ def render(root: ET.Element) -> str:
 MIN_WEAKNESSES = 800
 
 
-def _check_catalog(names: dict, aliases: dict) -> None:
+def _check_catalog(names: dict, aliases: dict, deprecated: list[str]) -> None:
     """Refuse a catalog that is materially smaller or missing the ids the
     curated classes depend on.
 
@@ -245,6 +308,19 @@ def _check_catalog(names: dict, aliases: dict) -> None:
             f"refusing to write: {len(missing)} CWE(s) the curated classes "
             f"use are absent from this catalog: {missing[:10]}")
 
+    # A curated id that still exists but has been RETIRED upstream is the
+    # case that got through: CWE 5.0 deprecated 613 and split it into
+    # 1462-1467, and "is it in names?" said yes. Warned rather than
+    # refused -- the catalog is correct, it is the curated class that now
+    # needs a decision, and refusing to write would leave the operator
+    # with no catalog at all.
+    retired = sorted((cwe_id for cwe_id in curated if cwe_id in deprecated),
+                     key=lambda value: int(value))
+    if retired:
+        print(f"warning: {len(retired)} curated CWE(s) are deprecated in this "
+              f"catalog and should be repointed at their successors: "
+              f"{retired}", file=sys.stderr)
+
     lost = sorted(cwe_id for cwe_id in EXTRA_ALIASES if cwe_id not in aliases)
     if lost:
         print(f"warning: EXTRA_ALIASES for {lost} did not survive -- those "
@@ -254,8 +330,8 @@ def _check_catalog(names: dict, aliases: dict) -> None:
 
 def main() -> None:
     root = load_xml(sys.argv[1] if len(sys.argv) > 1 else None)
-    names, aliases, _deprecated, _version, _date = collect(root)
-    _check_catalog(names, aliases)
+    names, aliases, _deprecated, _non_weakness, _version, _date = collect(root)
+    _check_catalog(names, aliases, _deprecated)
     text = render(root)
     # This file writes Python that modules/cwe_categories.py imports, which
     # every client imports in turn -- so anything that lands here runs inside

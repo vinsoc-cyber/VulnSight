@@ -8,13 +8,14 @@ weakness list:
 | | |
 |---|---|
 | Source | `https://cwe.mitre.org/data/xml/cwec_latest.xml.zip` |
-| Version | CWE **4.20** (released 2026-04-30) |
-| Weaknesses | **969** total; 25 deprecated |
-| Offered in the picker | **944** (deprecated ones are hidden) |
-| With community aliases | 97 |
-| File size | ~70 KiB of Python |
+| Version | CWE **5.0** (released 2026-10-28) |
+| Weaknesses | **984** total; 68 deprecated |
+| Groupings and Views | **493** named, never offered as targets |
+| Offered in the picker | **956** (deprecated ones are hidden) |
+| With community aliases | 126 |
+| File size | ~110 KiB of Python |
 
-Three tables:
+Four tables:
 
 - `NAMES` — every CWE id → official name, **including deprecated ones**, so a
   historical advisory tag still renders a label instead of a bare number.
@@ -23,6 +24,9 @@ Three tables:
   `BOLA` find `CWE-639`: MITRE lists both as alternate terms for it.
 - `ABSTRACTION` — Pillar / Class / Base / Variant / Compound, shown in the picker
   so an umbrella CWE is obvious at a glance.
+- `NON_WEAKNESS` — the Grouping and View ids, which have a name and nothing
+  else. CWE 5.0 renamed `<Categories>` to `<Groupings>`; both spellings are
+  read, because a 4.x XML on disk still has to regenerate.
 
 Deprecated ids stay in `NAMES` but are excluded from the picker and from
 `picker_catalog()`. They remain valid query targets, because advisories still
@@ -34,7 +38,7 @@ carry them.
 
 ```json
 {
-  "version": "4.20",
+  "version": "5.0",
   "columns": ["id", "label", "aliases", "level"],
   "rows": [["639", "Authorization Bypass Through User-Controlled Key",
             "Insecure Direct Object Reference|IDOR|Broken Object Level Authorization|BOLA|Horizontal Authorization",
@@ -47,7 +51,7 @@ so a reload revalidates to `304`. The page itself stays ~51 KB because the
 searchable text is **not** duplicated into the HTML.
 
 The consequence that matters: search runs entirely in the browser. Measured at
-**0.5–0.9 ms per keystroke** across 944 rows plus 29 classes, so there is no
+**0.5–0.9 ms per keystroke** across 956 rows plus 29 classes, so there is no
 debounce and no request per keystroke.
 
 ## Ranking
@@ -113,10 +117,24 @@ python -m unittest discover -s tests -p test_cwe_categories.py   # the invariant
 ```
 
 The generator is deterministic — the same input produces a byte-identical module.
-It excludes Views and Categories (advisories are tagged with Weaknesses), splits
-`Alternate_Terms` like `"Insecure Direct Object Reference / IDOR"` into separate
-searchable terms, and drops an alias already contained in the name because it
-adds nothing to search.
+It splits `Alternate_Terms` like `"Insecure Direct Object Reference / IDOR"` into
+separate searchable terms, and drops an alias already contained in the name
+because it adds nothing to search.
+
+Views and Groupings are read too, into `NON_WEAKNESS`. They are named so an
+advisory tagged with one renders a label instead of a bare `CWE-1340`, and they
+have no abstraction level, which is what keeps them out of the picker —
+`picker_catalog()` builds its rows from `ABSTRACTION`. A bucket is not a
+weakness you can search for.
+
+CWE 5.0 renamed `<Categories><Category>` to `<Groupings><Grouping>`, and the
+generator asked for the old path. `findall` on a path that no longer exists
+returns `[]`, which is indistinguishable from "this release has none" — so the
+5.0 regeneration dropped all 431 Groupings, kept the 62 Views, wrote the module
+and reported success. An advisory tagged `CWE-1035` rendered as a bare id in the
+UI and in every CSV export. Both spellings are read now, and a catalog with 100
+or more weaknesses and fewer than 100 buckets is refused with the element names
+it actually found, so the next rename is an error rather than a silence.
 
 `EXTRA_ALIASES` at the top of the generator is the curated part: terms the
 community uses that MITRE does not list, such as `BFLA` for `CWE-862`. It fails

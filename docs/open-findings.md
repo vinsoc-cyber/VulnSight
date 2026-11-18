@@ -16,7 +16,25 @@ entry says so.
 **This page shrinks.** Everything it listed about the deployment surface,
 the published API contract, the tools that could report success without
 measuring, and the default sort has been fixed and locked by a revert
-check. What remains is below.
+check. So has the rest of what it used to carry: `revert_checks.py` now
+re-checks each anchor against the patched text instead of the original, so
+a second edit to one file cannot silently no-op; the design audit opens
+five surfaces it had never opened; `cache.py` splits migrations with
+`sqlite3.complete_statement`; `fetch_nvd` stops between CWEs when shutdown
+is requested; `audit_tests.py`'s "must not raise" escape reads the
+docstring and the name rather than the whole function body; and MITRE's
+Groupings are in the catalog.
+
+One entry was removed as **wrong rather than fixed.** It claimed the export
+popover was skipped because a closed `<details>` gives its children
+zero-size rects. Measured, its three format buttons and its label are in
+the ordinary results states whether the popover is open or shut — the
+popover is positioned, not `display: none`. A state added for it measured
+223 text nodes and 74 targets, identical to `12-results-light` element for
+element, so it was removed again: a state that measures nothing new is
+worse than no state, because the count implies coverage.
+
+What remains is below.
 
 ## How the review was produced
 
@@ -41,70 +59,45 @@ one finding that had two witnesses.
 
 ## Still open
 
-### A second edit to the same file can silently no-op
+### A long OSV download cannot be interrupted
 
-`tools/revert_checks.py` pre-checks every anchor against the file's
-*original* text, then applies the replacements *cumulatively*. If edit 1
-consumes or alters edit 2's anchor, `str.replace` returns the string
-unchanged and no error is raised — so a half-applied revert is scored as a
-pass.
+`shutdown()` raises a process-wide stop signal, and `fetch_nvd` polls it
+between CWEs — which is what the earlier version of this entry asked for,
+and it works. `osv_client` does not. Its bulk export read loop
+(`osv_client.py:249`) streams an ecosystem's full archive — ~10 MB for
+maven or go, ~220 MB for npm — in a `while True` with no cancellation
+check, so `docker stop` during a first-use npm fetch still waits out the
+stop timeout and turns SIGTERM into SIGKILL.
 
-`tools/checks/__init__.py` warns about exactly this consequence ("reverting
-either alone leaves the behaviour correct and the check reports a false
-pass") and nothing enforces it. Several current checks have two edits on one
-file and none no-ops today, so this is latent rather than live. The fix is
-to assert each `find` is present in the *patched* text immediately before
-its replace, and report `ANCHOR MISSING` rather than continuing.
+Bounded by the download rather than unbounded, and the job row is
+reconciled on the next boot, so this is a slow-shutdown problem rather
+than a correctness one. The fix is the same shape as the NVD one: check
+`jobs.shutting_down()` between chunks.
 
-### The design audit never opens anything
+### `"no such column"` is treated as a benign migration error
 
-It measures what is visible when the page loads. The results surface is now
-populated before measuring, but four surfaces are still never opened: the
-auth gate, the export popover, the CWE combobox listbox, and the mobile
-filters slide-over. `shown()` does not walk ancestors, but zero-size rects
-filter those elements out anyway, so they are skipped entirely — and the
-auth gate has its own revert check, which means a focus-trap regression
-would be caught by the browser tests and not by the audit.
+`cache._BENIGN_MIGRATION_ERRORS` lists it so that a re-run of a
+`RENAME COLUMN` migration is self-healing — the old name is gone, which is
+the expected outcome rather than a failure. But the match is a substring
+over the whole error text, so a genuinely broken future migration that
+references a column nobody created is stamped as applied and never runs
+again.
 
-### `cache.py` migrations split on a semicolon
+Narrower than it was: statements are split with `sqlite3.complete_statement`
+now rather than on `;`, so a migration carrying a semicolon in a string or
+comment is no longer cut in half. What remains is that the benign-error list
+cannot tell "this migration already ran" from "this migration is wrong".
+Fixing it means pinning each tolerated error to the migration version that
+may raise it, rather than to the whole chain.
 
-`for stmt in sql.split(";")` splits a statement in half if a future
-migration contains a semicolon inside a comment or a string literal. DDL
-also runs in sqlite3's autocommit mode while the `INSERT INTO
-schema_version` is transactional, so a hard failure in migration *N* rolls
-back the stamps for 1..N-1 whose DDL already committed, and every
-subsequent boot re-runs the whole list — including v4's full-table
-`UPDATE advisories SET data = json_set(...)`.
+### Migration stamping is transactional while the DDL is not
 
-Self-healing via `_BENIGN_MIGRATION_ERRORS`, so this is a slow-startup and
-maintainability problem rather than a corruption one. Separately, treating
-`"no such column"` as blanket-benign will stamp a genuinely broken future
-migration as applied.
-
-### `shutdown()` still blocks on a running job
-
-Queued work is dropped at exit now, but a job already executing still holds
-interpreter exit open, because `ThreadPoolExecutor`'s workers are
-non-daemon and CPython joins them through `threading._register_atexit`. A
-four-minute NVD sweep therefore delays shutdown until Docker's stop timeout
-turns SIGTERM into SIGKILL. Bounded by the job rather than by the stop
-timeout; fixing it properly needs the runner to check a cancellation flag
-between CWEs.
-
-### MITRE Categories are absent from the catalog
-
-`NAMES` holds `Weakness` entries only — `'1035' in NAMES` is `False`. An
-advisory tagged with a Category id renders as a bare "CWE-1035" and
-`is_known_category("cwe:1035")` rejects it in the picker.
-
-### `audit_tests.py`'s "must not raise" escape is a substring match
-
-The `says_so` check looks for phrases like "must not raise" and "is safe"
-anywhere in a function's source *or its name*. A test with no assertions
-whose body happens to contain one of those phrases — in a variable, a
-comment, an unrelated string — is silently cleared. It also walks nested
-`def`s, so a test that *defines* a helper containing assertions but never
-calls it counts as asserting.
+sqlite3 runs DDL in autocommit mode while the `INSERT INTO schema_version`
+stamp is inside a transaction. A hard failure in migration *N* therefore
+rolls back the stamps for 1..N-1 whose DDL has already committed, and every
+subsequent boot re-runs the whole chain — including v4's full-table
+`UPDATE advisories SET data = json_set(...)`. Self-healing, so it costs
+startup time rather than data.
 
 ## Recorded decisions, not defects
 

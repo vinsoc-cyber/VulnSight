@@ -233,6 +233,20 @@ class TestTheStatusPillStaysReadable(unittest.TestCase):
         rules = re.findall(r"text-transform:\s*uppercase", self._sheet())
         self.assertEqual(len(rules), 1, "design.md documents exactly one")
 
+    def test_the_api_page_is_held_to_the_same_rule(self):
+        """It was not. This test read style.css only, so while the main page
+        was taken down to one uppercase rule the API reference kept three --
+        an all-caps eyebrow over every section ("REQUEST BODY"), shouted
+        column headers ("FIELD TYPE NOTES") and a REQUIRED flag. It is a
+        second stylesheet, which is exactly why nothing noticed: the page an
+        integrator reads was the one surface the redesign never reached."""
+        with open(os.path.join(STATIC_DIR, "apidocs.css"), encoding="utf-8") as fh:
+            rules = re.findall(r"text-transform:\s*uppercase", fh.read())
+        self.assertEqual(
+            rules, [],
+            "the API page shouts its labels; the main page stopped doing "
+            "that and these two are one interface")
+
     def test_the_status_words_are_sentence_case_and_say_what_a_user_sees(self):
         """They read AUTHED / OFFLINE / READY / OFF: shouted, and the first
         of them is `gh auth status` vocabulary rather than anything a user
@@ -252,6 +266,478 @@ class TestTheStatusPillStaysReadable(unittest.TestCase):
                         "status words are sentence case, not shouted")
                     self.assertNotIn("auth", word.lower(),
                                      "say what the user sees, not what gh calls it")
+
+
+class TestNoBaseRuleIsTrappedInAMediaQuery(unittest.TestCase):
+    """A rule that exists *only* inside `@media` styles the page at some
+    widths and not others.
+
+    `.search-warnings`, `.search-warnings li` and `.summary-order` spent a
+    while inside `@media (max-width: 1180px)`, because the edit that moved
+    them anchored on `.result-command {` and matched the copy *inside* that
+    block rather than the base rule. Above 1180px -- every desktop -- the
+    search warnings rendered as a bare <ul> with the browser's default
+    disc: a raw list bullet on a page with no other bullets, on the one
+    surface the operator looks at all session. No test noticed, because
+    every other test asks the stylesheet whether a rule exists, and it did.
+
+    So this asks a different question: which selectors have no base rule at
+    all? The answer is a short, deliberate list -- the mobile filter
+    drawer, the coarse-pointer hit expanders, the keyframe steps and the
+    dark-mode block. Anything else appearing here means a base rule was
+    swallowed by the media query above it."""
+
+    # Selectors that are *meant* to exist only inside a media query, each
+    # with the query that owns them. Adding to this list is a design
+    # decision: it declares that the page is deliberately unstyled in that
+    # respect at every other width.
+    MEDIA_ONLY = {
+        # The filter rail becomes a drawer below 1180px; none of this
+        # chrome exists on a desktop, where the rail is always open.
+        ".filters-open",
+        ".filters-open .control-rail",
+        ".filters-open .filter-scrim",
+        ".filter-icon",
+        ".filter-icon::after",
+        # The toolbar is a flex row on a desktop, where the primary
+        # action needs no span; below 480px it becomes a two-column grid
+        # and the primary takes the full measure.
+        ".toolbar-actions > button.ai",
+        # Dropped from the narrow topbar for room.
+        ".cache-pill",
+        ".system-status > .pill:not(.pill-action)",
+        # WCAG 2.5.5 hit expanders, scoped to (pointer: coarse) so the
+        # desktop keeps its compact chrome.
+        "button.pill",
+        ".combo-clear::after",
+        ".chip-x::after",
+        ".verdict-retry::after",
+        # @keyframes steps and the dark-mode token block.
+        "from",
+        "to",
+        ':root:not([data-theme="light"])',
+    }
+
+    def test_every_other_selector_has_a_rule_at_every_width(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = fh.read()
+        # Comments hold braces and selector text -- including, in this very
+        # stylesheet, the sentence explaining this bug. Strip them first or
+        # the parse below reads the explanation as code.
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+        base: set[str] = set()
+        nested: set[str] = set()
+        depth = 0
+        buf = ""
+        for char in css:
+            if char == "{":
+                selector = buf.strip()
+                if not selector.startswith("@"):
+                    for part in selector.split(","):
+                        part = part.strip()
+                        if part:
+                            (base if depth == 0 else nested).add(part)
+                depth += 1
+                buf = ""
+            elif char == "}":
+                depth = max(0, depth - 1)
+                buf = ""
+            elif char == ";":
+                buf = ""
+            else:
+                buf += char
+
+        self.assertEqual(depth, 0, "unbalanced braces in style.css")
+        self.assertGreater(len(base), 250, "the parse found almost no rules")
+
+        trapped = sorted(nested - base - self.MEDIA_ONLY)
+        self.assertEqual(
+            trapped, [],
+            "these selectors are styled at some widths and not others; "
+            "move the base rule out of the media query, or add it to "
+            f"MEDIA_ONLY and say why: {trapped}")
+
+        # The allowlist is an assertion too: a selector that no longer
+        # needs the exemption should lose it, or it stops meaning anything.
+        stale = sorted(self.MEDIA_ONLY - nested)
+        self.assertEqual(stale, [],
+                         f"MEDIA_ONLY lists selectors that are gone: {stale}")
+
+    def test_the_search_warnings_are_styled_on_a_desktop(self):
+        """The specific regression, named, so the failure says what broke."""
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+        for selector in (".search-warnings", ".search-warnings li",
+                         ".summary-order"):
+            with self.subTest(selector=selector):
+                index = css.find(selector + " ")
+                self.assertNotEqual(index, -1, f"no {selector} rule at all")
+                depth = css.count("{", 0, index) - css.count("}", 0, index)
+                self.assertEqual(
+                    depth, 0,
+                    f"{selector} is nested {depth} level(s) deep, so the "
+                    "warnings are unstyled outside that query")
+
+
+class TestTheCardSaysThingsInWords(unittest.TestCase):
+    """Every qualifier on an advisory card was shouted in capitals --
+    `NO CWE · AI`, `WITHDRAWN 2024-09-20`, `KEV / EXPLOITED`, and a score
+    that read `42% · CACHED · PARTIAL`.
+
+    The stylesheet is already disciplined about this: it carries exactly
+    one `text-transform: uppercase`, on the severity badge, where the word
+    is a band name. These were literal capitals typed into the template
+    strings, so that rule never saw them and no test did either -- the same
+    loophole that let the status pills ship reading AUTHED / OFFLINE."""
+
+    def _js(self):
+        with open(os.path.join(STATIC_DIR, "app.js"), encoding="utf-8") as fh:
+            return fh.read()
+
+    # Acronyms are not shouting: GHSA and CWE have no lowercase form.
+    ACRONYMS = {"GHSA", "NVD", "OSV", "EPSS", "AI", "CWE", "CVE", "KEV",
+                "CVSS", "API", "CSV", "JSON", "ID", "URL"}
+
+    def _words(self, text):
+        return [w for w in re.findall(r"\b[A-Z][A-Z0-9]+\b", text)
+                if w not in self.ACRONYMS]
+
+    def test_the_badge_labels_are_not_shouted(self):
+        js = self._js()
+        for cls in ("badge--native", "badge--withdrawn", "badge--kev"):
+            with self.subTest(badge=cls):
+                rule = re.search(
+                    re.escape(cls) + r'"[^>]*>(.*?)</span>', js, re.S)
+                self.assertIsNotNone(rule, f"no {cls} badge is rendered")
+                assert rule is not None
+                label = re.sub(r"\$\{[^{}]*\}", "", rule.group(1))
+                self.assertEqual(
+                    self._words(label), [],
+                    f"{cls} shouts: {label.strip()!r}")
+
+    def test_the_score_qualifiers_are_words_beside_the_figure(self):
+        """They were glued to the percentage with middle dots and set in
+        the monospace face this sheet reserves for codes, so "cached" read
+        as part of the number."""
+        js = self._js()
+        self.assertNotIn("' · CACHED'", js)
+        self.assertNotIn("' · PARTIAL'", js)
+        self.assertIn("verdict-note", js,
+                      "the qualifiers are their own elements now")
+
+    def test_kev_is_not_painted_in_a_severity_colour(self):
+        """`--sev-high` filled the KEV badge, so on a CRITICAL row the
+        loudest thing on the card was orange -- the hue the ramp reserves
+        for the band below. "Being exploited" is not a fifth severity."""
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+        rule = re.search(r"\.badge--kev\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(rule, "no .badge--kev rule")
+        assert rule is not None
+        self.assertNotRegex(
+            rule.group(1), r"var\(--sev-",
+            "KEV is wearing a severity colour; it is a different axis")
+
+    def test_the_summary_is_not_one_string_joined_by_middle_dots(self):
+        """Seven facts -- count, order, two warnings, provenance, the CWE
+        list and the cache state -- arrived as a single run of text with
+        " · " between them, so there was no way to skip to the one that
+        mattered, and a warning looked like a label."""
+        js = self._js()
+        summary = re.search(r"function renderSummary\b.*?\n    \}", js, re.S)
+        self.assertIsNotNone(summary, "renderSummary is gone")
+        assert summary is not None
+        self.assertNotIn(" · ", summary.group(0),
+                         "the facts are separate elements, not a dot chain")
+        self.assertIn("summary-facts", summary.group(0))
+
+
+class TestTheAuditLooksAtTheSurfacesPeopleUse(unittest.TestCase):
+    """tools/design_audit.py measured fourteen states, every one of them
+    the page at rest. Four surfaces that float above it -- the filter
+    drawer, the CWE list, a toast and the auth gate -- plus the recent
+    searches panel were never opened, so nothing had ever checked what
+    they composite onto. The drawer is the worst of those: below 1180px it
+    is the only way to reach the controls, and its rules live solely
+    inside a media query, so no state could reach them."""
+
+    def _audit(self):
+        root = os.path.dirname(STATIC_DIR)
+        sys.path.insert(0, root)
+        import importlib
+        return importlib.import_module("tools.design_audit")
+
+    def test_every_floating_surface_has_a_state(self):
+        audit = self._audit()
+        covered = {s[6] for s in audit.STATES if len(s) > 6}
+        self.assertEqual(
+            covered, set(audit.OVERLAYS),
+            "an opener exists that no state uses, or the reverse")
+        for wanted in ("drawer", "combo", "toast", "gate", "history"):
+            with self.subTest(surface=wanted):
+                self.assertIn(wanted, covered)
+
+    def test_a_state_that_measures_nothing_new_is_reported(self):
+        """The first recent-searches state waited on a button that is
+        always present, so it measured the results page element for
+        element -- 223 text nodes, 74 targets -- and reported a clean pass
+        for a surface nobody had opened. Waiting for a *visible* selector
+        is not enough, because the selector was visible.
+
+        Exercised rather than grepped for: an earlier version of this test
+        asserted the string "base_by_shape" appeared in the source, which
+        a revert to `base_by_shape = {}` satisfied while making the guard
+        inert -- the revert check correctly reported NOT CAUGHT."""
+        audit = self._audit()
+        states = [
+            ("base", "", 1440, 900, "light", False),
+            ("overlay", "", 1440, 900, "light", False, "combo"),
+        ]
+        same = {"text": [0] * 7, "targets": [0] * 3}
+
+        identical = audit.duplicate_states(
+            {"base": same, "overlay": dict(same)}, states)
+        self.assertEqual(len(identical), 1,
+                         "a state measuring the page twice was not reported")
+        self.assertIn("overlay", identical[0])
+        self.assertIn("base", identical[0])
+
+    def test_a_state_that_adds_elements_is_accepted(self):
+        audit = self._audit()
+        states = [
+            ("base", "", 1440, 900, "light", False),
+            ("overlay", "", 1440, 900, "light", False, "combo"),
+        ]
+        report = {"base": {"text": [0] * 7, "targets": [0] * 3},
+                  "overlay": {"text": [0] * 9, "targets": [0] * 4}}
+        self.assertEqual(audit.duplicate_states(report, states), [])
+
+    def test_a_state_with_no_comparable_base_is_left_alone(self):
+        """The drawer runs at 390px and the combo at 1440: comparing an
+        overlay against a base of a different shape would report every
+        state as suspicious and the check would be turned off."""
+        audit = self._audit()
+        states = [
+            ("base", "", 1440, 900, "light", False),
+            ("overlay", "", 390, 844, "dark", False, "drawer"),
+        ]
+        same = {"text": [0] * 7, "targets": [0] * 3}
+        self.assertEqual(
+            audit.duplicate_states({"base": same, "overlay": dict(same)},
+                                   states), [])
+
+    def test_a_populated_card_carries_a_verdict(self):
+        """The fixture stopped at the advisory, so the verdict block --
+        half the height of a scored card -- was never measured."""
+        audit = self._audit()
+        self.assertIn("ai", audit._sample_advisory(0),
+                      "no AI verdict on the sample advisory")
+        classes = {bool(audit._sample_verdict(i)["is_match"]) for i in range(4)}
+        self.assertEqual(classes, {True, False},
+                         "the sample verdicts are all one class")
+
+
+class TestTheClassMapBarCanBeSeen(unittest.TestCase):
+    """Each bug class in the picker carries a 2px bar whose length is its
+    share of the widest class -- a real ramp, 100% down to 6% across the
+    29 classes, and the only way to compare them without reading 29
+    numbers.
+
+    It was drawn in --line-bright on a --line ground: 1.73:1. WCAG 1.4.11
+    asks 3:1 of a graphic that carries meaning, and the ramp was both
+    illegal and, more to the point, invisible. The count in text beside it
+    is what kept this passing the audit, which measures text only -- so
+    this measures the colours instead of asserting a token name."""
+
+    def _tokens(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = fh.read()
+        found = {}
+        for name, light, dark in re.findall(
+                r"(--[a-z0-9-]+):\s*light-dark\(\s*(#[0-9a-fA-F]{6})\s*,"
+                r"\s*(#[0-9a-fA-F]{6})\s*\)", css):
+            found[name] = (light, dark)
+        return found
+
+    @staticmethod
+    def _luminance(hexcolour):
+        channels = [int(hexcolour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+                  for c in channels]
+        return (0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2])
+
+    @classmethod
+    def _ratio(cls, a, b):
+        la, lb = cls._luminance(a), cls._luminance(b)
+        hi, lo = max(la, lb), min(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def _fill_token(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+        rule = re.search(r"\.map-track\s*>\s*i\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(rule, "no .map-track fill rule")
+        assert rule is not None
+        token = re.search(r"background:\s*var\((--[a-z0-9-]+)\)",
+                          rule.group(1))
+        self.assertIsNotNone(token, "the fill is not a token")
+        assert token is not None
+        return token.group(1)
+
+    def test_the_bar_clears_three_to_one_against_its_own_track(self):
+        tokens = self._tokens()
+        fill = self._fill_token()
+        self.assertIn(fill, tokens, f"{fill} is not a light-dark token")
+        for index, theme in ((0, "light"), (1, "dark")):
+            with self.subTest(theme=theme):
+                ratio = self._ratio(tokens[fill][index], tokens["--line"][index])
+                self.assertGreaterEqual(
+                    round(ratio, 2), 3.0,
+                    f"the class-map bar is {ratio:.2f}:1 on its track in "
+                    f"{theme}; a graphic that carries meaning needs 3:1")
+
+    def test_the_bar_still_encodes_a_spread_worth_drawing(self):
+        """If every class held about the same number of CWEs the bar would
+        be decoration, and the right fix would be deleting it rather than
+        darkening it."""
+        sys.path.insert(0, os.path.dirname(STATIC_DIR))
+        from modules.cwe_categories import CATEGORIES
+        counts = [len(v.get("core", [])) + len(v.get("extended", []))
+                  for v in CATEGORIES.values()]
+        self.assertGreaterEqual(
+            max(counts) / min(counts), 4.0,
+            "the classes are too alike for a bar to say anything")
+
+
+class TestMonoMeansThisIsACode(unittest.TestCase):
+    """The type note at the top of style.css says the monospace face is
+    "used for CWE/CVE ids, CVSS vectors and EPSS figures because those are
+    codes where column alignment genuinely matters, never as texture on a
+    label".
+
+    The sheet then broke its own rule in seven places: the taxonomy group
+    headings ("Memory & concurrency"), the Clear button, the skip link
+    ("Skip to advisory results"), the Retry button, the Filters button and
+    both halves of a recent-search row ("4 hours ago"). A written rule
+    that nothing checks is a comment, so this is the check: every use is
+    named, and adding one is a decision about whether the thing is a code.
+    """
+
+    # Each entry is a claim that what this selector renders is an id, a
+    # figure, or a mark -- never prose and never a verb.
+    MONO = {
+        ".logo": "the VS wordmark",
+        ".badge": "advisory, CVE and CWE ids",
+        ".meta": "the id / date / CVSS / EPSS row",
+        ".code": "inline code", "code": "inline code",
+        "kbd": "keyboard keys, where mono is the convention",
+        ".source-code": "GHSA / NVD / OSV",
+        ".chip-code": "the class code on a chip",
+        ".map-code": "the class code in the picker",
+        ".combo-code": "a CWE id in the finder",
+        ".combo-in": "the code of the class that already covers it",
+        ".combo-note": "a CWE count, or the abstraction level",
+        ".combo-option.picked::after": "a tick glyph",
+        ".pill-key": "GH / AI",
+        ".cache-count": "a count",
+        ".section-note": "the CWE catalog release, e.g. CWE 5.0",
+        ".history-count": "a hit count",
+        ".history-matches": "a confirmed-match count",
+        ".threat-key-head, .threat-key-foot": "CVSS and the source codes",
+        ".threat-level small": "CVSS bands, e.g. 7.0-8.9",
+        ".verdict-score": "a confidence percentage",
+    }
+
+    def test_every_monospace_rule_is_one_of_these(self):
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+
+        stack: list[str] = []
+        buf = ""
+        used: set[str] = set()
+        for char in css:
+            if char == "{":
+                stack.append(buf.strip())
+                buf = ""
+            elif char == "}":
+                if stack:
+                    stack.pop()
+                buf = ""
+            elif char == ";":
+                if "var(--mono)" in buf and stack:
+                    used.add(stack[-1])
+                buf = ""
+            else:
+                buf += char
+
+        self.assertTrue(used, "the parse found no monospace rules at all")
+        unlisted = sorted(used - set(self.MONO))
+        self.assertEqual(
+            unlisted, [],
+            "these set the monospace face without saying why; if what they "
+            "render is an id or a figure add them to MONO with the reason, "
+            f"and if it is a label use --sans: {unlisted}")
+
+    def test_the_list_does_not_outlive_the_rules(self):
+        """An allowlist nobody prunes stops being an assertion."""
+        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
+            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+        stale = sorted(sel for sel in self.MONO
+                       if sel not in ("code", ".code") and sel not in css)
+        self.assertEqual(stale, [], f"MONO lists selectors that are gone: {stale}")
+
+
+class TestProseHasAMeasure(unittest.TestCase):
+    """The AI's reasoning is the one block on this page that has to be read
+    closely rather than scanned -- it is what an operator weighs before
+    deciding an advisory matters. It ran the full width of the card: 150
+    characters a line at 1440px and 186 at 1920, against the 45-80 a reader
+    can track without losing the return sweep. The API reference's endpoint
+    prose ran 145.
+
+    The cap is in `ch`, which is the width of a zero -- far wider than the
+    average glyph in a proportional face -- so the stylesheet alone cannot
+    tell you what you got. `tools/design_audit.py` measures the rendered
+    line from each element's own font at every state and fails over 85;
+    this only guards the caps and the gate from being removed."""
+
+    def test_every_prose_block_declares_a_measure(self):
+        checked = 0
+        for sheet, selectors in (("style.css", (".desc",)),
+                                 ("apidocs.css", (".desc", ".lede"))):
+            with open(os.path.join(STATIC_DIR, sheet), encoding="utf-8") as fh:
+                css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
+            for selector in selectors:
+                with self.subTest(sheet=sheet, selector=selector):
+                    rule = re.search(
+                        r"(?:^|\n)" + re.escape(selector) + r"\s*\{([^}]*)\}",
+                        css)
+                    self.assertIsNotNone(rule, f"{sheet}: no {selector} rule")
+                    assert rule is not None
+                    self.assertRegex(
+                        rule.group(1), r"max-width:\s*\d+ch",
+                        f"{sheet} {selector} has no measure, so it runs as "
+                        "wide as its container")
+                    checked += 1
+        self.assertEqual(checked, 3,
+                         "a prose block stopped being checked at all")
+
+    def test_the_audit_still_fails_on_an_unreadable_line(self):
+        """A gate whose threshold is raised out of reach measures nothing,
+        which is the failure mode this whole family of tools exists for."""
+        root = os.path.dirname(STATIC_DIR)
+        with open(os.path.join(root, "tools", "design_audit.py"),
+                  encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertIn('data.get("prose", [])', source,
+                      "the audit no longer measures line length")
+        threshold = re.search(r'row\["chars"\]\s*>\s*(\d+)', source)
+        self.assertIsNotNone(threshold, "no line-length threshold")
+        assert threshold is not None
+        self.assertLessEqual(
+            int(threshold.group(1)), 90,
+            "the line-length gate is set past anything a reader can track")
 
 
 if __name__ == "__main__":

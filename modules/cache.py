@@ -131,6 +131,35 @@ _BENIGN_MIGRATION_ERRORS = (
 )
 
 
+def _split_statements(sql: str) -> list[str]:
+    """Split a migration into statements, ignoring semicolons that are not
+    statement terminators.
+
+    `sql.split(";")` cut a statement in half the moment a migration carried
+    a semicolon inside a string literal or a `--` comment. No migration
+    does today, which is exactly why it would have been found at the worst
+    possible time: by whoever wrote the first one that did, against a
+    half-executed schema change.
+
+    sqlite3.complete_statement is SQLite's own answer to "is this a whole
+    statement yet", so the parsing matches what will execute it.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for line in sql.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                statements.append(statement)
+            buffer = ""
+    tail = buffer.strip()
+    if tail:
+        # No trailing semicolon on the last statement.
+        statements.append(tail)
+    return statements
+
+
 def _is_benign_migration_error(message: str) -> bool:
     lowered = message.lower()
     return any(marker in lowered for marker in _BENIGN_MIGRATION_ERRORS)
@@ -156,10 +185,7 @@ def init_db(path: str | None = None) -> None:
         for version, sql in _MIGRATIONS:
             if version <= current:
                 continue
-            for stmt in sql.split(";"):
-                stmt = stmt.strip()
-                if not stmt:
-                    continue
+            for stmt in _split_statements(sql):
                 try:
                     conn.execute(stmt)
                 except sqlite3.OperationalError as exc:

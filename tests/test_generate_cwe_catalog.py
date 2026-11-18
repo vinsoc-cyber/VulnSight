@@ -191,10 +191,28 @@ class TestTheCommittedCatalogMatchesItsGenerator(unittest.TestCase):
         for level, ids in self.catalog.ABSTRACTION.items():
             self.assertEqual(deprecated & set(ids), set(), level)
 
-    def test_every_non_deprecated_id_has_an_abstraction_level(self):
+    def test_every_live_weakness_has_an_abstraction_level(self):
+        """Weaknesses only. Categories and Views are named so an advisory
+        tagged with one renders a label instead of a bare "CWE-1340", and
+        they have no abstraction by definition -- which is exactly what
+        keeps them out of the picker, since picker_catalog() builds its
+        rows from ABSTRACTION."""
         placed = {i for ids in self.catalog.ABSTRACTION.values() for i in ids}
-        unplaced = set(self.catalog.NAMES) - placed - set(self.catalog.DEPRECATED)
+        unplaced = (set(self.catalog.NAMES) - placed
+                    - set(self.catalog.DEPRECATED)
+                    - set(self.catalog.NON_WEAKNESS))
         self.assertEqual(unplaced, set())
+
+    def test_categories_and_views_are_named_but_never_offered(self):
+        from modules.cwe_categories import cwe_label, picker_catalog
+
+        self.assertTrue(self.catalog.NON_WEAKNESS, "no Categories were read")
+        rows = {row[0] for row in picker_catalog()["rows"]}
+        self.assertEqual(self.catalog.NON_WEAKNESS & rows, set(),
+                         "a Category is offered as a search target")
+        # And they do what they are here for: a label instead of a bare id.
+        sample = sorted(self.catalog.NON_WEAKNESS, key=int)[0]
+        self.assertNotEqual(cwe_label(sample), f"CWE-{sample}")
 
     def test_abstraction_keys_are_exactly_the_generators_levels(self):
         self.assertEqual(list(self.catalog.ABSTRACTION), list(gen.ABSTRACTIONS))
@@ -225,7 +243,7 @@ class TestTheGeneratorRefusesADegradedCatalog(unittest.TestCase):
 
     def test_a_truncated_catalog_is_refused(self):
         with self.assertRaises(SystemExit) as caught:
-            gen._check_catalog({"79": "XSS"}, {})
+            gen._check_catalog({"79": "XSS"}, {}, [])
         self.assertIn("expected at least", str(caught.exception))
 
     def test_a_catalog_missing_a_curated_id_is_refused(self):
@@ -240,7 +258,7 @@ class TestTheGeneratorRefusesADegradedCatalog(unittest.TestCase):
         dropped = sorted(curated)[0]
         del names[dropped]
         with self.assertRaises(SystemExit) as caught:
-            gen._check_catalog(names, {})
+            gen._check_catalog(names, {}, [])
         self.assertIn("curated classes use", str(caught.exception))
 
     def test_the_real_catalog_passes(self):
@@ -249,8 +267,93 @@ class TestTheGeneratorRefusesADegradedCatalog(unittest.TestCase):
         does-not-raise assertion, and the count below says what it saw."""
         from modules import cwe_catalog
 
-        gen._check_catalog(dict(cwe_catalog.NAMES), dict(cwe_catalog.ALIASES))
+        gen._check_catalog(dict(cwe_catalog.NAMES), dict(cwe_catalog.ALIASES),
+                           list(cwe_catalog.DEPRECATED))
         self.assertGreaterEqual(len(cwe_catalog.NAMES), gen.MIN_WEAKNESSES)
+
+
+class TestTheBucketsAreNotSilentlyDropped(unittest.TestCase):
+    """MITRE ships three kinds of entry. CWE 5.0 renamed the middle one
+    from `<Categories><Category>` to `<Groupings><Grouping>`, and the
+    generator asked for the old path.
+
+    `findall` on a path that no longer exists returns `[]`, which reads
+    exactly like "this release has none" -- so the regeneration dropped all
+    431 Groupings, kept the 62 Views, wrote the module and reported
+    success. An advisory tagged CWE-1035 rendered as a bare id in the UI
+    and in every CSV export, and `is_known_category("cwe:1035")` rejected
+    it. Nothing failed, because nothing asked."""
+
+    def setUp(self):
+        self._saved_extra = dict(gen.EXTRA_ALIASES)
+        gen.EXTRA_ALIASES.clear()
+
+    def tearDown(self):
+        gen.EXTRA_ALIASES.clear()
+        gen.EXTRA_ALIASES.update(self._saved_extra)
+
+    @staticmethod
+    def _root(bucket_tag=None, bucket_child=None, buckets=0):
+        """A catalog big enough to be taken for a real one, optionally with
+        a block of buckets under whatever element name is being tried."""
+        root = _xml(weaknesses=[
+            (str(100 + i), f"W{i}", "Stable", ()) for i in range(150)])
+        if bucket_tag:
+            container = ET.SubElement(root, f"{{{NS}}}{bucket_tag}")
+            for i in range(buckets):
+                ET.SubElement(container, f"{{{NS}}}{bucket_child}", {
+                    "ID": str(9000 + i), "Name": f"B{i}", "Status": "Incomplete"})
+        return root
+
+    def test_a_real_catalog_without_buckets_is_refused(self):
+        """The exact shape of the 5.0 break: plenty of weaknesses, and the
+        buckets under an element name nobody asked for."""
+        root = self._root("Somethings", "Something", 120)
+        with self.assertRaises(SystemExit) as caught:
+            gen.collect(root)
+        message = str(caught.exception)
+        self.assertIn("renamed", message)
+        # It has to name what it actually saw, or the next person meets the
+        # same silence from the other side.
+        self.assertIn("Somethings", message)
+
+    def test_a_small_fixture_without_buckets_is_fine(self):
+        """The guard must not fire on the handful-of-weaknesses catalogs
+        the rest of this file builds."""
+        root = _xml(weaknesses=[("79", "XSS", "Stable", ())])
+        names, _a, _d, non_weakness, _v, _dt = gen.collect(root)
+        self.assertEqual(names["79"], "XSS")
+        self.assertEqual(non_weakness, [])
+
+    def test_the_new_spelling_is_read(self):
+        names, _a, _d, non_weakness, _v, _dt = gen.collect(
+            self._root("Groupings", "Grouping", 120))
+        self.assertEqual(names["9000"], "B0")
+        self.assertIn("9000", non_weakness,
+                      "a Grouping is named but is not a search target")
+
+    def test_the_old_spelling_still_works(self):
+        """A user may regenerate from a 4.x XML already on disk."""
+        names, _a, _d, non_weakness, _v, _dt = gen.collect(
+            self._root("Categories", "Category", 120))
+        self.assertEqual(names["9000"], "B0")
+        self.assertIn("9000", non_weakness)
+
+    def test_the_shipped_catalog_actually_carries_them(self):
+        """The generator being right does not prove the module was
+        regenerated with it."""
+        from modules.cwe_catalog import NAMES, NON_WEAKNESS
+        from modules.cwe_categories import is_known_category, picker_catalog
+
+        self.assertGreater(
+            len(NON_WEAKNESS), 400,
+            "the shipped catalog holds Views only; re-run the generator")
+        self.assertIn("1035", NAMES, "CWE-1035 is a Grouping and has a name")
+        self.assertTrue(is_known_category("cwe:1035"))
+        # A bucket is not a weakness: it must not be offered as a target.
+        rows = {str(row[0]) for row in picker_catalog()["rows"]}
+        self.assertNotIn("1035", rows,
+                         "a Grouping is offered as something to search for")
 
 
 if __name__ == "__main__":

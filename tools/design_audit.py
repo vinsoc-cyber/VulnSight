@@ -79,7 +79,44 @@ STATES = [
     ("12-results-light", "", 1440, 900, "light", True),
     ("13-results-mobile", "", 390, 844, "dark", True),
     ("14-results-narrow", "", 320, 844, "light", True),
+    # Overlays. Each floats above the page on its own surface -- two of
+    # them translucent -- so their contrast is a property of the stack, not
+    # of any rule in the sheet, and none of it had ever been measured. The
+    # filter drawer is worse than unmeasured: below 1180px it IS the only
+    # way to reach the controls, and its rules live solely inside a media
+    # query, so no desktop state could have touched them either.
+    ("15-filter-drawer", "", 390, 844, "dark", False, "drawer"),
+    ("16-cwe-combo", "", 1440, 900, "light", False, "combo"),
+    ("17-toast", "", 1440, 900, "dark", False, "toast"),
+    ("18-history", "", 1440, 900, "light", False, "history"),
+    ("19-auth-gate", "", 1440, 900, "dark", False, "gate"),
 ]
+
+# Each opener puts exactly one extra surface on screen, and names the
+# selector that must be VISIBLE before anything is measured. The wait is
+# the point: without it a trigger that silently stopped working would let
+# the state measure the ordinary page underneath and report a clean pass
+# for a surface nobody had looked at. That is how "18-history" passed on
+# its first run here -- it waited for a button that is always present, so
+# it measured the results page twice and called it an overlay.
+OVERLAYS = {
+    "drawer": ".control-rail",
+    "combo": ".combo-list li",
+    "toast": ".toast",
+    "history": "#history-section .history-list li",
+    "gate": "#auth-gate .auth-gate-card",
+}
+
+# There is deliberately no "export" entry. open-findings.md listed the
+# export popover among the surfaces this tool never opened, on the reasoning
+# that a closed <details> gives its children zero-size rects. Measured, that
+# is false: its three format buttons and its label appear in the ordinary
+# results states whether the popover is open or shut, because the popover is
+# positioned rather than display:none. A state for it measured 223 text
+# nodes and 74 targets -- identical to 12-results-light, element for element
+# -- which is the duplicate-coverage false pass this file already learned
+# once from the recent-searches state. A state that measures nothing new is
+# worse than no state, because the count implies coverage.
 
 # One advisory per severity band, each carrying the fields the card renders:
 # a KEV flag, several sources, a CWE label, a package range and an EPSS
@@ -114,7 +151,38 @@ def _sample_advisory(index: int) -> dict:
         "epss_percentile": (0.99, 0.78, 0.31, 0.05)[index % 4],
         "kev": index % 4 == 0,
         "aliases": [f"CVE-2026-{1000 + index}"],
+        # The verdict block is half the height of a scored card -- the
+        # coloured state dot, the confidence bar, the reason prose and the
+        # two notes on the score -- and none of it was measured, because
+        # the fixture stopped at the advisory. `a.ai` is the render
+        # fallback the UI already uses, so no endpoint needs stubbing.
+        # All four verdict classes appear across the six records.
+        "ai": _sample_verdict(index),
     }
+
+
+_VERDICTS = (
+    {"is_match": True, "confidence": 0.94, "vuln_type": "IDOR",
+     "reason": "The advisory describes an authenticated user reading another "
+               "tenant's records by supplying a different identifier, which "
+               "is the access-control failure this class covers.",
+     "cached": False, "has_errors": False},
+    {"is_match": False, "confidence": 0.12, "vuln_type": "",
+     "reason": "A denial of service in the parser; no authorization decision "
+               "is involved.",
+     "cached": True, "has_errors": False},
+    {"is_match": True, "confidence": 0.71, "vuln_type": "Path traversal",
+     "reason": "Reads a file outside the intended directory. Scored from the "
+               "summary alone; the description was unavailable.",
+     "cached": True, "has_errors": True},
+    {"is_match": None, "confidence": 0.0, "vuln_type": "",
+     "reason": "Scoring failed for one of the selected classes.",
+     "cached": False, "has_errors": True},
+)
+
+
+def _sample_verdict(index: int) -> dict:
+    return dict(_VERDICTS[index % 4])
 
 
 def _stub_and_search(page) -> None:
@@ -143,6 +211,50 @@ def _stub_and_search(page) -> None:
     # empty page instead of the results.
     page.evaluate("() => document.querySelector('#search-btn').click()")
     page.wait_for_selector(".card", timeout=20000)
+
+# Two recent searches, in the shape loadHistory() accepts: it drops any
+# row whose categories do not survive sanitizeCategories(), so an invented
+# class here would leave the list empty and the section hidden.
+_HISTORY = json.dumps([
+    {"sig": "a", "at": 1763000000000, "count": 128, "matches": 31,
+     "query": {"categories": ["bac"], "sources": ["ghsa", "nvd"],
+               "max_results": 100, "severity": [], "ecosystem": []}},
+    {"sig": "b", "at": 1762800000000, "count": 6, "matches": 0,
+     "query": {"categories": ["ssrf"], "sources": ["ghsa"],
+               "max_results": 50, "severity": ["critical"], "ecosystem": ["npm"]}},
+])
+
+
+def _open_overlay(page, kind: str) -> None:
+    """Put one more surface on screen and wait for it, or raise."""
+    wanted = OVERLAYS[kind]
+    if kind == "toast":
+        # A real failure path, not a hand-made lookalike: with every source
+        # unticked, Search refuses and says so. Going through the app's own
+        # toast() is what makes this measure the element the UI builds.
+        page.evaluate("""() => {
+          document.querySelectorAll('input[name=source]').forEach(el => {
+            el.checked = false;
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+          });
+          document.querySelector('#search-btn').click();
+        }""")
+    elif kind == "history":
+        # Recent searches are read from localStorage at load, so they have
+        # to be seeded before the page runs rather than after.
+        page.evaluate(
+            "rows => localStorage.setItem('vulnsight_history', rows)", _HISTORY)
+        page.reload(wait_until="networkidle")
+    elif kind == "gate":
+        # Nothing to do: this state runs against a server started with a
+        # token, and the page raises the gate itself on load.
+        pass
+    elif kind == "combo":
+        page.fill("#cwe-search", "sql")
+    else:
+        page.click("#filters-toggle")
+    page.wait_for_selector(wanted, state="visible", timeout=8000)
+
 
 MEASURE = r"""
 () => {
@@ -264,8 +376,34 @@ MEASURE = r"""
     if (px) sizes[px] = (sizes[px] || 0) + 1;
   }
 
+  // Characters per line, for the blocks a reader has to read rather than
+  // scan. Measured from the element's own font -- the `ch` unit is the
+  // width of a zero, which for a proportional face is far wider than the
+  // average glyph, so a CSS cap in `ch` does not tell you what you got.
+  // The AI's reasoning ran 150 characters a line at 1440 and 186 at 1920,
+  // which is the one block on the page that has to be read closely.
+  const prose = [];
+  for (const el of document.querySelectorAll('p, .desc, .lede, .search-warnings li, .hint')) {
+    const words = (el.innerText || '').trim();
+    if (words.length < 70 || !shown(el)) continue;
+    const box = el.getBoundingClientRect();
+    if (!box.width) continue;
+    const style = getComputedStyle(el);
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const advance = probe.measureText('abcdefghijklmnopqrstuvwxyz ').width / 27;
+    if (!advance) continue;
+    const inner = box.width
+      - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    prose.push({
+      cls: String(el.className || el.tagName).slice(0, 30),
+      chars: Math.round(inner / advance),
+      sample: words.slice(0, 40),
+    });
+  }
+
   return {
-    text, targets,
+    text, targets, prose,
     typeScale: Object.entries(sizes).sort((a, b) => b[1] - a[1]).slice(0, 12),
     fonts: [...new Set([...document.querySelectorAll('body *')]
       .map(e => getComputedStyle(e).fontFamily))].slice(0, 6),
@@ -307,14 +445,27 @@ def free_port() -> int:
 
 
 @contextlib.contextmanager
-def serve():
-    """Run the app on a loopback port, as the e2e suite does."""
+def serve(token: str | None = None):
+    """Run the app on a loopback port, as the e2e suite does.
+
+    `token` configures VULNSIGHT_API_TOKEN for this server only. The auth
+    gate is reachable no other way: the UI shows it when the *server* said
+    a token is required, so flipping a flag in the page would audit a
+    lookalike rather than the dialog an operator actually meets -- and
+    would skip the background-inert and focus-trap the real path applies,
+    which is most of what there is to measure about a modal.
+    """
     import wsgiref.simple_server
     from wsgiref.simple_server import WSGIRequestHandler
 
     sys.path.insert(0, str(ROOT))
     os.environ.setdefault("VULNSIGHT_BIND", "127.0.0.1")
     os.environ["VULNSIGHT_RATE_LIMIT"] = "off"
+    previous = os.environ.get("VULNSIGHT_API_TOKEN")
+    if token:
+        os.environ["VULNSIGHT_API_TOKEN"] = token
+    else:
+        os.environ.pop("VULNSIGHT_API_TOKEN", None)
     import app as app_module
 
     class Quiet(WSGIRequestHandler):
@@ -334,6 +485,10 @@ def serve():
         httpd.shutdown()
         httpd.server_close()      # shutdown() alone leaks the listening socket
         thread.join(timeout=5)
+        if previous is None:
+            os.environ.pop("VULNSIGHT_API_TOKEN", None)
+        else:
+            os.environ["VULNSIGHT_API_TOKEN"] = previous
 
 
 def launch(pw):
@@ -343,13 +498,56 @@ def launch(pw):
         return pw.chromium.launch(channel="chrome")
 
 
-def audit(base: str, out: pathlib.Path | None) -> int:
+def duplicate_states(report: dict, states) -> list[str]:
+    """Overlay states that measured exactly what the page at rest did.
+
+    This is the check the recent-searches state needed and did not have.
+    It waited for `.history-drop`, a button that is present whether or not
+    the panel is open, so it measured the results page element for element
+    -- 223 text nodes, 74 targets -- and reported a clean pass for a
+    surface nobody had opened. Waiting for a *visible* selector is not
+    enough, because the selector was visible.
+
+    So each overlay state is compared against the plain state of the same
+    shape (same path, viewport, theme and populate flag). Identical counts
+    mean the opener did nothing and the state is counting the page twice,
+    which is worse than having no state at all: the number of states
+    implies coverage.
+    """
+    base_by_shape = {state[1:6]: state[0] for state in states
+                     if len(state) == 6}
+    found: list[str] = []
+    for state in states:
+        if len(state) <= 6:
+            continue
+        name = state[0]
+        if name not in report:
+            continue
+        base = base_by_shape.get(tuple(state[1:6]))
+        if not base or base == name or base not in report:
+            continue
+        here, there = report[name], report[base]
+        if (len(here["text"]), len(here["targets"])) == (
+                len(there["text"]), len(there["targets"])):
+            found.append(
+                f"{name}: measured {len(here['text'])} text nodes and "
+                f"{len(here['targets'])} targets -- identical to {base}, so "
+                f"the overlay added nothing and this state is counting the "
+                f"page at rest a second time")
+    return found
+
+
+def audit(base: str, out: pathlib.Path | None,
+          states=None, report=None, problems=None) -> tuple[dict, list]:
     from playwright.sync_api import sync_playwright
 
-    report, problems = {}, []
+    report = {} if report is None else report
+    problems = [] if problems is None else problems
     with sync_playwright() as pw:
         browser = launch(pw)
-        for name, path, width, height, theme, populate in STATES:
+        for state in (STATES if states is None else states):
+            name, path, width, height, theme, populate = state[:6]
+            overlay = state[6] if len(state) > 6 else None
             page = browser.new_page(viewport={"width": width, "height": height})
             errors: list[str] = []
             page.on("pageerror",
@@ -371,6 +569,16 @@ def audit(base: str, out: pathlib.Path | None) -> int:
             page.evaluate(f"() => document.documentElement.dataset.theme = '{theme}'")
             if populate:
                 _stub_and_search(page)
+            if overlay:
+                try:
+                    _open_overlay(page, overlay)
+                except Exception as exc:  # the trigger moved or broke
+                    problems.append(
+                        f"{name}: could not open the {overlay} overlay "
+                        f"({type(exc).__name__}: {exc}); the page beneath it "
+                        f"was not measured in its place")
+                    page.close()
+                    continue
             page.wait_for_timeout(300)
 
             data = page.evaluate(MEASURE)
@@ -397,7 +605,10 @@ def audit(base: str, out: pathlib.Path | None) -> int:
             report[name] = data
             page.close()
         browser.close()
+    return report, problems
 
+
+def summarise(report: dict, problems: list, out: pathlib.Path | None) -> int:
     print(f"{'state':<18} {'contrast':>12}  {'targets':>10}  {'focus':>8}  "
           f"{'overflow':>8}  {'js':>3}")
     for name, data in report.items():
@@ -431,6 +642,22 @@ def audit(base: str, out: pathlib.Path | None) -> int:
             problems.append(f"{name}: expected exactly one <h1>, got {data['h1']}")
         if data["focusStops"] == 0:
             problems.append(f"{name}: nothing is reachable by Tab")
+        # 80 is the brief's cap; 85 is where it is called a defect, so a
+        # word landing awkwardly does not fail a run on its own.
+        problems += [
+            f"{name}: {row['chars']} characters a line in "
+            f".{row['cls']} {row['sample']!r} (over 80)"
+            for row in data.get("prose", []) if row["chars"] > 85
+        ]
+
+    # An overlay state has to measure something the page at rest does not.
+    # This is the check the recent-searches state needed and did not have:
+    # it waited for a button that is always present, measured 223 text
+    # nodes and 74 targets -- the results page, element for element -- and
+    # reported a clean pass for a surface nobody had opened. Comparing
+    # against the matching base state is what makes "19 states" mean
+    # nineteen surfaces rather than nineteen runs.
+    problems += duplicate_states(report, STATES)
 
     first = report[STATES[0][0]]
     print("\ntype scale (landing):",
@@ -472,10 +699,27 @@ def main(argv: list[str]) -> int:
         return 77
 
     if args.url:
-        return audit(args.url, args.out)
+        # An already-running server has whatever token policy it was
+        # started with, so the gate cannot be forced; say so rather than
+        # report 18 clean states and imply 19 were measured.
+        states = [s for s in STATES if (len(s) < 7 or s[6] != "gate")]
+        report, problems = audit(args.url, args.out, states=states)
+        problems.append("19-auth-gate: skipped; --url cannot configure a "
+                        "token, so the gate was not measured")
+        return summarise(report, problems, args.out)
+
+    gate = [s for s in STATES if len(s) > 6 and s[6] == "gate"]
+    rest = [s for s in STATES if s not in gate]
     with serve() as base:
         time.sleep(0.3)
-        return audit(base, args.out)
+        report, problems = audit(base, args.out, states=rest)
+    # A second server, configured with a token, so the auth gate is
+    # measured on the path that really raises it.
+    with serve(token="audit-only-token") as base:
+        time.sleep(0.3)
+        report, problems = audit(base, args.out, states=gate,
+                                 report=report, problems=problems)
+    return summarise(report, problems, args.out)
 
 
 if __name__ == "__main__":

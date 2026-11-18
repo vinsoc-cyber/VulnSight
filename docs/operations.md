@@ -100,7 +100,7 @@ always free.
 | `AI quota exhausted` | all keys in cooldown | add keys, or wait for the stated reset |
 | AI verdicts never come from cache | the fingerprint changed (model, prompt or class description), or old rows have a `NULL` fingerprint | expected — see [the verdict cache](ai-classification.md#the-verdict-cache) |
 | Verdicts look wrong after changing the query | they were scored for the previous selection | the banner is telling you exactly that; re-run the pass |
-| Advisories with `NO CWE · AI` and no verdicts | OSV-native records need the AI pass | run *Refine with AI*, or deselect that source |
+| Advisories with `No CWE tag` and no verdicts | OSV-native records need the AI pass | run *Refine with AI*, or deselect that source |
 | A cached advisory cannot be classified | it is not in `advisories.db` | run a search first; `missing` in the response lists them |
 
 ## Upgrading

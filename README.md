@@ -38,7 +38,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 
 - **The whole CWE catalog is searchable.** Type a code (`639`), MITRE's official
   name ("prototype pollution"), or a community alias (`IDOR`, `BOLA`, `SSRF`,
-  `XXE`) and pick from all **944 weaknesses of CWE 4.20**. The catalog is
+  `XXE`) and pick from all **956 weaknesses of CWE 5.0**. The catalog is
   searched in the browser — ~0.5 ms per keystroke, no round trip.
 - **29 curated bug classes** in 7 groups, each with a high-precision *core* CWE
   set, a wider *extended* set, and the terms people actually type (`toctou`,
@@ -64,7 +64,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 | [Configuration](docs/configuration.md) | Every environment variable, with defaults |
 | [Using the UI](docs/usage.md) | The full walkthrough, control by control |
 | [Bug classes](docs/bug-classes.md) | All 29 classes, and how to add one correctly |
-| [CWE catalog](docs/cwe-catalog.md) | Where the 944 CWEs come from, `cwe:<id>`, regeneration |
+| [CWE catalog](docs/cwe-catalog.md) | Where the 956 CWEs come from, `cwe:<id>`, regeneration |
 | [Data sources](docs/data-sources.md) | GHSA / NVD / OSV / OSV-native, and honest coverage limits |
 | [AI classification](docs/ai-classification.md) | Prompt, verdict cache, key rotation, cost controls |
 | [HTTP API](docs/api.md) | Every endpoint, request and response shape |

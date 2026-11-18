@@ -47,7 +47,15 @@ TITLES = {
     "cleanup": "Removals, extractions and caches (property-asserted)",
     "hardening": "Availability, cost and correctness from the whole-tree review",
     "hardening2": "Deployment, the published contract, and tools that could not fail",
+    "redesign": "The redesign, and the review that read it back",
 }
+
+# A group with no title would be headed by its bare dict key. Caught here
+# rather than in the rendered page, where "### redesign (19)" is the kind
+# of thing that ships.
+_untitled = sorted(set(GROUPS) - set(TITLES))
+if _untitled:
+    raise SystemExit(f"these check groups have no title: {_untitled}")
 
 
 def read_results() -> dict | None:

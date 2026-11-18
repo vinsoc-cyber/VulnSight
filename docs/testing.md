@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 882 tests: 831 offline + 51 browser
+.venv/bin/python -m unittest discover -s tests        # 915 tests: 864 offline + 51 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -24,19 +24,19 @@ OSV and the AI provider are all mocked.
 | `test_ui_e2e.py` | 51 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 34 | the two doc generators: rewrite, `--check`, alignment, failure paths |
-| `test_jobs.py` | 27 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
+| `test_jobs.py` | 31 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
 | `test_ghsa_client.py` | 31 | `gh` invocation, cursor pagination, `Link` parsing |
-| `test_generate_cwe_catalog.py` | 18 | generated Python compiles, and XML attributes cannot inject code |
+| `test_generate_cwe_catalog.py` | 24 | generated Python compiles, and XML attributes cannot inject code |
 | `test_docs.py` | 21 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_deployment.py` | 30 | Dockerfile, compose, entrypoint and run.sh: the bind the image declares, the user it drops to, head parity |
-| `test_cleanup_stays_clean.py` | 41 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
+| `test_cleanup_stays_clean.py` | 46 | the fixes no revert can reach: dead code gone, extractions callable, caches consulted |
 | `test_records.py` | 16 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
 | `test_epss_client.py` | 23 | batching, malformed responses |
 | `test_openapi.py` | 21 | spec/route agreement, and real responses against the schemas |
 | `test_config.py` | 8 | `.env` parsing, `DATA_DIR`, numeric knobs |
 | `test_query_filters.py` | 9 | shared published/affects/severity predicates |
-| `test_frontend_js.py` | 14 | runs every `tests/*.js` under node |
+| `test_frontend_js.py` | 32 | runs every `tests/*.js` under node |
 
 ## Frontend helper tests (node)
 
@@ -64,7 +64,7 @@ playwright install chromium          # or rely on a system Chrome
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 882 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 915 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -218,7 +218,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 189 named bugs it re-introduces the bug in the working tree, runs the
+For each of 209 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

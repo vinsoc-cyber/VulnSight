@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app as app_module
 from modules import cache, cwe_catalog
 from tools import (revert_checks, sync_bug_classes_doc, sync_check_counts,
-                   sync_module_map, sync_testing_doc)
+                   sync_cwe_catalog_doc, sync_module_map, sync_testing_doc)
 from modules.cwe_categories import CATEGORIES, picker_catalog, resolve_cwes
 from modules.search_service import MAX_CATEGORY_INPUTS
 
@@ -119,7 +119,11 @@ class TestDocsMatchTheCode(unittest.TestCase):
     def test_cwe_catalog_figures(self):
         catalog = picker_catalog()
         offered = len(catalog["rows"])
-        total = len(cwe_catalog.NAMES)
+        # Weaknesses, not every id in NAMES. NAMES also holds Categories
+        # and Views, which exist only so an advisory tagged with one
+        # renders a label; counting them under "Weaknesses" would overstate
+        # the catalog by sixty-odd entries that are not weaknesses.
+        total = len(set(cwe_catalog.NAMES) - set(cwe_catalog.NON_WEAKNESS))
         deprecated = len(cwe_catalog.DEPRECATED)
         version = re.escape(catalog["version"])
 
@@ -208,7 +212,7 @@ class TestDocsMatchTheCode(unittest.TestCase):
         tool would rewrite is a doc that has drifted, whatever the targeted
         assertions above happen to cover."""
         for tool in (sync_module_map, sync_bug_classes_doc, sync_testing_doc,
-                     sync_check_counts):
+                     sync_check_counts, sync_cwe_catalog_doc):
             with self.subTest(tool=tool.__name__), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(
@@ -402,7 +406,8 @@ class TestDocsMatchTheCode(unittest.TestCase):
 
         words = {7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
                  12: "twelve", 13: "thirteen", 14: "fourteen",
-                 15: "fifteen", 16: "sixteen"}
+                 15: "fifteen", 16: "sixteen", 17: "seventeen",
+                 18: "eighteen", 19: "nineteen", 20: "twenty"}
         count = len(design_audit.STATES)
         self.assertIn(count, words, "add the number word for a larger table")
         doc = _read(os.path.join(DOCS, "design.md"))

@@ -774,7 +774,7 @@
         : '<span class="chips-empty">Nothing selected — search above or tick a class.</span>';
       const total = classBoxes.length + ids.length;
       $('#selection-count').textContent = total
-        ? `${total} selected · ${total} AI pass${total > 1 ? 'es' : ''} per advisory`
+        ? `${total} selected, ${total} AI pass${total > 1 ? 'es' : ''} per advisory`
         : '';
       updateNvdHint();
       // Changing the selection can invalidate verdicts already on screen.
@@ -975,7 +975,9 @@
             <div class="verdict-head">
               <span class="verdict-state">${state}</span>
               ${v.vuln_type ? '<span class="verdict-type">/ '+esc(v.vuln_type)+'</span>' : ''}
-              <span class="verdict-score">${pct}%${v.cached?' · CACHED':''}${v.has_errors?' · PARTIAL':''}</span>
+              <span class="verdict-score">${pct}%</span>${v.cached
+                ? '<span class="verdict-note" title="Re-used a stored verdict; no AI call was made">reused</span>' : ''}${v.has_errors
+                ? '<span class="verdict-note verdict-note--warn" title="Some categories failed to score">scored in part</span>' : ''}
             </div>
             <progress class="conf-bar" max="100" value="${pct}" aria-label="AI confidence ${pct}%">${pct}%</progress>
             <div class="desc">${esc(v.reason||'')}</div>
@@ -1006,21 +1008,21 @@
       const srcBadge = srcs.length
         ? `<span class="badge src src-${sourceClass}" title="Data source(s)">${srcs.map(s=>esc(String(s).toUpperCase())).join('+')}</span>` : '';
       const nativeBadge = (a.native && !(a.cwes||[]).length)
-        ? `<span class="badge badge--native" title="Native OSV record with no CWE — relies on AI">NO CWE · AI</span>` : '';
+        ? `<span class="badge badge--native" title="Native OSV record with no CWE — relies on AI">No CWE tag</span>` : '';
       const withdrawnBadge = a.withdrawn_at
-        ? `<span class="badge badge--withdrawn">WITHDRAWN ${esc(String(a.withdrawn_at).slice(0,10))}</span>` : '';
+        ? `<span class="badge badge--withdrawn">Withdrawn ${esc(String(a.withdrawn_at).slice(0,10))}</span>` : '';
       const kevBadge = a.kev
-        ? `<span class="badge badge--kev" title="CISA Known Exploited Vulnerability">KEV / EXPLOITED</span>` : '';
+        ? `<span class="badge badge--kev" title="In CISA's Known Exploited Vulnerabilities catalog: attacks have been observed in the wild">Exploited (KEV)</span>` : '';
       // Number(null) is 0 and finite, which used to render "no EPSS data" as a
       // measured 0.00% exploit probability — a fabricated fact in a triage tool.
       const hasEpss = a.epss_percentage != null && Number.isFinite(Number(a.epss_percentage));
       const epssPct = hasEpss ? Number(a.epss_percentage) : NaN;
       const hasPercentile = a.epss_percentile != null && Number.isFinite(Number(a.epss_percentile));
       const epssMeta = hasEpss
-        ? `<span class="epss-meter" title="EPSS exploit probability${hasPercentile ? ' · percentile ' + Math.round(Number(a.epss_percentile) * 100) : ''}">
+        ? `<span class="epss-meter" title="EPSS exploit probability${hasPercentile ? ', percentile ' + Math.round(Number(a.epss_percentile) * 100) : ''}">
             <span class="meta-label">EPSS</span>
             <progress max="100" value="${Math.min(100, Math.max(0, epssPct * 100))}" aria-label="EPSS ${(epssPct * 100).toFixed(2)}%"></progress>
-            ${(epssPct * 100).toFixed(2)}%${hasPercentile ? ' · p' + Math.round(Number(a.epss_percentile) * 100) : ''}
+            ${(epssPct * 100).toFixed(2)}%${hasPercentile ? ' (p' + Math.round(Number(a.epss_percentile) * 100) + ')' : ''}
           </span>`
         : '';
       return `<article class="card ${sevbar} ${dimClass}" data-id="${esc(a.advisory_id)}">
@@ -1173,6 +1175,18 @@
       rb.textContent = nfail ? `Retry failed (${nfail})` : 'Retry failed';
     }
 
+    // Facts qualifying the result set. They used to be glued into one
+    // string with " · " between them -- "248 advisories · Most urgent first
+    // · 12 not scored · GHSA:100 + NVD:80 · capped at 250 · CWEs: …" -- so
+    // seven unrelated facts, two of them warnings, arrived as a single run
+    // of text with no way to skip to the one that mattered. Each is its own
+    // element now, separated by space rather than punctuation.
+    function fact(html, title, cls, raw) {
+      const attrs = (cls ? ` class="summary-fact ${cls}"` : ' class="summary-fact"')
+        + (title ? ` title="${safeAttr(title)}"` : '');
+      return `<span${attrs}>${raw ? html : esc(html)}</span>`;
+    }
+
     // The summary used to be written once per search and then contradict the
     // screen as soon as a filter hid anything.
     function renderSummary(shown) {
@@ -1180,37 +1194,47 @@
       if (!m) return;
       const ps = Object.entries(m.perSource);
       const psText = ps.length
-        ? ' · ' + ps.map(([k, v]) => `${k.toUpperCase()}:${v}`).join(' + ') : '';
-      const head = shown === m.count
-        ? `<b>${m.count}</b> advisories`
-        : `<b>${shown}</b> of ${m.count} shown`;
+        ? fact(ps.map(([k, v]) => `${k.toUpperCase()}\u2009${v}`).join(' + '),
+               'How many rows each source contributed before the merge') : '';
       // "Hidden" and "never scored" look identical once the filter is on, which
       // reads as "the AI cleared these" when the AI never saw them.
       const unscored = $('#only_match').checked ? unscoredCount() : 0;
       const unscoredNote = unscored
-        ? ` · <span class="summary-unscored" title="These were never scored, so they are hidden rather than cleared">${unscored} not scored</span>`
+        ? fact(`${unscored} not scored`,
+               'These were never scored, so they are hidden rather than cleared',
+               'summary-unscored')
         : '';
       // A full page is very likely a truncated one; saying so prevents reading
       // "0 hits for CWE-639" as "this CWE has no advisories".
       const capped = m.count >= m.maxResults
-        ? ` · <span class="summary-capped" title="Raise “Max results” to widen the query">capped at ${m.maxResults}</span>`
+        ? fact(`capped at ${m.maxResults}`,
+               'Raise “Max results” to widen the query', 'summary-capped')
         : '';
       const shownCwes = m.cwes.slice(0, 6).join(', ');
       const more = m.cwes.length > 6 ? `<span title="${safeAttr(m.cwes.join(', '))}"> +${m.cwes.length - 6} more</span>` : '';
       // Only when there is something to list: an empty set still rendered
-      // " · CWEs:" followed by an empty <code>, which paints as a stray
-      // 6px box after the count.
-      // The active order, where the list is. Nothing on the results surface
-      // said what the order was, so a date-sorted queue read as a ranked
-      // one -- and the first row being LOW looked like a bug rather than
-      // the newest advisory.
-      const orderText = ` · <span class="summary-order">${esc(currentOrderWords())}</span>`;
+      // "CWEs" followed by an empty <code>, which paints as a stray 6px box.
       const cweText = shownCwes
-        ? ` · CWEs: <code>${esc(shownCwes)}</code>${more}`
+        ? fact(`CWEs <code>${esc(shownCwes)}</code>${more}`, '', '', true)
         : '';
+      const cachedText = m.cached
+        ? fact(`${m.cached} already AI-scored`,
+               'Verdicts re-used from the cache; these cost nothing to show',
+               'summary-cached')
+        : '';
+      // The count and the order are one statement -- "248 advisories, most
+      // urgent first" -- not two facts that happen to be adjacent. Nothing
+      // on the results surface said what the order was, so a date-sorted
+      // queue read as a ranked one, and the first row being LOW looked like
+      // a bug rather than the newest advisory.
+      const head = shown === m.count
+        ? `<b>${m.count}</b> advisories`
+        : `<b>${shown}</b> of ${m.count} shown`;
       renderFunnel();
-      $('#summary').innerHTML = head + orderText + unscoredNote + psText + capped + cweText
-        + (m.cached ? ` · <span class="summary-cached">${m.cached} already AI-scored</span>` : '');
+      $('#summary').innerHTML =
+        `<p class="summary-head">${head}, `
+        + `<span class="summary-order">${esc(currentOrderWords().toLowerCase())}</span></p>`
+        + `<p class="summary-facts">${unscoredNote}${capped}${psText}${cweText}${cachedText}</p>`;
     }
 
     // "Newest first" is a date word. It was shown for every sort field, so
@@ -1255,7 +1279,7 @@
         if (item) item.classList.toggle('is-pending', Boolean(pending));
       };
       set('funnel-selected', String(selected), selected === 0);
-      set('funnel-found', found === null ? '\u00b7' : String(found), found === null);
+      set('funnel-found', found === null ? '\u2014' : String(found), found === null);
     }
 
     function renderWarnings(list) {

@@ -50,6 +50,7 @@ class TestJobLifecycle(unittest.TestCase):
 
     def tearDown(self):
         jobs.shutdown(wait=True)
+        jobs.resume()
         cache.DB_PATH = self._orig
         for ext in ["", "-wal", "-shm"]:
             try:
@@ -302,6 +303,7 @@ class TestFinishedJobsArePruned(unittest.TestCase):
         # where a stray time.monotonic() raises StopIteration off a
         # side_effect list.
         jobs.shutdown(wait=True)
+        jobs.resume()
         jobs._last_prune = float("-inf")
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(self.db + suffix):
@@ -391,6 +393,7 @@ class TestTheQueueHasABottom(unittest.TestCase):
 
     def tearDown(self):
         jobs.shutdown(wait=True)
+        jobs.resume()
         cache.DB_PATH = self._orig
         for ext in ("", "-wal", "-shm"):
             with contextlib.suppress(OSError):
@@ -425,6 +428,80 @@ class TestTheQueueHasABottom(unittest.TestCase):
         self.assertEqual(cache.count_unfinished_jobs(cache.DB_PATH), 0)
         self.assertTrue(jobs.submit("search", {}, lambda req: None,
                                     path=cache.DB_PATH))
+
+
+class TestTheStopSignalIsNotAOneWayLatch(unittest.TestCase):
+    """`shutdown()` raises a process-wide stop signal that long fetch loops
+    poll between upstream calls, so `docker stop` does not have to mean
+    SIGKILL. Nothing withdrew it.
+
+    That was read asymmetrically by the two halves of the system. Queued
+    work came back on its own -- `_pool()` builds a fresh pool, so a job
+    submitted after a shutdown ran normally -- while `/api/search`, which
+    runs the pipeline inline and never touches the pool, polled the same
+    flag and stopped at its first CWE. A process that survived a shutdown
+    request would therefore keep accepting searches and answer every one
+    of them with an empty result set marked `timed_out`, indefinitely.
+
+    In the suite it showed up as five NVD tests that passed alone and
+    failed in a full run, because three tearDowns call `shutdown()` to
+    dispose of the pool and the signal outlived them."""
+
+    def tearDown(self):
+        jobs.resume()
+
+    def test_a_fetch_loop_stops_when_shutdown_is_requested(self):
+        """The signal has to work, or the rest of this is moot."""
+        jobs.resume()
+        self.assertFalse(jobs.shutting_down())
+        jobs.shutdown(wait=True)
+        self.assertTrue(jobs.shutting_down())
+
+    def test_resume_withdraws_it(self):
+        jobs.shutdown(wait=True)
+        jobs.resume()
+        self.assertFalse(jobs.shutting_down())
+
+    def test_the_inline_search_path_recovers_as_the_pool_does(self):
+        """The asymmetry itself: submitting a job used to revive one half
+        of the system and leave the other half stopped."""
+        from modules import nvd_client
+
+        jobs.shutdown(wait=True)
+        self.assertTrue(nvd_client._shutting_down(),
+                        "precondition: the fetch loop sees the signal")
+
+        # Whatever brings the queue back must bring the inline path back
+        # too -- they read one flag, so they cannot disagree about it.
+        jobs.resume()
+        self.assertFalse(
+            nvd_client._shutting_down(),
+            "the inline pipeline is still stopped while the pool is live")
+
+    def test_disposing_of_the_pool_in_a_teardown_leaves_the_process_usable(self):
+        """What the three tearDowns actually do, asserted end to end: a
+        later NVD fetch must return its records rather than nothing."""
+        from modules import nvd_client
+
+        jobs.shutdown(wait=True)   # as test_app / test_jobs / test_openapi do
+        jobs.resume()
+
+        fetched: list[str] = []
+
+        def fake_fetch(cwe, params):
+            fetched.append(cwe)
+            return []
+
+        report: dict = {}
+        with mock.patch.object(nvd_client, "_fetch_cves_for_cwe", fake_fetch), \
+             mock.patch.object(nvd_client, "_request_delay", lambda: 0.0):
+            nvd_client.fetch_nvd(
+                nvd_client.NvdSearchParams(cwes=["79", "89"]), report=report)
+
+        self.assertEqual(fetched, ["79", "89"],
+                         "the fetch loop stopped although nothing is stopping")
+        self.assertFalse(report.get("timed_out"),
+                         "the search reported a shutdown that is over")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ and the measurements that check it. Written so the next person can disagree
 with a decision on its merits rather than guess at the intent.
 
 Numbers quoted here are produced by `python tools/design_audit.py`, which
-drives a real browser across fourteen viewport/theme states. `tests/test_docs.py`
+drives a real browser across nineteen viewport/theme states. `tests/test_docs.py`
 fails if this page drifts from the stylesheet.
 
 ## The subject
@@ -387,7 +387,7 @@ not a better answer than "this part was already right".
 | Severity key | **Redesigned twice.** Four bordered cards → four marks; then moved from its own grid cell to the end of the funnel row, where it shares a baseline and sits beside the edges it explains. |
 | Result card | **Redesigned.** Became an entry: the severity edge runs the full height and is the only container. A triage queue is scanned down a column, and a box makes the eye re-enter at every row. |
 | Entry badges | **Redesigned.** Once the entry lost its border, ~30 outline badges across six entries were the loudest texture on the surface. They are codes separated by hairlines now. |
-| `KEV / EXPLOITED` | **Kept, and now alone.** The one filled badge on an entry, on the one fact most likely to change what the reader does next. |
+| `Exploited (KEV)` | **Kept, and now alone.** The one filled badge on an entry, on the one fact most likely to change what the reader does next. |
 | Severity badge | **Reworked.** Was a saturated fill duplicating the spine; now the word on a 16% tint of its own band, with text tokens that clear AA as ink rather than behind it. |
 | AI verdict panel | **Redesigned.** A bordered box nested inside a borderless entry was the one place the rebuild contradicted itself. Same device as the entry: a coloured edge and space. |
 | Onboarding panel | **Redesigned.** Removed. A border around the whole opening screen is a border around the page. |
@@ -428,11 +428,11 @@ the remaining ones alone.
 | Near-black + one acid accent | partly — the ground is near-black, the accent is a desaturated steel chosen to stay out of the four severity hues, and severity owns the chroma |
 | Broadsheet: hairline rules, zero radius, dense columns | absent. The class field lost its borders but gained space and a measure, not rules |
 | SaaS-card kit: one radius on everything, identical soft shadows | **was present, and the earlier self-review graded its way out of it by counting radii.** Four radii on one component at four sizes is still one component. The class field and the severity key are no longer cards; the result card stays, because it holds mixed content |
-| ALL-CAPS eyebrow above every heading | one CSS rule, on severity badges, where the label is a code. The status words were shouted in the markup instead, which the CSS-only claim did not cover; they are sentence case now |
-| Meta strings joined with middle dots | the remaining dots join genuinely parallel facets (`6 advisories · newest first · CWEs: 639`) |
+| ALL-CAPS eyebrow above every heading | one CSS rule, on severity badges, where the label is a band name. Capitals typed into markup escape that rule twice over: the status words did, and so did every qualifier on an advisory card -- `NO CWE · AI`, `WITHDRAWN 2024-09-20`, `KEV / EXPLOITED`, and a score reading `42% · CACHED · PARTIAL`. All sentence case now, and a test reads the rendered labels rather than the stylesheet |
+| Meta strings joined with middle dots | **was present, and this row previously said otherwise while quoting the string that proved it.** The result summary was seven facts in one run of text -- count, order, two warnings, provenance, the CWE list and the cache state -- separated only by dots, so a warning read as a label and nothing could be skipped to. It is a sentence plus separate elements now. Five uses remain, all list separators inside one dense row rather than a meta string: three build a saved search's facets, two a CWE's aliases |
 | `WORD — fragment` with a spaced em dash | used in prose, not as a label pattern |
 | Tinted near-black standing in for black | absent |
-| Monospace for small data labels | **was present on the status pills.** Mono is now codes, ids, vectors and counts only |
+| Monospace for small data labels | **was present in seven more places than this row claimed.** Fixing the status pills did not fix the taxonomy group headings ("Memory & concurrency"), the Clear and Retry buttons, the Filters button, the skip link or either half of a recent-search row. The sheet's own type note already forbade all of it; nothing checked. Twenty uses remain, each named in `tests/test_frontend_js.py::TestMonoMeansThisIsACode`, and adding one is now a decision about whether the thing is a code |
 | `→` appended to link and button text | one `→`, in `package → first-patched-version`, carrying meaning |
 
 ### What this sweep did not change, and why
@@ -451,7 +451,7 @@ being changed on a preference.
 
 ## What is measured, and where
 
-`python tools/design_audit.py --out shots/` drives Chromium across fourteen
+`python tools/design_audit.py --out shots/` drives Chromium across nineteen
 states and fails on any of:
 
 | | Viewport | Themes |
@@ -459,9 +459,32 @@ states and fails on any of:
 | `/` empty | 1440×900, 390×844, 320×844, 820×1180, 1920×1080 | light and dark |
 | `/` with results | 1440×900, 390×844, 320×844 | light and dark |
 | `/api/docs` | 1440×900, 390×844 | light and dark |
+| Surfaces that float above the page | filter drawer 390×844, CWE finder 1440×900, toast 1440×900, recent searches 1440×900, auth gate 1440×900 | one each |
 
 The figure here is checked against `design_audit.STATES`, so it cannot
 drift the way "seven" did when the API page was added.
+
+**The last row is the one that had never been looked at.** Fourteen states
+all measured the page at rest. Five surfaces float above it, two of them on
+translucent grounds, so what they composite onto is a property of the stack
+rather than of any rule in the sheet — and none of it had been measured.
+The filter drawer is the worst case: below 1180px it is the only way to
+reach the controls, and its rules live solely inside a media query, so no
+desktop state could have touched them either. The auth gate is what a
+token-protected deployment shows an operator first.
+
+Opening them needed care, and the first attempt was wrong in a way worth
+recording. The recent-searches state waited for `.history-drop`, a button
+that is present whether or not the panel is open — so it measured the
+ordinary results page a second time, reported a clean pass, and the state
+count went up without the coverage going up. Each opener now waits for a
+selector the surface itself adds, and a failure to open is a reported
+problem rather than a silent fallback to the page underneath. The auth gate
+runs against its own server started with a token, because the UI raises it
+on what the *server* said; flipping a flag in the page would have measured
+a lookalike and skipped the focus trap, which is most of what there is to
+measure about a modal. It reports two focus stops, which is the trap
+holding.
 
 **The populated states are the point of the second row.** For as long as
 this tool has existed it opened the page and measured whatever was visible,

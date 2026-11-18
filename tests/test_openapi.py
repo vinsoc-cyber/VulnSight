@@ -118,6 +118,9 @@ class _AppCase(unittest.TestCase):
     def tearDown(self):
         from modules import jobs
         jobs.shutdown(wait=True)
+        # Disposing of the pool must not leave the process-wide stop
+        # signal raised for every later test in the run.
+        jobs.resume()
         self._env.stop()
         cache.DB_PATH = self._orig_db
         for ext in ["", "-wal", "-shm"]:

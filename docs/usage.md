@@ -6,7 +6,7 @@ fetched until you press one of the two buttons at the bottom of the rail.
 ## 1 · Find a bug
 
 The search box at the top of the rail matches **both** the 29 curated bug
-classes and all **944 weaknesses of CWE 4.20**, by:
+classes and all **956 weaknesses of CWE 5.0**, by:
 
 | You type | It matches |
 |---|---|
@@ -141,10 +141,10 @@ restore every filter and re-run it; `×` forgets it; **Clear** empties the list.
 |---|---|
 | Left bar + `CRITICAL/HIGH/…` | Severity (highest across sources) |
 | `GHSA`, `GHSA+NVD` | Which sources contributed |
-| `KEV / EXPLOITED` | In CISA's Known Exploited Vulnerabilities catalog |
+| `Exploited (KEV)` | In CISA's Known Exploited Vulnerabilities catalog |
 | `CWE-639 Authorization Bypass…` | Code **and** name, inline — not tooltip-only |
-| `NO CWE · AI` | OSV-native record with no CWE; only the AI pass can classify it |
-| `WITHDRAWN 2024-09-20` | Retired advisory; the card is de-emphasised |
+| `No CWE tag` | OSV-native record with no CWE; only the AI pass can classify it |
+| `Withdrawn 2024-09-20` | Retired advisory; the card is de-emphasised |
 | `EPSS 94.12% · p100` | Exploit-prediction score and percentile. Absent when there is no data — it is never rendered as a measured `0.00%` |
 | Verdict block | `Confirmed match` / `Not a match` / `Incomplete score` / `AI error`, with a confidence bar coloured by state |
 

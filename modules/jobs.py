@@ -52,6 +52,35 @@ DEFAULT_RETENTION_SECONDS = 24 * 3600
 _POOL: ThreadPoolExecutor | None = None
 _POOL_LOCK = threading.Lock()
 _EXIT_HOOK_REGISTERED = False
+# Set once shutdown has begun. A running job polls it so that stopping the
+# process does not have to mean killing the process.
+_SHUTTING_DOWN = threading.Event()
+
+
+def shutting_down() -> bool:
+    """True once shutdown() has been called in this process.
+
+    Long fetch loops check this between upstream calls. It is a module
+    function rather than the Event itself so a caller cannot clear it by
+    accident -- clearing it is `resume()`, which says what it means.
+    """
+    return _SHUTTING_DOWN.is_set()
+
+
+def resume() -> None:
+    """Withdraw a shutdown signal: this process is serving again.
+
+    Without this, `shutdown()` is a one-way latch for the life of the
+    interpreter, and the latch was read asymmetrically. Queued work came
+    back by itself -- `_pool()` builds a new pool, so a job submitted
+    after a shutdown ran normally -- while `/api/search`, which runs the
+    pipeline inline and never touches the pool, consulted the same flag
+    and stopped at its first CWE. One signal, two subsystems, and only one
+    of them could ever come back up: a process that survived a shutdown
+    request would serve empty result sets, reporting `timed_out` on every
+    search, for as long as it stayed alive.
+    """
+    _SHUTTING_DOWN.clear()
 
 
 def _register_exit_hook() -> None:
@@ -73,6 +102,8 @@ def _pool() -> ThreadPoolExecutor:
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
+            # A new pool means this process is running again.
+            resume()
             _register_exit_hook()
             workers = max(1, min(8, env_int("VULNSIGHT_JOB_WORKERS", 1)))
             _POOL = ThreadPoolExecutor(
@@ -257,11 +288,16 @@ def shutdown(wait: bool = False) -> None:
     SIGKILL -- neither graceful (the job died mid-flight anyway) nor prompt,
     and the row was left `running` until the next process reconciled it.
 
-    `cancel_futures` drops the queued work that nothing is waiting on, so
-    only the job already executing can delay exit, and register_atexit makes
-    this run without every caller having to remember it.
+    `cancel_futures` drops the queued work that nothing is waiting on.
+    `_SHUTTING_DOWN` is how the job already executing finds out: a long
+    NVD sweep checks it between CWEs and stops, instead of holding
+    interpreter exit open until Docker's stop timeout turns SIGTERM into
+    SIGKILL. Without that, `wait=False` only means "do not block here" --
+    the atexit join blocks anyway, because executor threads are
+    non-daemon and CPython joins them.
     """
     global _POOL
+    _SHUTTING_DOWN.set()
     with _POOL_LOCK:
         pool, _POOL = _POOL, None
     if pool is not None:

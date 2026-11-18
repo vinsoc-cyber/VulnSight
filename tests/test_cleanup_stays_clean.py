@@ -766,5 +766,73 @@ class TestEveryFixedRowHasAGuard(unittest.TestCase):
         self.assertGreater(total, 80, "revert checks disappeared")
 
 
+class TestARevertPutsTheWholeBugBack(unittest.TestCase):
+    """`tools/revert_checks.py` reverts a fix and asserts the suite goes
+    red. A revert that only half happens makes that measurement a lie in
+    both directions: the behaviour stays correct, so the suite stays green,
+    and the check reports NOT CAUGHT for a guard that is in fact sound --
+    or, where the half that landed was the load-bearing one, reports
+    `caught` for a revert nobody fully applied.
+
+    `tools/checks/__init__.py` has always warned about this ("reverting
+    either alone leaves the behaviour correct and the check reports a false
+    pass") and nothing enforced it."""
+
+    def _apply(self, originals, edits):
+        from tools.revert_checks import apply_edits
+        return apply_edits(originals, edits)
+
+    def test_every_copy_of_the_fix_is_reverted(self):
+        """`if sort_field == "cve_id":` occurs three times in
+        search_service.py. Undoing one left the other two doing the job."""
+        source = 'a\nif X:\n  pass\nif X:\n  pass\nif X:\n  pass\n'
+        patched, stale = self._apply({"m.py": source},
+                                     [("m.py", "if X:", "if False:")])
+        self.assertIsNone(stale)
+        self.assertEqual(patched["m.py"].count("if False:"), 3)
+        self.assertNotIn("if X:", patched["m.py"])
+
+    def test_a_second_edit_whose_anchor_the_first_consumed_is_reported(self):
+        """The replacements apply cumulatively while the caller's
+        pre-check reads the original, so edit 1 could eat edit 2's anchor
+        and `str.replace` would return the string unchanged in silence."""
+        _patched, stale = self._apply(
+            {"m.py": "alpha beta\n"},
+            [("m.py", "alpha beta", "gamma"), ("m.py", "beta", "delta")])
+        self.assertEqual(stale, ("m.py", "beta"),
+                         "a vanished anchor was applied as a no-op")
+
+    def test_an_anchor_that_was_never_there_is_reported(self):
+        _patched, stale = self._apply({"m.py": "alpha\n"},
+                                      [("m.py", "omega", "x")])
+        self.assertEqual(stale, ("m.py", "omega"))
+
+    def test_the_originals_are_not_mutated(self):
+        """The caller restores from this dict in a `finally`. Mutating it
+        would leave the sandbox patched for every later check."""
+        originals = {"m.py": "if X:\n"}
+        self._apply(originals, [("m.py", "if X:", "if False:")])
+        self.assertEqual(originals["m.py"], "if X:\n")
+
+    def test_the_live_checks_with_repeated_anchors_still_resolve(self):
+        """The two that prompted this, asserted against the real tree so
+        the reason stays attached to a fact rather than a memory."""
+        import sys
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+        from tools.checks import all_checks
+
+        repeated = 0
+        for label, edits, _module in all_checks():
+            for path, find, _replace in edits:
+                text = pathlib.Path(path).read_text(encoding="utf-8")
+                self.assertIn(find, text, f"{label}: anchor is gone from {path}")
+                if text.count(find) > 1:
+                    repeated += 1
+        self.assertGreaterEqual(
+            repeated, 1,
+            "no check has a repeated anchor any more; if that is deliberate, "
+            "this test has stopped guarding anything")
+
+
 if __name__ == "__main__":
     unittest.main()

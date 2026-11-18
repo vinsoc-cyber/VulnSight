@@ -281,7 +281,10 @@ class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
     #  class            CWE     what it is
     PROMISED = [
         ("crlf", "444", "HTTP Request/Response Smuggling"),
-        ("session", "613", "Insufficient Session Expiration"),
+        # 613 until CWE 5.0 deprecated it and split what it covered into
+        # 1462-1467. The class has to reach the successor, or "sessions
+        # that never expire" is a promise its CWE set no longer keeps.
+        ("session", "1463", "Insufficient Session Timeout Value"),
         ("cors", "346", "Origin Validation Error"),
         ("hardcodedcreds", "1392", "Use of Default Credentials"),
         ("hardcodedcreds", "259", "Use of Hard-coded Password"),

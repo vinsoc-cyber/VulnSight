@@ -221,8 +221,15 @@ CATEGORIES: dict[str, dict] = {
             "when they should not be: session fixation, sessions that never "
             "expire, tokens left valid after logout, sensitive persistent cookies."
         ),
-        "core": ["384", "613"],   # 613 = Insufficient Session Expiration
-        "extended": ["539", "488"],
+        # CWE 5.0 deprecated 613 ("Insufficient Session Expiration") and
+        # split what it covered into a family: 1462 improper session
+        # management, 1463 insufficient timeout, 1464 improper
+        # invalidation, 1465 not invalidated after logout, 1466 not
+        # invalidated after a credential change. The successors are more
+        # precise than the id they replace, which is why core gains three
+        # of them rather than one.
+        "core": ["384", "1462", "1463", "1464"],
+        "extended": ["539", "488", "1465", "1466"],
     },
     "hardcodedcreds": {
         "code": "CREDS",

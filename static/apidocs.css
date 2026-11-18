@@ -120,11 +120,21 @@ section {
 
 section h2 { margin: 0 0 10px; font-size: var(--text-lg); display: flex; gap: 10px; align-items: baseline; }
 section h2 code { font-size: var(--text-base); }
-section h3 { margin: 24px 0 8px; font-size: var(--text-sm); text-transform: uppercase;
-             letter-spacing: 0.07em; color: var(--muted); }
+/* "Request body", "Responses", "Response body". These were set in
+   capitals with 0.07em tracking -- an all-caps eyebrow above every
+   heading, which is the one typographic habit the rest of this redesign
+   spent its time removing. The main page is down to a single uppercase
+   rule, on severity badges, where the word is a band name; this sheet had
+   three and no test looked at it. Weight and colour rank a heading
+   perfectly well. */
+section h3 { margin: 24px 0 8px; font-size: var(--text-sm); font-weight: 650;
+             color: var(--muted); }
 
-.lede { margin: 0 0 8px; font-size: var(--text-base); }
-.desc { margin: 0 0 8px; color: var(--muted); }
+/* The endpoint prose, capped for the same reason the advisory card's is:
+   an integrator reads this closely, and it ran 145 characters a line on a
+   1440px screen. The audit measures it at every state now. */
+.lede { max-width: 72ch; margin: 0 0 8px; font-size: var(--text-base); }
+.desc { max-width: 72ch; margin: 0 0 8px; color: var(--muted); }
 .muted { color: var(--muted); }
 
 .note {
@@ -144,8 +154,6 @@ section h3 { margin: 24px 0 8px; font-size: var(--text-sm); text-transform: uppe
   font-weight: 600;
   color: var(--muted);
   font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
 }
@@ -178,8 +186,7 @@ section h3 { margin: 24px 0 8px; font-size: var(--text-sm); text-transform: uppe
   margin-left: 6px;
   font-size: var(--text-xs);
   color: var(--post);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 650;
 }
 .dflt { color: var(--muted); font-size: var(--text-sm); }
 

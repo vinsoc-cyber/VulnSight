@@ -75,7 +75,24 @@ def _is_assertion(node: ast.AST) -> bool:
 
 
 def _assertions(fn: ast.AST) -> list[ast.AST]:
-    return [n for n in ast.walk(fn) if _is_assertion(n)]
+    """Assertions in this function, not in functions nested inside it.
+
+    `ast.walk` descended into nested `def`s, so a test that *defines* a
+    helper full of assertions and never calls it counted as asserting --
+    which is the shape of a test that has been commented out from the
+    inside.
+    """
+    found: list[ast.AST] = []
+    stack: list[ast.AST] = [fn]
+    while stack:
+        node = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue          # a nested def is its own scope
+            if _is_assertion(child):
+                found.append(child)
+            stack.append(child)
+    return found
 
 
 # An `if` can be false and a loop can be empty; either way the body never
@@ -202,12 +219,13 @@ def audit_function(source: str,
                    helpers: set[str] | None = None) -> list[str]:
     """Flags for one test function.
 
-    Takes the file's text rather than its path: this re-read the whole file
-    once per function, so a 1,400-line test module was read ninety times.
+    *source* is the file's text. It replaced a per-function re-read of the
+    file from disk -- a 1,400-line test module was read ninety times -- and
+    is kept now that the checks work from the AST alone, because a future
+    check that needs the raw text should not reintroduce that read.
     """
     flags = []
     asserts = _assertions(fn)
-    src = ast.get_source_segment(source, fn) or ""
 
     if not asserts:
         # Not-raising is a real assertion when the function under test is
@@ -216,8 +234,14 @@ def audit_function(source: str,
         # The name counts too: these are written as sentences, and
         # `test_a_missing_file_is_not_an_error` states the assertion in the
         # only place it can be stated for a one-line call.
-        haystack = src + " " + fn.name.replace("_", " ")
-        says_so = any(phrase in haystack for phrase in
+        # The claim has to be in the DOCSTRING or the NAME, not anywhere in
+        # the source. Searching the whole function body cleared any test
+        # that happened to contain one of these phrases in a variable, a
+        # comment or an unrelated string -- an escape hatch that widened
+        # every time somebody wrote the words "is safe" for another reason.
+        doc = ast.get_docstring(fn) or ""
+        haystack = doc + " " + fn.name.replace("_", " ")
+        says_so = any(phrase in haystack.lower() for phrase in
                       ("must not raise", "does not raise", "is safe",
                        "never fails", "not an error", "never fail"))
         if not says_so:

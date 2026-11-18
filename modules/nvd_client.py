@@ -270,6 +270,20 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
 # How long a whole NVD fetch may take. Chosen below gunicorn's --timeout
 # (180s in the shipped Dockerfile) so the worker reports a partial result
 # rather than being killed mid-request.
+def _shutting_down() -> bool:
+    """Whether the process is shutting down, without importing jobs.
+
+    modules.jobs imports the search pipeline, which imports this module, so
+    a module-level import here would be a cycle. The lookup is cheap and
+    happens once per CWE.
+    """
+    try:
+        from .jobs import shutting_down
+    except ImportError:                                  # pragma: no cover
+        return False
+    return shutting_down()
+
+
 FETCH_DEADLINE_SECONDS = 150.0
 
 def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]:
@@ -303,6 +317,16 @@ def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]
     successful_queries = 0
 
     for i, cwe in enumerate(params.cwes):
+        # Checked between CWEs, not inside a request. This is the loop that
+        # can run for minutes, so it is the one that decides whether
+        # `docker stop` is graceful or a SIGKILL ten seconds later.
+        if _shutting_down():
+            logger.info("NVD: stopping at %d of %d CWE(s); shutdown requested",
+                        i, len(params.cwes))
+            if report is not None:
+                report["timed_out"] = True
+                report["fetched_cwes"] = i
+            break
         if time.monotonic() >= deadline:
             logger.warning(
                 "NVD: stopping after %d of %d CWE(s); the %.0fs budget is "

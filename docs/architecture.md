@@ -15,31 +15,32 @@ modules/
   query_filters.py         167   one filter vocabulary, applied after the merge
   records.py                69   per-record normalize guard shared by the clients
   http_retry.py            181   one retry/backoff policy for all four upstreams
-  cwe_categories.py        768   bug classes, labels, cwe:<id> ad-hoc classes, keywords
-  cwe_catalog.py          1123   GENERATED -- full MITRE names/aliases (tools/)
+  cwe_categories.py        775   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_catalog.py          2206   GENERATED -- full MITRE names/aliases (tools/)
   ghsa_client.py           369   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py            477   NVD API v2, 120-day windowing, rate-limit sleeps
+  nvd_client.py            501   NVD API v2, 120-day windowing, rate-limit sleeps
   osv_client.py            584   bulk export download, parse, CWE + keyword filters
   epss_client.py           159   FIRST EPSS scores, batched
   cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py                 525   SQLite: advisories + verdicts, jobs, migrations
-  jobs.py                  268   submit/poll queue for searches too slow to hold open
+  cache.py                 551   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py                  304   submit/poll queue for searches too slow to hold open
   ai_classifier.py        1239   provider client, prompt, verdict cache, key rotation
   openapi.py               657   the OpenAPI description of /api/v1
   security.py              467   bind/exposure checks, CSRF origin check, rate limiter
 templates/index.html       410   page shell -- HTML and Jinja only
-static/app.js             1905   all UI logic; server data arrives via window.BOOT
-static/style.css          2063   design tokens + components, light and dark
+static/app.js             1929   all UI logic; server data arrives via window.BOOT
+static/style.css          2145   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
-  audit_tests.py           341   finds tests that can no longer fail
-  design_audit.py          482   measures contrast/targets/focus in a real browser
-  generate_cwe_catalog.py  276   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     195   rewrites the revert-check figures and their index
-  revert_checks.py         231   reverts each fix, asserts the suite goes red
+  audit_tests.py           365   finds tests that can no longer fail
+  design_audit.py          726   measures contrast/targets/focus in a real browser
+  generate_cwe_catalog.py  352   regenerates modules/cwe_catalog.py from MITRE XML
+  sync_check_counts.py     203   rewrites the revert-check figures and their index
+  sync_cwe_catalog_doc.py  147   rewrites the CWE catalog figures in three docs
+  revert_checks.py         273   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
   sync_module_map.py       144   rewrites the line counts in this very table
-  sync_testing_doc.py      142   rewrites the per-file test counts in testing.md
+  sync_testing_doc.py      148   rewrites the per-file test counts in testing.md
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the

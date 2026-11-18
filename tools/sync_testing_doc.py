@@ -46,6 +46,12 @@ PROSE_RES = {
     "browser": re.compile(r"(\d+)(?= browser tests?\b)"),
     "browser_alt": re.compile(r"(\d+)(?= e2e tests?\b)"),
     "total": re.compile(r"(?<=`Ran )(\d+)(?= tests`)"),
+    # docs/review-dispositions.md quotes the suite as evidence in a table:
+    # "| Tests | ... | 883 pass |". Nothing owned that cell, so it was
+    # hand-typed, and it was the one figure on the page whose whole job is
+    # to be checkable. tests/test_docs.py asserts it against the real
+    # count, which is how it was found seventeen tests stale.
+    "pass": re.compile(r"(\d+)(?= pass \|)"),
 }
 
 
@@ -102,7 +108,7 @@ def main(argv: list[str]) -> int:
         drift.append("header: no 'N tests: N offline + N browser' line to update")
 
     figures = {"offline": total - browser, "browser": browser,
-               "browser_alt": browser, "total": total}
+               "browser_alt": browser, "total": total, "pass": total}
     pending: dict[pathlib.Path, str] = {DOC: text}
     for path in [*sorted(ROOT.glob("*.md")), *sorted((ROOT / "docs").glob("*.md"))]:
         body = pending.get(path) or path.read_text(encoding="utf-8")

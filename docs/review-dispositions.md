@@ -24,12 +24,12 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 882 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 915 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **189/189 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **209/209 caught** |
 
 The `caught` figure is read from `docs/revert-results.json`, which
 `tools/revert_checks.py` writes when it runs the whole battery.
@@ -46,7 +46,7 @@ module unpatched first now and reports `BASELINE RED` instead.
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 189 named bugs in the working tree, runs the test module that is
+each of 209 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -295,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 189 checks, by area
+## The 209 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -524,5 +524,30 @@ codebase and the test module that now refuses to let it back in.
 | the catalog generator accepts a truncated catalog | `tests/test_generate_cwe_catalog.py` |
 | the forbidden keyword trap comes back | `tests/test_cwe_categories.py` |
 | the overflows keyword trap comes back | `tests/test_cwe_categories.py` |
+
+### The redesign, and the review that read it back (20)
+
+| Reverting this | is caught by |
+|---|---|
+| the search warnings are swallowed by the media query above them | `tests/test_frontend_js.py` |
+| the KEV badge is painted in the HIGH severity colour | `tests/test_frontend_js.py` |
+| the KEV badge shouts its label | `tests/test_frontend_js.py` |
+| the withdrawn badge shouts its label | `tests/test_frontend_js.py` |
+| the no-CWE badge shouts its label | `tests/test_frontend_js.py` |
+| the result summary goes back to one string joined by middle dots | `tests/test_frontend_js.py` |
+| the design audit never opens the surfaces that float above the page | `tests/test_frontend_js.py` |
+| the audit fixture stops at the advisory, so no verdict is measured | `tests/test_frontend_js.py` |
+| the class-map bar goes back to 1.7:1 against its own track | `tests/test_frontend_js.py` |
+| the taxonomy group headings go back to the monospace face | `tests/test_frontend_js.py` |
+| the skip link goes back to the monospace face | `tests/test_frontend_js.py` |
+| the API reference shouts its section headings again | `tests/test_frontend_js.py` |
+| the AI's reasoning runs the full width of the card | `tests/test_frontend_js.py` |
+| nothing measures how long a line of prose is | `tests/test_frontend_js.py` |
+| the generator asks for the element CWE 5.0 renamed | `tests/test_generate_cwe_catalog.py` |
+| a catalog with no Groupings at all is written anyway | `tests/test_generate_cwe_catalog.py` |
+| the shipped catalog goes back to Views only | `tests/test_generate_cwe_catalog.py` |
+| a state that measures the page twice is counted as coverage | `tests/test_frontend_js.py` |
+| a revert that undoes one of three copies is scored as a full revert | `tests/test_cleanup_stays_clean.py` |
+| a shutdown request can never be withdrawn by the inline search path | `tests/test_jobs.py` |
 
 <!-- end generated check index -->

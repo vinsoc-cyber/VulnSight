@@ -28,7 +28,7 @@ Each class carries:
 | `bac` | `BAC` | Broken Access Control (BAC / BOLA / BFLA / IDOR) | 284, 285, 639, 862, 863, 732, 306, 287 | 269, 266, 668, 1220, 552, 425, 290, 288, 276 |
 | `csrf` | `CSRF` | Cross-Site Request Forgery (CSRF) | 352 | 1275 |
 | `cors` | `CORS` | CORS / Origin Validation Failure | 942, 346 | 1385 |
-| `session` | `SESS` | Session Management Flaws | 384, 613 | 539, 488 |
+| `session` | `SESS` | Session Management Flaws | 384, 1462, 1463, 1464 | 539, 488, 1465, 1466 |
 | `hardcodedcreds` | `CREDS` | Hard-coded / Default Credentials | 798, 259, 321, 1392 | — |
 | `clickjacking` | `CLICK` | Clickjacking / UI Redressing | 1021 | — |
 
@@ -85,7 +85,7 @@ Each class carries:
 |---|---|---|---|---|
 | `inputval` | `INPUT` | Improper Input Validation (umbrella) | 20 | 1284, 129, 704, 74 |
 
-158 distinct CWEs are reachable through these classes; the other ~800 are
+162 distinct CWEs are reachable through these classes; the other ~800 are
 reachable individually — see [CWE catalog](cwe-catalog.md).
 
 ## Reading the tables honestly

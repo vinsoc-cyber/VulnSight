@@ -105,6 +105,36 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
                  or any(fnmatch.fnmatch(n, pattern) for pattern in SKIP_GLOBS))}
 
 
+def apply_edits(
+    originals: dict[str, str],
+    edits: list[tuple[str, str, str]],
+) -> tuple[dict[str, str], tuple[str, str] | None]:
+    """Apply one check's edits, or name the first anchor that is not there.
+
+    Two things this gets right that the inline version did not.
+
+    Each anchor is re-checked against the text *as it now stands*. The
+    caller's pre-check reads the original file while the replacements apply
+    cumulatively, so when edit 1 consumed or altered edit 2's anchor,
+    `str.replace` returned the string unchanged and nothing said so -- a
+    half-applied revert scored as a pass. `tools/checks/__init__.py` warns
+    about exactly that consequence and nothing enforced it.
+
+    And every occurrence is replaced, not the first. A fix applied in three
+    places is not reverted by undoing one of them: the behaviour stays
+    correct and the check reports NOT CAUGHT for a guard that is sound.
+    Two live checks have that shape -- `if sort_field == "cve_id":` occurs
+    three times in search_service.py, and `"maxItems":
+    MAX_CATEGORY_INPUTS,` twice in openapi.py.
+    """
+    patched = dict(originals)
+    for path, find, replace in edits:
+        if find not in patched[path]:
+            return patched, (path, find)
+        patched[path] = patched[path].replace(find, replace)
+    return patched, None
+
+
 def sandbox(root: pathlib.Path) -> pathlib.Path:
     """A throwaway copy of the tree, including uncommitted work.
 
@@ -152,9 +182,21 @@ def run_checks(checks, tree: pathlib.Path):
             continue
 
         try:
-            patched = dict(originals)
-            for path, find, replace in edits:
-                patched[path] = patched[path].replace(find, replace, 1)
+            # Each anchor is re-checked against the text as it now stands,
+            # not against the original.
+            #
+            # The pre-check above reads `originals` while the replacements
+            # below apply cumulatively, so if edit 1 consumed or altered
+            # edit 2's anchor, `str.replace` returned the string unchanged
+            # and nothing said so -- a half-applied revert scored as a
+            # pass. tools/checks/__init__.py warns about exactly that
+            # consequence ("reverting either alone leaves the behaviour
+            # correct and the check reports a false pass") and nothing
+            # enforced it. Several checks have two edits on one file.
+            patched, stale = apply_edits(originals, edits)
+            if stale is not None:
+                results.append((label, "ANCHOR MISSING", module))
+                continue
             for path, text in patched.items():
                 (tree / path).write_text(text, encoding="utf-8")
             green = suite_is_green(module, tree)
