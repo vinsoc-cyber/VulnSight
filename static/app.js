@@ -1,5 +1,50 @@
 // === Configuration & State ===
-const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQUIRED } = window.BOOT;
+
+/**
+ * One bug class, exactly as app.py's index() builds it.
+ *
+ * @typedef {object} BugClass
+ * @property {string} key       stable id, e.g. "bac"
+ * @property {string} code      short display code
+ * @property {string} group     heading the picker files it under
+ * @property {string} label     human name
+ * @property {string} description
+ * @property {string[]} terms   community words people actually type
+ * @property {string[]} core    CWE ids at the heart of the class
+ * @property {string[]} extended  CWE ids on its edges, never also in core
+ * @property {string[]} [cwes]  core + extended, derived below rather than
+ *   sent: the server has no reason to ship the concatenation twice. It is
+ *   optional here because it does not exist until that line runs.
+ */
+
+/**
+ * Everything the server hands the page, rendered into the one inline
+ * bootstrap script in templates/index.html. This is the whole server->client
+ * contract and it was entirely untyped: a typo in any of these names, or a
+ * field renamed on the Python side, was a silent `undefined` hundreds of
+ * lines later rather than an error. Writing it down also caught that the
+ * shapes assumed here were not the shapes being sent.
+ *
+ * @typedef {object} Boot
+ * @property {Record<string, string[]>} POPULAR   package names per ecosystem
+ * @property {BugClass[]} CLASSES
+ * @property {string[]} OSV_SUPPORTED
+ * @property {boolean} AI_CONFIGURED
+ * @property {number} AI_CALL_BUDGET
+ * @property {boolean} AUTH_REQUIRED
+ */
+
+// Everything below is one scope, not the page's. This file had no wrapper:
+// all ~79 functions and every piece of state were true globals, indented
+// four spaces as a leftover from when this code lived inside a <script> tag
+// in the template. `let AI = {}` collided with the browser's own `AI`
+// global, and any future global -- ours or the platform's -- was free to
+// collide with the rest. The indentation now means what it looks like.
+(function () {
+  'use strict';
+
+    const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQUIRED } =
+      /** @type {Boot} */ (/** @type {any} */ (window).BOOT);
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
     let LAST = [];           // last result set (normalized advisories)
@@ -27,7 +72,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return parseInt(declared, 10) || 900;
     })();
 
-    function setFilterPanel(open, restoreFocus = true) {
+    function setFilterPanel(open, returnFocus = true) {
       const isOpen = Boolean(open);
       const modal = window.innerWidth <= MODAL_PANEL_WIDTH;
       const rail = $('#control-panel');
@@ -53,7 +98,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
       if (isOpen) {
         focusWhenVisible(rail, $('#filters-close'));
-      } else if (restoreFocus && filterReturnFocus && document.contains(filterReturnFocus)) {
+      } else if (returnFocus && filterReturnFocus && document.contains(filterReturnFocus)) {
         filterReturnFocus.focus();
       }
     }
@@ -1109,7 +1154,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const active = document.activeElement;
       const results = $('#results');
       if (!active || !results || !results.contains(active)) return null;
-      const card = active.closest('.card');
+      const card = /** @type {HTMLElement | null} */ (active.closest('.card'));
       if (!card || !card.dataset.id) return null;
       return {
         id: card.dataset.id,
@@ -1475,11 +1520,15 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           'Filtering to confirmed matches needs an AI pass first.\n\n'
           + `${pending} advisory(ies) × ${classes} class(es) = about ${calls} AI call(s).\n\n`
           + 'Run it now?');
-        if (!proceed) { e.target.checked = false; return; }
+        // Captured before the await: re-reading e.target across a
+        // suspension point is the shape of a real race, and a reader cannot
+        // tell this one is safe without checking what refineAI does.
+        const box = /** @type {HTMLInputElement} */ (e.target);
+        if (!proceed) { box.checked = false; return; }
         if (!await refineAI()) {
           // The queue would otherwise look empty with no hint that unticking
           // this box brings the raw results back.
-          e.target.checked = false;
+          box.checked = false;
           toast('AI pass failed — showing the raw results again', 'err');
         }
       }
@@ -1654,12 +1703,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const toggle = $('#theme-toggle');
       if (!toggle) return;
 
-      const effectiveTheme = () => {
-        const explicit = document.documentElement.dataset.theme;
-        if (explicit === 'light' || explicit === 'dark') return explicit;
-        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      };
-
       function sync() {
         const stored = localStorage.getItem('theme');
         const label = stored === 'light'
@@ -1670,7 +1713,11 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         toggle.setAttribute('aria-label', label);
         toggle.title = label;
         const meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) {
+        // instanceof, not a cast: `content` belongs to HTMLMetaElement, and
+        // assigning it on any other element silently creates an expando
+        // property -- the browser chrome would simply never change colour,
+        // with nothing to notice.
+        if (meta instanceof HTMLMetaElement) {
           const bg = getComputedStyle(document.documentElement)
             .getPropertyValue('--bg').trim();
           if (bg) meta.content = bg;
@@ -1701,3 +1748,4 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       });
       sync();
     })();
+})();

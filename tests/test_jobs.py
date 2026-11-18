@@ -99,6 +99,30 @@ class TestJobLifecycle(unittest.TestCase):
         running_view = jobs.public_view(queued)
         self.assertNotIn("result", running_view)  # no partial results
 
+    def test_a_failed_job_tells_the_poller_which_status_to_expect(self):
+        """error_status was persisted, covered by a test named for it, and
+        then dropped here -- so it never reached a client. app.py promises "a
+        polled result is identical to a synchronous one", but the synchronous
+        path answers a gh failure with 502 while this one answered 200 +
+        {"status": "failed"} with no way to tell 400 (your query is wrong, do
+        not retry) from 502/503 (upstream, back off)."""
+        def runner(_req):
+            raise jobs.JobFailure("GHSA fetch failed.", 502)
+
+        job_id = jobs.submit("search", {}, runner)
+        view = jobs.public_view(_wait_for(job_id, self.tmp.name))
+        self.assertEqual(view["status"], "failed")
+        self.assertEqual(view["error"], "GHSA fetch failed.")
+        self.assertEqual(view["error_status"], 502)
+
+    def test_polling_never_parses_the_stored_request(self):
+        """Each row holds the whole submitted body, and public_view discards
+        it, so parsing it made every poll a multi-megabyte json.loads for a
+        field no response has ever carried. The raw text stays in the row."""
+        cache.create_job("d" * 24, "search", {"categories": ["bac"]},
+                         path=self.tmp.name)
+        self.assertIsNone(_job("d" * 24, self.tmp.name)["request"])
+
     def _set_owner(self, job_id, owner):
         import sqlite3
         with sqlite3.connect(self.tmp.name) as conn:

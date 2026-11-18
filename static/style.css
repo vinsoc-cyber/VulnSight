@@ -240,7 +240,6 @@ a:hover { color: var(--accent); }
 ::selection { color: var(--accent-ink); background: var(--accent); }
 
 button, select, input { font: inherit; }
-button { color: inherit; }
 fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
 
 :where(a, button, select, input, summary):focus-visible {
@@ -310,7 +309,16 @@ fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
   letter-spacing: -.06em;
 }
 .brand-copy { min-width: 0; display: grid; }
-.brand-name { font-size: 16px; font-weight: 750; letter-spacing: -.03em; }
+.brand-name {
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -.03em;
+  /* The brand column can shrink to nothing; without this the text simply
+     painted over the status pills instead of shrinking with its box. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .brand-sub { color: var(--faint); font: 500 11px/1.2 var(--sans); }
 
 .system-status {
@@ -690,8 +698,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   gap: 2px;
   margin: 6px 0 0;
   padding: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
   list-style: none;
   background: var(--surface-raised);
@@ -706,8 +713,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: baseline;
-  column-gap: 8px;
-  row-gap: 1px;
+  gap: 1px 8px;
   padding: 6px 9px;
   cursor: pointer;
   background: transparent;
@@ -966,6 +972,9 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   border-top: 1px solid var(--line);
 }
 button {
+  /* Folded in from a second `button` block near the resets: two rules for
+     one selector, 700 lines apart, is a rule waiting to be missed. */
+  color: inherit;
   min-height: 38px;
   cursor: pointer;
   background: var(--panel-2);
@@ -1107,7 +1116,11 @@ button.ai:hover:not(:disabled) { background: var(--accent-2); border-color: var(
 button.warn-btn { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
 button.warn-btn:hover:not(:disabled) { border-color: var(--warn); }
 /* Drop the warn tint when inactive: --faint over it only reached 3.5:1 in light. */
-button.warn-btn:disabled { background: var(--panel-2); }
+button.warn-btn:disabled {
+  color: var(--faint);
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+}
 
 .match-filter {
   min-height: 38px;
@@ -1637,6 +1650,28 @@ code {
   }
   .workspace { padding-inline: 16px; }
   .result-command { margin-inline: -16px; padding-inline: 16px; }
+}
+
+@media (max-width: 460px) {
+  /* The brand column was minmax(0, 1fr), so at 320px it collapsed to 21px
+     while the 32px logo carried on painting over the status pills. `auto`
+     gives the mark its intrinsic width and makes the status group -- which
+     has somewhere to give -- absorb the shortfall instead. */
+  .topbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+
+  /* Clipped, not display:none, in all three cases below: each stays in the
+     accessibility tree, so the home link is still announced as
+     "VulnSight home" and GH/AI readiness is still reachable -- they just
+     stop competing for 320px of width with the controls you came for. */
+  .brand-copy,
+  .system-status > .pill:not(.pill-action) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 700px) {

@@ -6,6 +6,10 @@
   <meta name="theme-color" content="#15181d">
   <meta name="description" content="VulnSight searches GHSA, NVD and OSV by bug class (CWE), then optionally confirms matches with an LLM.">
   <title>VulnSight — advisory search by bug class</title>
+  <!-- The browser asks for /favicon.ico whether or not a page declares an
+       icon; with none declared that is a 404 on every first load, visible
+       in the console of a tool whose whole job is to show you problems. -->
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>

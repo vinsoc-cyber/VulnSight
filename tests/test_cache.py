@@ -222,6 +222,16 @@ class TestBatchedAdvisoryReads(unittest.TestCase):
         self.assertEqual(cache.get_advisories(ids, path=self.db),
                          {k: v for k, v in one_by_one.items() if v})
 
+    def test_a_whole_batch_costs_one_connection_not_one_per_id(self):
+        """The loop opened a connection and issued PRAGMA journal_mode=WAL
+        per id -- 100 connects for one classify request, before a single
+        model call."""
+        ids = [r["advisory_id"] for r in self.records]
+        with mock.patch.object(cache, "_connect", wraps=cache._connect) as connect:
+            found = cache.get_advisories(ids, path=self.db)
+        self.assertEqual(len(found), len(ids))
+        self.assertEqual(connect.call_count, 1)
+
     def test_unknown_ids_are_simply_absent(self):
         found = cache.get_advisories(
             ["GHSA-00001", "GHSA-does-not-exist"], path=self.db)
@@ -276,6 +286,18 @@ class TestMigrationsFailLoudly(unittest.TestCase):
         cache.init_db(self.db)
         self.assertEqual(sorted(self._versions()),
                          [v for v, _ in cache._MIGRATIONS])
+
+    def test_no_index_is_created_for_a_column_no_query_uses(self):
+        """Every read of advisories is `WHERE advisory_id = ?` (the primary
+        key) or COUNT(*). An index on cve_id served none of them and cost a
+        write on every upsert."""
+        cache.init_db(self.db)
+        indexed = set()
+        with sqlite3.connect(self.db) as conn:
+            for row in conn.execute("PRAGMA index_list('advisories')").fetchall():
+                for info in conn.execute(f"PRAGMA index_info('{row[1]}')"):
+                    indexed.add(info[2])
+        self.assertNotIn("cve_id", indexed)
 
     def test_rerunning_is_idempotent(self):
         cache.init_db(self.db)

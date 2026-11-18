@@ -19,3 +19,7 @@ osv_cache/
 .coverage
 .coverage.*
 htmlcov/
+
+# Dev-only frontend checkers (package.json devDependencies).
+# Nothing here is served: VulnSight has no bundler and no build step.
+node_modules/

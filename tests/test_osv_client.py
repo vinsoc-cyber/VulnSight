@@ -411,5 +411,125 @@ class TestConcurrentLoadsParseOnce(unittest.TestCase):
         self.assertEqual(records[0]["advisory_id"], "cached")
 
 
+def _no_sleep_retries(call, **kwargs):
+    """http_retry.with_retries with the backoff sleep stubbed out.
+
+    `sleep` is a default argument bound at import, so patching
+    http_retry.time.sleep does not reach it.
+    """
+    kwargs.setdefault("sleep", lambda _seconds: None)
+    return _REAL_WITH_RETRIES(call, **kwargs)
+
+
+_REAL_WITH_RETRIES = osv_client.http_retry.with_retries
+
+
+class TestAFailedRefreshKeepsAUsableCache(unittest.TestCase):
+    """The freshness check only short-circuits on success, so once the zip was
+    a day old a transient download failure dropped OSV from the search
+    entirely -- while a perfectly usable copy sat on disk."""
+
+    def _stale_cache(self, directory):
+        path = osv_client._zip_path("Go")
+        with open(path, "wb") as handle:
+            handle.write(make_osv_zip([OSV_NATIVE]))
+        os.utime(path, (0, 0))          # far older than DEFAULT_MAX_AGE
+        return path
+
+    def test_a_stale_cache_is_used_when_the_refresh_fails(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            path = self._stale_cache(directory)
+            with self.assertLogs("modules.osv_client", level="WARNING") as logs:
+                self.assertEqual(osv_client.download_ecosystem("Go"), path)
+            with open(path, "rb") as handle:
+                self.assertTrue(handle.read())
+        self.assertTrue(any("using the cached copy" in line for line in logs.output),
+                        logs.output)
+
+    def test_an_explicit_refresh_still_reports_the_failure(self):
+        """force=True is the user asking for fresh data; handing back the old
+        copy silently would be the same silence in a different place."""
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            self._stale_cache(directory)
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go", force=True)
+
+    def test_no_cache_at_all_still_reports_the_failure(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go")
+
+
+class TestAnEcosystemNameWithASpaceIsFetchable(unittest.TestCase):
+    """Several OSV ecosystem names contain a space ("GitHub Actions").
+
+    Interpolated raw, http.client rejects the request path outright -- so the
+    `actions` ecosystem the UI offers in its dropdown could never be fetched
+    at all, and the broad handler reported it as a generic "OSV fetch failed".
+    """
+
+    def test_the_url_percent_encodes_the_name(self):
+        seen = {}
+        payload = make_osv_zip([OSV_NATIVE])
+
+        def capture(req, timeout=None):
+            seen["url"] = req.full_url
+            response = mock.MagicMock()
+            body = io.BytesIO(payload)
+            response.read.side_effect = body.read
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            return response
+
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=capture):
+            osv_client.download_ecosystem(
+                osv_client.ECOSYSTEM_MAP["actions"], force=True)
+        self.assertIn("GitHub%20Actions", seen["url"])
+        self.assertNotIn(" ", seen["url"])
+
+
+class TestCacheStatusSurvivesAVanishingFile(unittest.TestCase):
+    """These caches are documented as safe to delete at any time, and this
+    renders on every healthcheck: a file removed between the existence check
+    and the read must not take /api/meta down."""
+
+    def test_a_file_removed_mid_read_is_skipped(self):
+        def vanishing(path):
+            raise OSError(2, "No such file or directory", path)
+
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory):
+            with open(osv_client._zip_path("Go"), "wb") as handle:
+                handle.write(b"x" * 10)
+            with mock.patch.object(osv_client.os.path, "getsize", vanishing):
+                self.assertEqual(osv_client.cache_status(), [])
+
+    def test_a_present_cache_is_still_reported(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory):
+            with open(osv_client._zip_path("Go"), "wb") as handle:
+                handle.write(b"x" * 10)
+            status = osv_client.cache_status()
+        self.assertEqual([entry["ecosystem"] for entry in status], ["go"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

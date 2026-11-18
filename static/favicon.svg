@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img"
+     aria-label="VulnSight">
+  <!-- The same mark as the topbar logo: VS monogram on the accent fill.
+       Two <style> blocks rather than light-dark(), because a favicon is
+       rendered by browser chrome that does not always inherit the page's
+       color-scheme. -->
+  <style>
+    .plate { fill: #334e68; }
+    .mono  { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .plate { fill: #8fb3d9; }
+      .mono  { fill: #121820; }
+    }
+  </style>
+  <rect class="plate" width="64" height="64" rx="14"/>
+  <text class="mono" x="32" y="33" text-anchor="middle"
+        dominant-baseline="central"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="26" font-weight="800" letter-spacing="-1.5">VS</text>
+</svg>

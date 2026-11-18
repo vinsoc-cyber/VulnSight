@@ -18,17 +18,17 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 604 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 642 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **24/24 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **82/82 caught** |
 
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 24 named bugs in the working tree, runs the test module that is
+each of 82 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -225,3 +225,115 @@ is true of the class tables in [bug classes](bug-classes.md).
 | `focusWhenVisible` timer not cleared | **kept** — the `done` flag guards it |
 | `esc` implemented twice | fixed |
 | No tests for `esc` / `safeUrl` / XSS end to end | fixed |
+
+<!-- begin generated check index -->
+
+## The 82 checks, by area
+
+Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
+test fails if it drifts. Each line is a bug that was really in this
+codebase and the test module that now refuses to let it back in.
+
+### First pass: security, merge, sources, taxonomy, docs (27)
+
+| Reverting this | is caught by |
+|---|---|
+| bind guard trusts HOST again | `tests/test_security.py` |
+| merge promotes the last severity, not the worst | `tests/test_search_service.py` |
+| one bad record sinks the GHSA batch again | `tests/test_search_service.py` |
+| prompt fence removed | `tests/test_ai_classifier.py` |
+| catalog generator stops validating Version | `tests/test_generate_cwe_catalog.py` |
+| cooldown overwrites instead of taking the max | `tests/test_ai_classifier.py` |
+| migrations stamped even when they fail | `tests/test_cache.py` |
+| job reconciliation ignores the owner again | `tests/test_jobs.py` |
+| cve_id sorts as text | `tests/test_search_service.py` |
+| severity synonyms stop folding | `tests/test_search_service.py` |
+| NVD windows overlap again | `tests/test_nvd_client.py` |
+| GHSA pagination breaks on the wrong Link header | `tests/test_ghsa_client.py` |
+| GHSA cursor trusted again | `tests/test_ghsa_client.py` |
+| OSV load lock removed | `tests/test_osv_client.py` |
+| OSV cache path stops being validated | `tests/test_osv_client.py` |
+| auth falls back to a path prefix | `tests/test_app.py` |
+| classify defaults a missing category to bac | `tests/test_app.py` |
+| taxonomy regressions (CWE-913 back in bac) | `tests/test_cwe_categories.py` |
+| bare 'bypass' keyword returns | `tests/test_cwe_categories.py` |
+| verdict fingerprint drops base_url | `tests/test_ai_classifier.py` |
+| verdict shape stops being uniform | `tests/test_ai_classifier.py` |
+| module map rewrite eats the newline before the closing fence | `tests/test_doc_sync_tools.py` |
+| testing-doc counts stop being derived | `tests/test_doc_sync_tools.py` |
+| the brand paints on top of the status pills | `tests/test_ui_e2e.py` |
+| a disabled button keeps its warning colour again | `tests/test_ui_e2e.py` |
+| app.js loses its scope wrapper | `tests/test_frontend_js.py` |
+| module-map drift test stops deriving | `tests/test_docs.py` |
+
+### HTTP layer, jobs, cache, config, AI classifier (21)
+
+| Reverting this | is caught by |
+|---|---|
+| a job stays running when recording its terminal state raises | `tests/test_jobs.py` |
+| a job that cannot be marked running is abandoned in queued | `tests/test_jobs.py` |
+| finished jobs are pruned only at process start | `tests/test_jobs.py` |
+| error_status is persisted but never served to the poller | `tests/test_jobs.py` |
+| every job poll parses the stored request body it then discards | `tests/test_jobs.py` |
+| one SQLite connection per advisory id in a classify request | `tests/test_cache.py` |
+| an index on advisories(cve_id) that no query uses | `tests/test_cache.py` |
+| two workers mint different API tokens into the same file | `tests/test_security.py` |
+| the generated API token is printed into docker logs | `tests/test_security.py` |
+| rate-limit eviction scans every key and drops the one being limited | `tests/test_security.py` |
+| 'export FOO=bar' in .env sets a variable named 'export FOO' | `tests/test_config.py` |
+| the AI key cooldown file is written outside VULNSIGHT_DATA_DIR | `tests/test_config.py` |
+| AIConfig's repr prints every API key | `tests/test_ai_classifier.py` |
+| only the description is capped, so a prompt field can be unbounded | `tests/test_ai_classifier.py` |
+| the health check spends a paid call on a key known to be cooling | `tests/test_ai_classifier.py` |
+| the raw provider error body is handed back to the caller | `tests/test_ai_classifier.py` |
+| one transient 429 ends the whole batch on a single-key setup | `tests/test_ai_classifier.py` |
+| a guard-blocked response carries an empty CSP nonce | `tests/test_app.py` |
+| the rate limiter matches the path, so /api/v1 is unlimited | `tests/test_app.py` |
+| the OpenAPI document is rebuilt for every unauthenticated request | `tests/test_openapi.py` |
+| the AI endpoints are missing from the OpenAPI document | `tests/test_openapi.py` |
+
+### Search pipeline and source clients (25)
+
+| Reverting this | is caught by |
+|---|---|
+| an empty base record erases another source's description | `tests/test_search_service.py` |
+| cvss_vector is dropped when the base record has none | `tests/test_search_service.py` |
+| ghsa_id is filled with a CVE id | `tests/test_search_service.py` |
+| records with no identifier all collapse onto one advisory_id | `tests/test_search_service.py` |
+| a non-numeric CVSS score crashes the merge | `tests/test_search_service.py` |
+| osv-native has no base priority and ties on fetch order | `tests/test_search_service.py` |
+| every selected source failing answers 200, not 502 | `tests/test_search_service.py` |
+| NVD silently drops the advisory-type filter | `tests/test_search_service.py` |
+| NVD silently drops the ecosystem filter | `tests/test_search_service.py` |
+| a partly failed NVD fetch is reported as a complete one | `tests/test_search_service.py` |
+| EPSS failure fabricates a ranking | `tests/test_search_service.py` |
+| the EPSS lookup is case-sensitive | `tests/test_search_service.py` |
+| source_records ships in every response and is cached | `tests/test_search_service.py` |
+| count: 0 cannot be told apart from an outage | `tests/test_search_service.py` |
+| VALID_SORTS drifts from the sort-field map | `tests/test_search_service.py` |
+| one malformed OSV record kills the whole export | `tests/test_osv_client.py` |
+| the OSV bulk download is buffered whole with no size cap | `tests/test_osv_client.py` |
+| a failed OSV refresh throws away a usable cached export | `tests/test_osv_client.py` |
+| an OSV ecosystem whose name has a space can never be fetched | `tests/test_osv_client.py` |
+| a cache file that vanishes mid-read crashes the healthcheck | `tests/test_osv_client.py` |
+| normalised OSV packages carry purl/ranges/versions and a null range | `tests/test_osv_client.py` |
+| one malformed NVD record sinks the whole batch | `tests/test_nvd_client.py` |
+| NVD's CVSS vector is read and thrown away | `tests/test_nvd_client.py` |
+| a failing later page discards the advisories already fetched | `tests/test_ghsa_client.py` |
+| EPSS is queried with the publisher's casing | `tests/test_epss_client.py` |
+
+### CWE taxonomy and the browser code (9)
+
+| Reverting this | is caught by |
+|---|---|
+| CWE-436 separated from its own child again | `tests/test_cwe_categories.py` |
+| 'acl' returns as a bare substring trap | `tests/test_cwe_categories.py` |
+| junk short forms come back into the derived keywords | `tests/test_cwe_categories.py` |
+| real short search terms are rejected as noise | `tests/test_cwe_categories.py` |
+| safeAttr throws on a non-string again | `tests/test_frontend_js.py` |
+| esc stops coercing its argument | `tests/test_frontend_js.py` |
+| Enter commits an option nothing highlighted | `tests/test_ui_e2e.py` |
+| an empty listbox row stops being presentational | `tests/test_ui_e2e.py` |
+| toasts stop sharing one live region | `tests/test_ui_e2e.py` |
+
+<!-- end generated check index -->

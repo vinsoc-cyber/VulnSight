@@ -228,5 +228,45 @@ class TestPaginationCursorHandling(unittest.TestCase):
         self.assertIn("after=abc", path)
 
 
+class TestAFailingLaterPageKeepsWhatSucceeded(unittest.TestCase):
+    """Losing 200 advisories because page 3 of 5 failed made a flaky page look
+    like a dead source. Whatever has already been collected is returned."""
+
+    def _first_page_then_failure(self, next_url):
+        calls = {"i": 0}
+
+        def _run(cmd, capture_output, text, timeout):
+            calls["i"] += 1
+            if calls["i"] == 1:
+                headers = ("HTTP/2 200\ncontent-type: application/json"
+                           f'\nLink: <{next_url}>; rel="next"')
+                return mock.Mock(
+                    returncode=0,
+                    stdout=headers + "\n\n" + json.dumps([{"ghsa_id": "A"}]),
+                    stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="boom")
+
+        return _run, calls
+
+    def test_the_pages_that_succeeded_are_still_returned(self):
+        run, calls = self._first_page_then_failure(
+            "https://api.github.com/advisories?after=x")
+        with mock.patch("modules.ghsa_client.subprocess.run", side_effect=run):
+            res = ghsa.fetch_advisories(
+                ghsa.SearchParams(per_page=1, max_results=10))
+        self.assertEqual([r["ghsa_id"] for r in res], ["A"])
+        self.assertEqual(calls["i"], 2, "the second page was never attempted")
+
+    def test_a_first_page_that_fails_is_still_an_error(self):
+        """Nothing collected means the source really did fail; degrading to an
+        empty list there would report "no advisories" for an outage."""
+        def _run(cmd, capture_output, text, timeout):
+            return mock.Mock(returncode=1, stdout="", stderr="boom")
+
+        with mock.patch("modules.ghsa_client.subprocess.run", side_effect=_run):
+            with self.assertRaises(ghsa.GhCliError):
+                ghsa.fetch_advisories(ghsa.SearchParams(max_results=10))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

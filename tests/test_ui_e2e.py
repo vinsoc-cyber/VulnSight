@@ -257,6 +257,143 @@ class TestCweFinder(UITestCase):
             "() => document.querySelector('#cwe-options').hidden"))
 
 
+class TestTheComboboxSaysWhatEnterWillDo(UITestCase):
+    """`Enter` has always added match 0, but nothing carried
+    aria-selected and no row was styled, so there was no way -- by eye or
+    by screen reader -- to see which CWE you were about to add. The listbox
+    also rendered its "no matches" line as a bare <li>, which inside
+    role="listbox" is announced as a selectable option that cannot be
+    selected."""
+
+    def _type(self, query):
+        box = self.page.query_selector("#cwe-search")
+        assert box is not None
+        box.click()
+        box.fill(query)
+        self.page.wait_for_timeout(250)
+
+    def test_a_match_is_highlighted_before_any_key_is_pressed(self):
+        self.open()
+        self._type("idor")
+        state = self.page.evaluate("""() => {
+          const opts = [...document.querySelectorAll('#cwe-options .combo-option')];
+          return {
+            count: opts.length,
+            selected: opts.filter(o => o.getAttribute('aria-selected') === 'true').length,
+            firstIsSelected: opts.length
+              ? opts[0].getAttribute('aria-selected') === 'true' : false,
+            activedescendant: document.querySelector('#cwe-search')
+              .getAttribute('aria-activedescendant'),
+          };
+        }""")
+        self.assertGreater(state["count"], 0, "no matches for a known alias")
+        self.assertEqual(state["selected"], 1,
+                         "exactly one option must be marked selected")
+        self.assertTrue(state["firstIsSelected"],
+                        "Enter adds match 0, so match 0 is what must be marked")
+        self.assertTrue(state["activedescendant"],
+                        "the input must point at the highlighted option")
+
+    def test_enter_adds_the_option_that_was_highlighted(self):
+        self.open()
+        self._type("idor")
+        expected = self.page.evaluate(
+            "() => document.querySelector('#cwe-options .combo-option[aria-selected=\"true\"]')"
+            ".textContent.trim().slice(0, 24)")
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(250)
+        chips = self.page.evaluate(
+            "() => [...document.querySelectorAll('#selected-chips .chip-text')]"
+            ".map(c => c.textContent.trim())")
+        self.assertTrue(
+            any(expected.split()[0] in c for c in chips),
+            f"Enter added something other than the highlighted row: "
+            f"{expected!r} not in {chips}")
+
+    def test_the_no_matches_row_is_not_announced_as_an_option(self):
+        self.open()
+        self._type("zzzzz-no-such-bug-class")
+        rows = self.page.evaluate("""() => {
+          const list = document.querySelector('#cwe-options');
+          return [...list.querySelectorAll('li')].map(li => ({
+            role: li.getAttribute('role'),
+            text: li.textContent.trim().slice(0, 30),
+          }));
+        }""")
+        self.assertTrue(rows, "the listbox rendered nothing at all")
+        for row in rows:
+            self.assertIn(
+                row["role"], ("presentation", "none"),
+                f"a non-option row inside role=listbox must be presentational: {row}")
+
+
+class TestToastsShareOneLiveRegion(UITestCase):
+    """Each toast used to be appended to <body> with its own aria-live, so
+    two at once were two competing live regions: screen readers interleave
+    or drop them, and the visual stack had nothing positioning it.
+
+    The toast is driven through a real user path with no network behind it
+    -- clearing the class selection and pressing the scan button -- so the
+    assertion is unconditional. An earlier version of this test only
+    checked the region "if one exists", which passed vacuously whenever no
+    toast fired, and so stayed green with the defect reinstated.
+    """
+
+    tolerated_errors: list[str] = []
+
+    def _raise_a_toast(self):
+        """Remove every selected class, then ask for a scan."""
+        for _ in range(12):
+            chip = self.page.query_selector("#selected-chips .chip-x")
+            if not chip:
+                break
+            chip.click()
+            self.page.wait_for_timeout(60)
+        self.page.click("#auto-btn")
+        self.page.wait_for_selector(".toast", timeout=4000)
+
+    def test_a_toast_appears_at_all(self):
+        """If this fails the other two prove nothing."""
+        self.open()
+        self._raise_a_toast()
+        self.assertGreater(
+            self.page.evaluate("() => document.querySelectorAll('.toast').length"), 0)
+
+    def test_every_toast_lives_in_one_named_region(self):
+        self.open()
+        self._raise_a_toast()
+        state = self.page.evaluate("""() => {
+          const regions = [...document.querySelectorAll('.toast-region')];
+          return {
+            regions: regions.length,
+            role: regions[0] && regions[0].getAttribute('role'),
+            label: regions[0] && regions[0].getAttribute('aria-label'),
+            strays: [...document.querySelectorAll('.toast')]
+              .filter(t => !t.closest('.toast-region')).length,
+          };
+        }""")
+        self.assertEqual(state["regions"], 1,
+                         "there must be exactly one toast region, so exactly "
+                         "one live region")
+        self.assertEqual(state["role"], "region")
+        self.assertTrue(state["label"], "the toast region needs an accessible name")
+        self.assertEqual(state["strays"], 0,
+                         "a toast rendered outside the shared region")
+
+    def test_a_second_toast_joins_the_same_region(self):
+        self.open()
+        self._raise_a_toast()
+        self.page.click("#auto-btn")
+        self.page.wait_for_timeout(400)
+        state = self.page.evaluate("""() => ({
+          regions: document.querySelectorAll('.toast-region').length,
+          toasts: document.querySelectorAll('.toast-region .toast').length,
+        })""")
+        self.assertEqual(state["regions"], 1,
+                         "a second toast must not create a second live region")
+        self.assertGreaterEqual(state["toasts"], 1)
+
+
 class TestClassFilter(UITestCase):
     def test_filter_hides_rows_on_screen_not_just_in_the_dom(self):
         self.open()
@@ -658,6 +795,177 @@ class TestAccessibility(UITestCase):
                     "focus escaped the modal panel")
         finally:
             page.close()
+
+
+class TestTopbarLayoutHolds(UITestCase):
+    """The topbar's brand column is `minmax(0, 1fr)`, so it shrinks before
+    the status pills do. Nothing stopped the wordmark from painting outside
+    the box it had shrunk to, and at phone width it ran underneath the
+    pills: the page rendered "VulnSigh" with a badge over the rest. Every
+    property-based check passed while it did -- the element was the right
+    size, the text was the right string, contrast was fine. Only geometry
+    catches this, so assert on geometry."""
+
+    BOXES = """() => {
+      const pick = s => [...document.querySelectorAll(s)]
+        .filter(el => {
+          const c = getComputedStyle(el);
+          if (c.display === 'none' || c.visibility === 'hidden') return false;
+          // A visually-hidden element is clipped to 1px and paints nothing.
+          const b = el.getBoundingClientRect();
+          return b.width > 2 && b.height > 2;
+        })
+        .map(el => {
+          const b = el.getBoundingClientRect();
+          return {name: el.className || el.tagName,
+                  l: b.left, r: b.right, t: b.top, b: b.bottom};
+        });
+      // The logo as well as the wordmark: the brand column was
+      // minmax(0, 1fr), so at 320px it collapsed to 21px and the 32px mark
+      // painted straight over the first status pill.
+      return {brand: pick('.topbar .brand-name, .topbar .logo'),
+              status: pick('.topbar .system-status > *')};
+    }"""
+
+    def _overlaps(self, page):
+        boxes = page.evaluate(self.BOXES)
+        hits = []
+        for a in boxes["brand"]:
+            for c in boxes["status"]:
+                if (a["l"] < c["r"] and c["l"] < a["r"]
+                        and a["t"] < c["b"] and c["t"] < a["b"]):
+                    hits.append((a["name"], c["name"]))
+        return hits, boxes
+
+    def _at(self, width, height=844):
+        page = self.browser.new_page(viewport={"width": width, "height": height})
+        page.goto(self.base, wait_until="networkidle")
+        return page
+
+    def test_the_brand_never_paints_under_the_status_pills(self):
+        self.open()
+        for width in (320, 360, 390, 414, 460, 480, 700, 900, 1400):
+            page = self._at(width)
+            try:
+                hits, _boxes = self._overlaps(page)
+                self.assertEqual(
+                    hits, [],
+                    f"at {width}px the brand overlaps the status pills: {hits}")
+                self.assertFalse(
+                    page.evaluate("() => document.documentElement.scrollWidth"
+                                  " > window.innerWidth + 1"),
+                    f"the page scrolls horizontally at {width}px")
+            finally:
+                page.close()
+
+    def test_the_wordmark_is_never_cut_off_where_it_is_shown(self):
+        """Hidden is fine; half-painted is not. Where the name is on screen
+        it must fit the box it is given."""
+        self.open()
+        for width in (320, 390, 414, 480, 700, 900, 1400):
+            page = self._at(width)
+            try:
+                state = page.evaluate("""() => {
+                  const el = document.querySelector('.brand-name');
+                  const b = el.getBoundingClientRect();
+                  return {shown: b.width > 2,
+                          scrollW: el.scrollWidth, clientW: el.clientWidth};
+                }""")
+                if state["shown"]:
+                    self.assertLessEqual(
+                        state["scrollW"], state["clientW"] + 1,
+                        f"at {width}px the wordmark overflows its box")
+            finally:
+                page.close()
+
+    def test_the_brand_link_is_still_announced_in_full_when_hidden(self):
+        """At narrow widths the name is clipped out of view rather than
+        removed, so the home link does not degrade to just "VS"."""
+        self.open()
+        page = self._at(390)
+        try:
+            self.assertIn("VulnSight", page.evaluate(
+                "() => document.querySelector('.brand').textContent"))
+        finally:
+            page.close()
+
+    def test_a_disabled_action_does_not_keep_its_warning_colour(self):
+        """`button.warn-btn` is declared after `button:disabled` at equal
+        specificity, so "Retry failed" stayed full amber while unclickable --
+        the loudest control on an empty page, and not clickable."""
+        self.open()
+        state = self.page.evaluate("""() => {
+          const el = document.getElementById('retry-btn');
+          const faint = getComputedStyle(document.documentElement)
+            .getPropertyValue('--faint').trim();
+          const probe = document.createElement('span');
+          probe.style.color = faint;
+          document.body.appendChild(probe);
+          const want = getComputedStyle(probe).color;
+          probe.remove();
+          return {disabled: el.disabled, color: getComputedStyle(el).color,
+                  want, cursor: getComputedStyle(el).cursor};
+        }""")
+        self.assertTrue(state["disabled"], "retry should be disabled with no results")
+        self.assertEqual(state["color"], state["want"],
+                         "a disabled button must not keep its accent colour")
+        self.assertEqual(state["cursor"], "not-allowed")
+
+
+class TestNothingLeaksToTheWindow(UITestCase):
+    """static/app.js had no wrapper, so every function and every piece of
+    its state was a property of `window`. That is not theoretical: `let AI
+    = {}` shares a name with the browser's own `AI` global, and anything
+    the platform adds later is free to collide with the other ~79."""
+
+    # Names the file defines at its top level. If the wrapper goes, these
+    # are the first things to appear on window.
+    EXPECTED_PRIVATE = [
+        "AI", "LAST", "SEARCH_META", "CLASSES", "POPULAR", "PICKED", "ENTRIES",
+        "search", "renderCard", "renderSummary", "renderHistory", "toast",
+        "esc", "safeUrl", "safeAttr", "classHaystack", "classEntries",
+        "scoreEntry", "pickEntry", "setFilterPanel", "focusAnchor",
+        "restoreFocus", "refreshPackages", "sanitizeCategories",
+        "stateSignature", "relativeTime", "publishedWindow", "refineAI",
+    ]
+
+    def test_app_js_puts_nothing_on_window(self):
+        self.open()
+        leaked = self.page.evaluate(
+            "names => names.filter(n => Object.prototype.hasOwnProperty.call(window, n))",
+            self.EXPECTED_PRIVATE)
+        self.assertEqual(leaked, [], f"app.js leaked {leaked} onto window")
+
+    def test_the_page_still_works_under_strict_mode(self):
+        """The wrapper brought 'use strict' with it, which turns silent
+        failures (assigning to an undeclared name, writing a read-only
+        property) into thrown errors. If any of those existed, the page
+        would break where it previously limped."""
+        errors = []
+        self.page.on("pageerror", lambda e: errors.append(str(e)))
+        self.open()
+        # Exercise the paths that write state: the picker, a class tick, the
+        # theme cycle and the history list. Under sloppy mode an assignment
+        # to an undeclared or read-only name here would be silent.
+        self.page.fill("#cwe-search", "idor")
+        self.page.wait_for_timeout(250)
+        self.page.keyboard.press("Escape")
+        box = self.page.query_selector("#class-list input[type=checkbox]")
+        if box:
+            box.click()
+        toggle = self.page.query_selector("#theme-toggle")
+        if toggle:
+            for _ in range(3):
+                toggle.click()
+                self.page.wait_for_timeout(80)
+        self.page.wait_for_timeout(200)
+        self.assertEqual(errors, [], f"strict mode surfaced: {errors}")
+
+    def test_the_boot_payload_is_the_only_thing_the_server_sets(self):
+        self.open()
+        self.assertTrue(self.page.evaluate(
+            "() => Object.prototype.hasOwnProperty.call(window, 'BOOT')"),
+            "window.BOOT is the server->client contract and must stay")
 
 
 if __name__ == "__main__":

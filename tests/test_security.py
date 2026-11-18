@@ -246,6 +246,21 @@ class TestResolvedBindHost(unittest.TestCase):
             second = security._load_or_create_token(path)
             self.assertEqual(first, second)
 
+    def test_a_worker_that_loses_the_race_reuses_the_winners_token(self):
+        """The real race: both workers are already past the "no file yet"
+        check when the first one writes. Without an exclusive create the
+        second overwrites it, so the file holds one token while each worker
+        authenticates against its own -- a client gets 401 from one and 200
+        from the next, with no diagnosable pattern."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            path = os.path.join(tmp, security.TOKEN_FILENAME)
+            first = security._load_or_create_token(path)
+            with mock.patch("os.path.isfile", return_value=False):
+                second = security._load_or_create_token(path)
+        self.assertEqual(second, first)
+
     def test_the_generated_token_is_not_printed_when_stderr_is_not_a_tty(self):
         """The shipped Dockerfile pipes stderr to --error-logfile -."""
         env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
@@ -349,6 +364,21 @@ class TestRateLimiter(unittest.TestCase):
         self.assertTrue(limiter.allow("b"))
         self.assertTrue(limiter.allow("c"))
         self.assertLessEqual(len(limiter._hits), 2)
+
+
+    def test_the_key_being_rate_limited_is_not_the_one_evicted(self):
+        """Eviction used to scan every key for the oldest *hit*, under the
+        lock. A caller over its budget stops appending hits, so its own
+        bucket became the oldest and was the one dropped -- which hands the
+        window back to exactly the caller the limiter is holding down."""
+        limiter = security.RateLimiter(1, 60, max_keys=2)
+        self.assertTrue(limiter.allow("attacker"))
+        self.assertTrue(limiter.allow("quiet"))
+        self.assertFalse(limiter.allow("attacker"))   # over budget, still active
+        self.assertTrue(limiter.allow("newcomer"))    # cap reached: one is evicted
+        self.assertLessEqual(len(limiter._hits), 2)
+        self.assertFalse(limiter.allow("attacker"),
+                         "evicting the limited key resets its window")
 
 
 class TestDocsHygiene(unittest.TestCase):

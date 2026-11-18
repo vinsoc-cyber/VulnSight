@@ -203,5 +203,28 @@ class TestErrorHandling(unittest.TestCase):
         self.assertEqual(len(result), 100)
 
 
+class TestTheQuerySentToFirst(unittest.TestCase):
+    """FIRST keys its response case-sensitively, and the merge preserves
+    whatever casing the publisher used, so a lower-cased alias asked for a CVE
+    the API does not know and came back with nothing -- indistinguishable in
+    the UI from an advisory that genuinely has no score."""
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_lowercased_cve_is_upper_cased_on_the_way_out(self, mock_open):
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen["url"] = req.full_url
+            return _mock_urlopen({"data": [
+                {"cve": "CVE-2024-1234", "epss": "0.5", "percentile": "0.9"},
+            ]})
+
+        mock_open.side_effect = capture
+        result = epss_client.fetch_epss(["cve-2024-1234"])
+        self.assertIn("CVE-2024-1234", seen["url"])
+        self.assertNotIn("cve-2024-1234", seen["url"])
+        self.assertIn("CVE-2024-1234", result)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

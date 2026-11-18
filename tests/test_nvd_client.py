@@ -375,5 +375,88 @@ class TestOneBadRecordDoesNotSinkTheBatch(unittest.TestCase):
         self.assertEqual(records.identify({"id": "CVE-1"}, "id"), "CVE-1")
 
 
+class TestFetchNvdDegradesOneRecordAtATime(unittest.TestCase):
+    """The guard has to be in fetch_nvd, not only in the helper it calls.
+
+    TestOneBadRecordDoesNotSinkTheBatch drives records.normalize_all directly,
+    which stays green if the caller stops using it -- and the caller is where
+    the AttributeError escapes as a 500 for the whole search, discarding the
+    sources that had already succeeded.
+    """
+
+    def _vuln(self, cve_id, **overrides):
+        cve = {
+            "id": cve_id,
+            "descriptions": [{"lang": "en", "value": f"description of {cve_id}"}],
+            "published": "2026-01-01T00:00:00.000",
+            "lastModified": "2026-01-01T00:00:00.000",
+            "metrics": {}, "weaknesses": [], "configurations": [], "references": [],
+        }
+        cve.update(overrides)
+        return {"cve": cve}
+
+    @mock.patch("modules.nvd_client.time.sleep")
+    def test_a_malformed_record_does_not_sink_the_fetch(self, mock_sleep):
+        batch = [
+            self._vuln("CVE-2026-1"),
+            # A bare string where NVD documents an object: normalize() calls
+            # .get() on it and raises AttributeError, which is not an NvdError.
+            self._vuln("CVE-2026-2", weaknesses=["CWE-79"]),
+            self._vuln("CVE-2026-3"),
+        ]
+        with mock.patch.object(nvd_client, "_fetch_cves_for_cwe",
+                               return_value=batch):
+            results = nvd_client.fetch_nvd(
+                nvd_client.NvdSearchParams(cwes=["79"], max_results=10))
+        self.assertEqual(sorted(r["cve_id"] for r in results),
+                         ["CVE-2026-1", "CVE-2026-3"])
+
+    @mock.patch("modules.nvd_client.time.sleep")
+    def test_a_clean_fetch_keeps_everything(self, mock_sleep):
+        batch = [self._vuln("CVE-2026-1"), self._vuln("CVE-2026-2")]
+        with mock.patch.object(nvd_client, "_fetch_cves_for_cwe",
+                               return_value=batch):
+            results = nvd_client.fetch_nvd(
+                nvd_client.NvdSearchParams(cwes=["79"], max_results=10))
+        self.assertEqual(len(results), 2)
+
+
+class TestTheCvssVectorReachesTheRow(unittest.TestCase):
+    """docs/data-sources.md credits NVD with CVSS v3/v4 vectors.
+
+    The vector was read out of the metrics block and thrown away, so
+    cvss_vector was OSV-only: a GHSA+NVD merge showed it null with nothing to
+    look up even when NVD had supplied one.
+    """
+
+    def _vuln(self, metrics):
+        return {"cve": {
+            "id": "CVE-2026-1",
+            "descriptions": [{"lang": "en", "value": "d"}],
+            "metrics": metrics, "weaknesses": [],
+            "configurations": [], "references": [],
+        }}
+
+    def test_a_v31_vector_is_carried(self):
+        vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        row = nvd_client.normalize(self._vuln({"cvssMetricV31": [
+            {"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL",
+                          "vectorString": vector}}]}))
+        self.assertEqual(row.get("cvss_vector"), vector)
+        self.assertEqual(row["cvss_score"], 9.8)
+
+    def test_a_v2_vector_is_carried_too(self):
+        vector = "AV:N/AC:L/Au:N/C:P/I:P/A:P"
+        row = nvd_client.normalize(self._vuln({"cvssMetricV2": [
+            {"baseSeverity": "HIGH",
+             "cvssData": {"baseScore": 7.5, "vectorString": vector}}]}))
+        self.assertEqual(row.get("cvss_vector"), vector)
+
+    def test_no_metrics_means_an_explicit_null(self):
+        row = nvd_client.normalize(self._vuln({}))
+        self.assertIn("cvss_vector", row)
+        self.assertIsNone(row["cvss_vector"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

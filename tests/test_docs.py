@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import app as app_module
 from modules import cwe_catalog
-from tools import (revert_checks, sync_bug_classes_doc, sync_module_map,
-                   sync_testing_doc)
+from tools import (revert_checks, sync_bug_classes_doc, sync_check_counts,
+                   sync_module_map, sync_testing_doc)
 from modules.cwe_categories import CATEGORIES, picker_catalog, resolve_cwes
 from modules.search_service import MAX_CATEGORY_INPUTS
 
@@ -200,7 +200,8 @@ class TestDocsMatchTheCode(unittest.TestCase):
         """Both generators have a --check mode, and nothing ran it. A doc the
         tool would rewrite is a doc that has drifted, whatever the targeted
         assertions above happen to cover."""
-        for tool in (sync_module_map, sync_bug_classes_doc, sync_testing_doc):
+        for tool in (sync_module_map, sync_bug_classes_doc, sync_testing_doc,
+                     sync_check_counts):
             with self.subTest(tool=tool.__name__), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(

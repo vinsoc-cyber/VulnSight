@@ -615,6 +615,20 @@ class TestFlaskApp(unittest.TestCase):
         self.assertIn(f"'nonce-{nonce}'", csp)
 
 
+    def test_a_guard_blocked_response_still_carries_a_real_csp_nonce(self):
+        """before_request hooks run in registration order, so with the nonce
+        hook registered after the guards every response short-circuited by
+        CSRF, auth or the rate limiter carried `script-src 'self' 'nonce-'`:
+        a malformed source expression."""
+        r = self.client.post(
+            "/api/search",
+            json={"categories": ["bac"]},
+            headers={"Origin": "https://evil.example"},
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertNotIn("'nonce-'", r.headers["Content-Security-Policy"])
+
+
 class TestApiVersioning(unittest.TestCase):
     """Every API route answers on both /api/... and /api/v1/...."""
 

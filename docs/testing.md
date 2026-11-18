@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 604 tests: 578 offline + 26 browser
+.venv/bin/python -m unittest discover -s tests        # 642 tests: 603 offline + 39 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -14,27 +14,27 @@ OSV and the AI provider are all mocked.
 | File | Tests | Covers |
 |---|---|---|
 | `test_search_service.py` | 84 | query parsing, merge/dedupe, sort, filters, per-source degradation |
-| `test_ai_classifier.py` | 73 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
-| `test_app.py` | 70 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
+| `test_ai_classifier.py` | 74 | prompt fence, verdict aggregation, key rotation, cooldowns, cost cap |
+| `test_app.py` | 71 | routes, guards, `/api/v1` aliases, job endpoints, JSON errors, DOM contract |
 | `test_cwe_categories.py` | 45 | taxonomy invariants, `cwe:<id>`, picker catalog, keyword precision |
-| `test_security.py` | 40 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
-| `test_nvd_client.py` | 31 | date windowing, normalisation, rate-limit and 403 handling |
+| `test_security.py` | 42 | bind/exposure rules, CSRF origin check, rate limiter, proxy trust |
+| `test_nvd_client.py` | 36 | date windowing, normalisation, rate-limit and 403 handling |
 | `test_http_retry.py` | 27 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
-| `test_osv_client.py` | 26 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
-| `test_ui_e2e.py` | 26 | the real UI in a browser — *optional*, see below |
-| `test_cache.py` | 20 | SQLite lifecycle, migrations, the v4 id backfill |
+| `test_osv_client.py` | 32 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
+| `test_ui_e2e.py` | 39 | the real UI in a browser — *optional*, see below |
+| `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 30 | the two doc generators: rewrite, `--check`, alignment, failure paths |
-| `test_jobs.py` | 19 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
-| `test_ghsa_client.py` | 18 | `gh` invocation, cursor pagination, `Link` parsing |
+| `test_jobs.py` | 21 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
+| `test_ghsa_client.py` | 20 | `gh` invocation, cursor pagination, `Link` parsing |
 | `test_generate_cwe_catalog.py` | 15 | generated Python compiles, and XML attributes cannot inject code |
 | `test_docs.py` | 17 | doc/code agreement: quoted numbers, routes, env vars, links, counts |
 | `test_records.py` | 13 | the shared per-record guard: one bad advisory costs one advisory |
 | `test_cvss.py` | 12 | v3.0/3.1 base scores against spec vectors |
-| `test_epss_client.py` | 12 | batching, malformed responses |
+| `test_epss_client.py` | 13 | batching, malformed responses |
 | `test_openapi.py` | 12 | spec/route agreement, and real responses against the schemas |
-| `test_config.py` | 8 | `.env` parsing, `DATA_DIR`, numeric knobs |
+| `test_config.py` | 9 | `.env` parsing, `DATA_DIR`, numeric knobs |
 | `test_query_filters.py` | 5 | shared published/affects/severity predicates |
-| `test_frontend_js.py` | 1 | runs every `tests/*.js` under node |
+| `test_frontend_js.py` | 3 | runs every `tests/*.js` under node |
 
 ## Frontend helper tests (node)
 
@@ -131,6 +131,69 @@ accepted silently, measures nothing, and in this repo it also perturbed nine
 unrelated tests into failing. `.coveragerc` has it right; the warning is for
 anyone running coverage by hand.
 
+## The frontend
+
+`static/app.js` and `static/style.css` are served exactly as written -- no
+bundler, no build step -- so for a long time nothing checked them beyond
+`node --check`, which only parses. There are four checkers now, all dev-only
+(`package.json` devDependencies; nothing here is served):
+
+```bash
+npm install          # once
+npm run check        # eslint + stylelint + tsc + the node helper tests
+```
+
+**eslint** (`eslint.config.mjs`) selects bug-finding rules -- undeclared
+names, unreachable code, shadowed bindings, `==` vs `===`, `eval` -- and not
+a formatting opinion. Its first run found that `app.js` had no wrapper at
+all: ~79 functions and every piece of state were true globals, indented four
+spaces as a leftover from when the code lived inside a `<script>` tag in the
+template. `let AI = {}` shares a name with the browser's own `AI` global.
+The file is one IIFE in strict mode now, and
+`TestNothingLeaksToTheWindow` asserts nothing reaches `window`.
+
+**tsc** (`jsconfig.json`, `checkJs`) type-checks the JSDoc. It is not a
+compile step: `noEmit` is on. Writing down the `window.BOOT` contract
+immediately showed that two of the shapes the code assumed were not the
+shapes the server sends.
+
+**stylelint** (`.stylelintrc.json`) runs the standard config minus its
+formatting opinions -- the compact one-line rules in `style.css` are
+deliberate. What is left is substantive: it found `button` styled in two
+blocks 700 lines apart.
+
+### Measuring the design instead of looking at it
+
+```bash
+python tools/design_audit.py --out /tmp/shots
+```
+
+Starts the app, drives a real browser across seven viewport/theme states,
+and measures text contrast against the painted background, tap-target sizes,
+keyboard focus visibility, horizontal overflow and console errors. It exits
+non-zero when something fails, and writes screenshots and `report.json`.
+
+A screenshot proves a page rendered; it does not prove the page is any good,
+and a reviewer eyeballing one gets contrast wrong almost every time. Three
+cautions are baked into that script because each produced a false finding
+before it was understood:
+
+- `el.focus()` does not put Chrome into `:focus-visible` for a button, so
+  probing focus that way reports a correctly-styled page as having no focus
+  rings at all. Only pressing Tab is honest.
+- a focus ring usually lives on a wrapper via `:focus-within`, so checking
+  only `document.activeElement` reports every composed control as bare.
+- `getComputedStyle` returns `rgb()` in 0-255 **and** `color(srgb r g b)` --
+  which is what `color-mix()` resolves to -- in 0-1. Reading the second as
+  the first reported 16:1 text as 1.17:1 and produced a page of
+  contrast "failures" that did not exist.
+
+Real findings it did produce: the wordmark painted underneath the status
+pills below ~420px (and the logo did the same at 320px), `Retry failed` kept
+its full amber while disabled, and `/favicon.ico` 404'd on every first load
+because no icon was declared. All three are now covered by
+`TestTopbarLayoutHolds` and the revert checks.
+
 ## Proving a fix is actually locked
 
 A green suite says nothing about *which* fixes it defends. This suite was green
@@ -142,7 +205,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 24 named bugs it re-introduces the bug in the working tree, runs the
+For each of 82 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It writes to tracked files — it restores

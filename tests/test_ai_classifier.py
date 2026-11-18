@@ -923,6 +923,26 @@ class TestKeyRotationCost(unittest.TestCase):
         self.assertGreaterEqual(seconds, 60)
 
 
+    def test_the_health_check_does_not_spend_a_call_on_a_cooling_key(self):
+        """ping() called straight through, so the "Test AI" button spent a
+        paid request on a key already known to be out -- and with 8 keys at a
+        25s timeout could block for 200 seconds before reporting anything."""
+        cfg = self._config(keys=2)
+        calls = []
+
+        def never(*_args, **_kwargs):
+            calls.append(1)
+            raise AssertionError("spent a request on a key known to be cooling")
+
+        for key in ("key0", "key1"):
+            cfg.mark_skip_token(key, 600, persist=False)
+        with mock.patch("urllib.request.urlopen", never):
+            result = ai_classifier.ping(cfg)
+        self.assertEqual(calls, [])
+        self.assertFalse(result["ok"])
+        self.assertIn("cooling down", result["error"])
+
+
 class TestConfigReuse(unittest.TestCase):
     """Rotation state has to outlive the request that learned it."""
 

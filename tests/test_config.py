@@ -74,6 +74,18 @@ class TestDotenvIsLoadedBeforeConstants(unittest.TestCase):
             os.path.join(target, "advisories.db"),
         )
 
+    def test_the_cooldown_file_follows_the_dotenv_too(self):
+        """COOLDOWN_PATH was derived from BASE_DIR, the one piece of state
+        VULNSIGHT_DATA_DIR did not relocate: in Docker it was written to /app
+        and lost on every container replacement, re-learning which keys are
+        spent by paying for a request on each one."""
+        target = os.path.join(self.tmp, "elsewhere")
+        self.assertEqual(
+            self._probe(f"VULNSIGHT_DATA_DIR={target}\n",
+                        "ai_classifier.COOLDOWN_PATH"),
+            os.path.join(target, ".ai_key_cooldown.json"),
+        )
+
     def test_a_real_environment_variable_still_wins(self):
         """load_dotenv uses setdefault; the .env is a default, not an override."""
         with open(os.path.join(self.tmp, ".env"), "w", encoding="utf-8") as fh:

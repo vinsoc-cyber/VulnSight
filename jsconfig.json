@@ -1,0 +1,26 @@
+{
+  // static/app.js is 1700 lines of vanilla JS with no build step, so nothing
+  // checked it beyond `node --check` (a syntax check, not a type check).
+  // checkJs over the JSDoc annotations is the closest thing to a type
+  // checker this file can have without introducing a toolchain.
+  //
+  //   tsc -p jsconfig.json
+  //
+  // It is not a compile step: noEmit is on and nothing here is bundled.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "strict": false,
+    "skipLibCheck": true
+  },
+  // Only the shipped browser code. tests/*.js are node scripts that import
+  // node:fs and friends; type-checking them would mean adding @types/node
+  // and a node_modules to a project that deliberately has no build step,
+  // and they already fail loudly when run -- which the Python suite does.
+  "include": ["static/**/*.js"]
+}
