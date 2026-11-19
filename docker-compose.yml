@@ -28,10 +28,25 @@ services:
       - path: .env
         required: false
     environment:
+      # HOST is read only by `python app.py`; the image runs gunicorn, so
+      # VULNSIGHT_BIND is what tells the app what it is actually bound to.
       HOST: "0.0.0.0"
+      VULNSIGHT_BIND: "0.0.0.0"
       PORT: "5000"
       VULNSIGHT_DATA_DIR: /data
       GH_TOKEN: ${GH_TOKEN:-}
+      # Preferred over GH_TOKEN above: a value in `environment` is visible
+      # in `docker inspect`, /proc/1/environ and `docker compose config`,
+      # which is the first thing people paste into a bug report. Point this
+      # at a file and the entrypoint reads it without it ever entering the
+      # environment of anything but the app:
+      #
+      #   gh auth token > .gh_token && chmod 600 .gh_token
+      #   GH_TOKEN= GH_TOKEN_FILE=/run/secrets/gh_token docker compose up
+      #
+      # Uncomment the `secrets:` blocks below to use the compose-native
+      # form, which mounts it 0400 in a tmpfs.
+      GH_TOKEN_FILE: ${GH_TOKEN_FILE:-}
     volumes:
       - vulnsight-data:/data
     init: true
@@ -47,6 +62,16 @@ services:
       timeout: 8s
       retries: 3
       start_period: 20s
+
+# secrets:
+#   gh_token:
+#     file: ./.gh_token
+#
+# and on the service:
+#   secrets:
+#     - gh_token
+#   environment:
+#     GH_TOKEN_FILE: /run/secrets/gh_token
 
 volumes:
   vulnsight-data:

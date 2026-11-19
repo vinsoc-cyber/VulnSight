@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import re
 
-from .cwe_catalog import ALIASES, ABSTRACTION, CWE_VERSION, DEPRECATED, NAMES
+from .cwe_catalog import (
+    ABSTRACTION, ALIASES, CWE_RELEASED, CWE_VERSION, DEPRECATED, NAMES,
+)
 
 # ---------------------------------------------------------------------------
 # Category -> metadata
@@ -40,7 +42,6 @@ from .cwe_catalog import ALIASES, ABSTRACTION, CWE_VERSION, DEPRECATED, NAMES
 # Every field is enforced by tests/test_cwe_categories.py. Adding a class also
 # needs a KEYWORDS entry below, or OSV-native records will never match it.
 # ---------------------------------------------------------------------------
-MAX_CATEGORY_CODE_LENGTH = 5
 
 CATEGORIES: dict[str, dict] = {
     "bac": {
@@ -69,7 +70,9 @@ CATEGORIES: dict[str, dict] = {
             "1220",  # Insufficient Granularity of Access Control
             "552",  # Files/Directories Accessible to External Parties
             "425",  # Direct Request ('Forced Browsing')
-            "913",  # Improper Control of Dynamically-Managed Code Resources
+            "290",  # Authentication Bypass by Spoofing
+            "288",  # Authentication Bypass Using an Alternate Path or Channel
+            "276",  # Incorrect Default Permissions
         ],
     },
     "sqli": {
@@ -77,24 +80,25 @@ CATEGORIES: dict[str, dict] = {
         "group": "Injection",
         "label": "SQL Injection",
         "description": "Improper neutralization of SQL / NoSQL query elements.",
-        "core": ["89"],
-        "extended": ["564", "943"],  # Hibernate SQLi, improper query neutralization
+        # 943 is the NoSQL half this class advertises; 564 is SQLi by name.
+        "core": ["89", "943", "564"],
+        "extended": [],
     },
     "xss": {
         "code": "XSS",
         "group": "Injection",
         "label": "Cross-Site Scripting (XSS)",
         "description": "Improper neutralization of input during web page generation.",
-        "core": ["79"],
-        "extended": ["80", "83", "87", "116"],
+        "core": ["79", "80", "83", "87"],   # basic / attribute / alternate XSS
+        "extended": ["116"],
     },
     "ssti": {
         "code": "SSTI",
         "group": "Injection",
         "label": "Server-Side Template Injection / Code Injection",
         "description": "Template injection and dynamic code evaluation flaws.",
-        "core": ["1336", "94"],  # SSTI, Improper Control of Code Generation
-        "extended": ["95", "96", "917"],  # eval injection, EL injection
+        "core": ["1336", "94", "95"],  # SSTI, code generation, eval injection
+        "extended": ["96", "917", "470"],  # EL injection, unsafe reflection
     },
     "cmdi": {
         "code": "CMDI",
@@ -110,15 +114,19 @@ CATEGORIES: dict[str, dict] = {
         "label": "Server-Side Request Forgery (SSRF)",
         "description": "Server can be coerced into making unintended requests.",
         "core": ["918"],
-        "extended": [],
+        # "Include extended" was a no-op for SSRF; 441 Confused Deputy is the
+        # obvious occupant.
+        "extended": ["441"],
     },
     "pathtraversal": {
         "code": "PATH",
         "group": "Files & server-side requests",
         "label": "Path Traversal / File Disclosure",
         "description": "Improper limitation of a pathname to a restricted directory.",
-        "core": ["22"],
-        "extended": ["23", "36", "73", "434"],  # incl. unrestricted upload
+        "core": ["22", "23", "36"],   # relative / absolute path traversal
+        # 59 Link Following carries "Zip Slip" as a MITRE alternate term, and
+        # KEYWORDS["pathtraversal"] already advertises zip slip.
+        "extended": ["73", "434", "59"],
     },
     "deserialization": {
         "code": "DESER",
@@ -126,7 +134,8 @@ CATEGORIES: dict[str, dict] = {
         "label": "Insecure Deserialization",
         "description": "Deserialization of untrusted data leading to RCE / DoS.",
         "core": ["502"],
-        "extended": [],
+        # 913 is the parent of the dynamic-code family this class belongs to.
+        "extended": ["913"],
     },
     "xxe": {
         "code": "XXE",
@@ -146,8 +155,8 @@ CATEGORIES: dict[str, dict] = {
             "attacker changes the query's structure: LDAP filters, XPath or "
             "XQuery expressions."
         ),
-        "core": ["643", "90"],
-        "extended": ["91", "652"],
+        "core": ["643", "90", "652"],   # 652 = XQuery Injection
+        "extended": ["91"],
     },
     "crlf": {
         "code": "CRLF",
@@ -158,8 +167,12 @@ CATEGORIES: dict[str, dict] = {
             "headers, split a response, forge log entries, or desynchronise a "
             "proxy from the origin (request smuggling)."
         ),
-        "core": ["93", "113"],
-        "extended": ["117", "444"],
+        # 444 is literally "HTTP Request/Response Smuggling" and this class
+        # is named for it, so precision mode has to be able to find it.
+        "core": ["93", "113", "444"],
+        # 436 Interpretation Conflict is 444's parent (it was filed under
+        # `upload`, where neither it nor its children belong).
+        "extended": ["117", "436"],
     },
     "protopollution": {
         "code": "PROTO",
@@ -196,8 +209,8 @@ CATEGORIES: dict[str, dict] = {
             "validated incorrectly (reflected origins, null origin, sloppy "
             "prefix or suffix matching), letting an untrusted site read responses."
         ),
-        "core": ["942"],
-        "extended": ["346", "1385"],
+        "core": ["942", "346"],   # 346 = Origin Validation Error
+        "extended": ["1385"],
     },
     "session": {
         "code": "SESS",
@@ -208,8 +221,15 @@ CATEGORIES: dict[str, dict] = {
             "when they should not be: session fixation, sessions that never "
             "expire, tokens left valid after logout, sensitive persistent cookies."
         ),
-        "core": ["384"],
-        "extended": ["613", "539", "488"],
+        # CWE 5.0 deprecated 613 ("Insufficient Session Expiration") and
+        # split what it covered into a family: 1462 improper session
+        # management, 1463 insufficient timeout, 1464 improper
+        # invalidation, 1465 not invalidated after logout, 1466 not
+        # invalidated after a credential change. The successors are more
+        # precise than the id they replace, which is why core gains three
+        # of them rather than one.
+        "core": ["384", "1462", "1463", "1464"],
+        "extended": ["539", "488", "1465", "1466"],
     },
     "hardcodedcreds": {
         "code": "CREDS",
@@ -220,8 +240,10 @@ CATEGORIES: dict[str, dict] = {
             "artifact, or a default credential is active out of the box, so every "
             "deployment shares the same secret."
         ),
-        "core": ["798"],
-        "extended": ["259", "321", "1392"],
+        # All three name the thing this class is called: a hard-coded
+        # password, a hard-coded key, a default credential.
+        "core": ["798", "259", "321", "1392"],
+        "extended": [],
     },
     "clickjacking": {
         "code": "CLICK",
@@ -258,7 +280,7 @@ CATEGORIES: dict[str, dict] = {
             "where the server will run it."
         ),
         "core": ["434"],
-        "extended": ["646", "351", "436"],
+        "extended": ["646", "351"],
     },
     "searchpath": {
         "code": "SPATH",
@@ -269,8 +291,8 @@ CATEGORIES: dict[str, dict] = {
             "attacker can influence (current directory, writable PATH entry, "
             "unquoted path), so their code is loaded instead."
         ),
-        "core": ["426", "427"],
-        "extended": ["428", "114"],
+        "core": ["426", "427", "428"],   # 428 = Unquoted Search Path
+        "extended": ["114"],
     },
 
     # ---- Crypto & secrets ------------------------------------------------
@@ -284,7 +306,9 @@ CATEGORIES: dict[str, dict] = {
             "for passwords, unchecked signatures, unvalidated certificates."
         ),
         "core": ["327", "347", "295"],
-        "extended": ["326", "328", "916", "261", "759", "760", "780", "323", "324"],
+        # 345 is the class above 347; 208 is non-constant-time comparison.
+        "extended": ["326", "328", "916", "261", "759", "760", "780", "323",
+                     "324", "345", "208"],
     },
     "randomness": {
         "code": "RAND",
@@ -308,8 +332,9 @@ CATEGORIES: dict[str, dict] = {
             "or metadata. Umbrella CWE-200 is broad, so confirm the leaked value "
             "is genuinely sensitive."
         ),
-        "core": ["200"],
-        "extended": ["209", "532", "359", "497", "215", "540", "1230"],
+        "core": ["200", "522"],   # 522 = Insufficiently Protected Credentials
+        "extended": ["209", "532", "359", "497", "215", "540", "1230",
+                     "311", "312", "319", "256", "922"],
     },
 
     # ---- Memory & concurrency -------------------------------------------
@@ -334,8 +359,8 @@ CATEGORIES: dict[str, dict] = {
             "loses sign or precision, so a length or index check is computed on "
             "the wrong value."
         ),
-        "core": ["190"],
-        "extended": ["191", "192", "197", "680", "681"],
+        "core": ["190", "191"],   # overflow and underflow are the same class
+        "extended": ["192", "197", "680", "681"],
     },
     "race": {
         "code": "RACE",
@@ -347,7 +372,8 @@ CATEGORIES: dict[str, dict] = {
             "changes between the check and the use."
         ),
         "core": ["362", "367"],
-        "extended": ["366", "421", "1223"],
+        # KEYWORDS["race"] ends with "deadlock" and nothing backed it.
+        "extended": ["366", "421", "1223", "833", "667"],
     },
 
     # ---- Availability ----------------------------------------------------
@@ -373,7 +399,9 @@ CATEGORIES: dict[str, dict] = {
             "Excludes regex-specific cases, which are ReDoS."
         ),
         "core": ["400", "770"],
-        "extended": ["409", "674", "789", "405", "834", "617"],
+        # KEYWORDS["dos"] already advertises "infinite loop" and "stack
+        # exhaustion"; 835 and 1325 are the CWEs that back them.
+        "extended": ["409", "674", "789", "405", "834", "617", "835", "1325"],
     },
 
     # ---- Broad ------------------------------------------------------------
@@ -387,7 +415,9 @@ CATEGORIES: dict[str, dict] = {
             "Expect noise and rely on the AI pass to name the real root cause."
         ),
         "core": ["20"],
-        "extended": ["1284", "129", "704"],
+        # 74 is the generic Injection CWE, parent of 79/89/77/78/90/917 --
+        # 269 occurrences, and the nine-class Injection group reached none.
+        "extended": ["1284", "129", "704", "74"],
     },
 }
 
@@ -418,15 +448,22 @@ SEVERITIES: list[str] = ["low", "medium", "high", "critical"]
 KEYWORDS: dict[str, list[str]] = {
     "bac": [
         "authoriz", "authorisation", "access control", "access-control",
-        "permission", "idor", "bola", "bfla", "privilege", "escalat", "bypass",
-        "unauthenticated", "unauthorized", "unauthorised", "forbidden", "acl",
+        "permission", "idor", "bola", "bfla", "privilege", "escalat",
+        # Not a bare "bypass": it was responsible for 52% of this class's
+        # prefilter passes, at one paid AI call each, matching every "bypass
+        # the cache", "bypass the proxy", "filter bypass" in the corpus.
+        "authorization bypass", "authorisation bypass", "access control bypass",
+        "permission bypass", "acl bypass",
+        "unauthenticated", "unauthorized", "unauthorised",
+        "access control list",
         "tenant", "cross-namespace", "cross namespace", "improper access",
         "auth check", "authentication bypass", "insecure direct",
     ],
     "sqli": ["sql injection", "sqli", "sql statement", "query injection", "nosql injection"],
     "xss": ["cross-site scripting", "cross site scripting", "xss", "script injection", "html injection"],
     "ssti": ["template injection", "ssti", "expression language", "el injection",
-             "code injection", "arbitrary code", "remote code execution via", "eval"],
+             "code injection", "arbitrary code", "remote code execution via",
+             "eval()", "call to eval", "dynamic eval"],
     "cmdi": ["command injection", "os command", "shell command", "arbitrary command", "argument injection"],
     "ssrf": ["ssrf", "server-side request forgery", "server side request forgery"],
     "pathtraversal": ["path traversal", "directory traversal", "arbitrary file read",
@@ -449,14 +486,16 @@ KEYWORDS: dict[str, list[str]] = {
     "hardcodedcreds": ["hard-coded", "hardcoded", "hard coded", "default credential",
                        "default password", "embedded credential", "static key"],
     "clickjacking": ["clickjack", "ui redress", "x-frame-options", "frame-ancestors",
-                     "frame ancestors", "iframe"],
+                     "frame ancestors", "iframe injection",
+                     "embedded in an iframe"],
     "openredirect": ["open redirect", "url redirection", "unvalidated redirect",
                      "redirect to untrusted", "arbitrary redirect"],
     "upload": ["unrestricted upload", "arbitrary file upload", "file upload", "webshell",
                "dangerous file type", "upload of a file"],
     "searchpath": ["search path", "dll hijack", "dll injection", "untrusted search",
                    "library hijack", "loads a library", "preload"],
-    "crypto": ["cryptograph", "weak hash", "md5", "sha-1", "sha1", "broken cipher",
+    "crypto": ["cryptograph", "weak hash", "md5 for", "md5 hash",
+               "sha-1 for", "sha1 for", "broken cipher",
                "signature verification", "certificate validation", "certificate check",
                "improper verification", "ecb mode", "padding oracle"],
     "randomness": ["insecure random", "weak random", "insufficiently random",
@@ -469,14 +508,17 @@ KEYWORDS: dict[str, list[str]] = {
                "buffer over-read", "heap overflow", "stack overflow", "memory corruption",
                "segmentation fault", "type confusion", "uninitialized memory"],
     "intoverflow": ["integer overflow", "integer underflow", "integer wraparound",
-                    "wraparound", "signedness", "truncation of", "overflows"],
+                    "wraparound", "signedness", "truncation of",
+                    "integer overflows"],
     "race": ["race condition", "toctou", "time-of-check", "time of check", "data race",
              "concurrent access", "not thread-safe", "deadlock"],
     "redos": ["redos", "regular expression denial", "catastrophic backtracking",
               "inefficient regular expression", "regex denial", "exponential backtracking"],
     "dos": ["denial of service", "dos attack", "resource exhaustion", "out of memory",
             "memory exhaustion", "cpu exhaustion", "infinite loop", "unbounded",
-            "uncontrolled recursion", "stack exhaustion", "decompression bomb", "panic"],
+            "uncontrolled recursion", "stack exhaustion",
+            "decompression bomb", "panics on", "causes a panic",
+            "remote panic"],
     "inputval": ["improper input validation", "input validation", "insufficient validation",
                  "unvalidated input", "does not validate"],
 }
@@ -495,6 +537,38 @@ CWE_KEY_PREFIX = "cwe:"
 MAX_CWE_ID_DIGITS = 7
 _CWE_KEY_RE = re.compile(rf"^{CWE_KEY_PREFIX}([1-9][0-9]{{0,{MAX_CWE_ID_DIGITS - 1}}})$")
 _PARENTHESISED = re.compile(r"\(([^)]{3,})\)")
+
+
+# Short parenthesised fragments that are real search terms rather than
+# noise. Anything else under five characters is rejected, because these are
+# matched as bare substrings against advisory text: CWE-616's name ends in
+# "(PHP)", so `cwe:616` prefiltered on "php" and matched essentially every
+# PHP advisory; CWE-1192 gave "soc", CWE-462 gave "alist", and CWE-79's
+# alternate terms include "css".
+_USEFUL_SHORT_TERMS = frozenset({
+    # "rce" is NOT here. Terms in this set are matched as bare substrings of
+    # advisory text, and "rce" sits inside resource, source, enforce, forced
+    # and coerce. Measured against the repo's own osv_cache/Go.zip: 901 of
+    # 4,841 CWE-less records contain "rce" and only 30 contain "remote code
+    # execution" -- so selecting CWE-78 or CWE-94 filled the pool with
+    # "consumption of significant system resources", at one paid AI call
+    # each, crowding out the real matches before max_results. Same shape as
+    # the CWE-616 "(PHP)" trap. The long form survives as its own term.
+    "xss", "csrf", "ssrf", "xxe", "idor", "bola", "bfla", "sqli",
+    "ssti", "lfi", "rfi", "xpath", "ldap", "dos", "prng", "toctou", "uaf",
+    "smtp", "crlf", "http", "json", "yaml", "xml", "jwt", "cors", "redos",
+})
+# Matched as a substring of advisory text, so a term also has to be a word
+# that does not live inside unrelated ones.
+_SUBSTRING_DECOYS = ("php", "soc", "alist", "css", "api", "url", "uri", "ssl",
+                     "resource", "source", "enforce", "forced", "coerce")
+
+
+def _is_useful_prefilter_term(term: str) -> bool:
+    lowered = term.lower().strip()
+    if not lowered or lowered in _SUBSTRING_DECOYS:
+        return False
+    return len(lowered) >= 5 or lowered in _USEFUL_SHORT_TERMS
 
 
 def cwe_key(cwe_id: str) -> str:
@@ -545,7 +619,7 @@ def category_label(category: str) -> str:
 def category_description(category: str) -> str:
     cwe_id = parse_cwe_key(category)
     if cwe_id:
-        aliases = ", ".join(ALIASES.get(cwe_id, ()))
+        aliases = ", ".join(cwe_aliases(cwe_id))
         base = f"MITRE CWE-{cwe_id}: {cwe_label(cwe_id)}."
         return f"{base} Also known as: {aliases}." if aliases else base
     return CATEGORIES.get(category, {}).get("description", "")
@@ -571,8 +645,14 @@ def _cwe_keywords(cwe_id: str) -> list[str]:
     puts in many names ("'Cross-site Scripting'") carry most of the signal.
     """
     name = NAMES.get(cwe_id, "")
-    terms = [term.strip(" '\"") for term in _PARENTHESISED.findall(name)]
-    terms += list(ALIASES.get(cwe_id, ()))
+    terms = [
+        term for term in (t.strip(" '\"") for t in _PARENTHESISED.findall(name))
+        if _is_useful_prefilter_term(term)
+    ]
+    # Aliases go through the same filter: MITRE lists "CSS" as a historical
+    # alternate term for cross-site scripting, and as a bare substring that
+    # matches every advisory about a stylesheet.
+    terms += [a for a in cwe_aliases(cwe_id) if _is_useful_prefilter_term(a)]
     if name:
         terms.append(name)
     return terms
@@ -634,9 +714,13 @@ def picker_catalog() -> dict:
     }
     return {
         "version": CWE_VERSION,
+        # The generator emitted this and nothing ever read it, so there was no
+        # way to see how old the taxonomy behind a result set was. Serving it
+        # is what makes a freshness check possible at all.
+        "released": CWE_RELEASED,
         "columns": ["id", "label", "aliases", "level"],
         "rows": [
-            [cwe_id, NAMES[cwe_id], "|".join(ALIASES.get(cwe_id, ())), level]
+            [cwe_id, NAMES[cwe_id], "|".join(cwe_aliases(cwe_id)), level]
             for cwe_id, level in sorted(level_by_id.items(), key=lambda kv: int(kv[0]))
             if cwe_id not in DEPRECATED
         ],

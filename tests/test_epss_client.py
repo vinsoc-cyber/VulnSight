@@ -10,10 +10,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import json
+import io
 import unittest
+from typing import Any, cast
 from unittest import mock
 
 from modules import epss_client
+from samples import http_error
 
 
 def _mock_urlopen(response_body: dict):
@@ -24,6 +27,39 @@ def _mock_urlopen(response_body: dict):
     resp.__enter__ = mock.Mock(return_value=resp)
     resp.__exit__ = mock.Mock(return_value=False)
     return resp
+
+
+class TestTheResponseIsNormalisedOnTheWayBack(unittest.TestCase):
+    """`_fetch_batch` upper-cases the ids it sends, and the comment above
+    that line says "and on the way back" -- but the result was keyed by
+    whatever FIRST echoed. search_service looks a score up with .upper(),
+    so a lower-cased echo returned a dict the caller could not read and the
+    advisory rendered with no EPSS: indistinguishable from one that has
+    none, which is the exact failure the "way out" half exists to prevent.
+
+    Every existing test mocked an upper-case echo, so the claim was
+    trivially satisfied."""
+
+    def _fetch(self, echoed):
+        body = json.dumps({"data": [
+            {"cve": echoed, "epss": "0.5", "percentile": "0.9"}]}).encode()
+        with mock.patch.object(
+                epss_client.urllib.request, "urlopen",
+                return_value=mock.MagicMock(
+                    __enter__=lambda s: io.BytesIO(body),
+                    __exit__=lambda *a: False)):
+            return epss_client.fetch_epss(["CVE-2024-1234"])
+
+    def test_a_lower_cased_echo_is_still_found(self):
+        out = self._fetch("cve-2024-1234")
+        self.assertIn("CVE-2024-1234", out)
+        self.assertAlmostEqual(out["CVE-2024-1234"]["epss"], 0.5)
+
+    def test_a_mixed_case_echo_is_still_found(self):
+        self.assertIn("CVE-2024-1234", self._fetch("Cve-2024-1234"))
+
+    def test_an_upper_case_echo_still_works(self):
+        self.assertIn("CVE-2024-1234", self._fetch("CVE-2024-1234"))
 
 
 class TestParseResponse(unittest.TestCase):
@@ -141,15 +177,53 @@ class TestEmptyInput(unittest.TestCase):
         mock_open.assert_not_called()
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
-    def test_none_like_empty(self, mock_open):
-        """Passing an empty list does not make any HTTP request."""
-        result = epss_client.fetch_epss([])
-        self.assertEqual(result, {})
+    def test_none_itself_is_treated_as_empty(self, mock_open):
+        """This was a verbatim copy of the test above -- same body, same
+        empty list -- under a name promising None. fetch_epss(None) was
+        never exercised."""
+        self.assertEqual(epss_client.fetch_epss(cast(Any, None)), {})
+        mock_open.assert_not_called()
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_only_blank_ids_makes_no_request(self, mock_open):
+        self.assertEqual(epss_client.fetch_epss(["", "   "]), {})
         mock_open.assert_not_called()
 
 
 class TestErrorHandling(unittest.TestCase):
     """Network and parse failures must return an empty dict, never crash."""
+
+    def setUp(self):
+        # The retry policy's backoff is real time: 4.9 of this module's 5.3
+        # seconds were spent asleep. Nothing here is testing the clock.
+        sleep = mock.patch.object(epss_client.http_retry.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_transient_failure_is_retried_before_giving_up(self, mock_open):
+        """`== {}` is produced both by "retried twice then gave up" and by
+        "swallowed on the first failure" -- and swallowing on the first
+        failure is the bug _fetch_batch was wrapped in with_retries to fix.
+        Only the call count tells them apart."""
+        mock_open.side_effect = OSError("Connection refused")
+        self.assertEqual(epss_client.fetch_epss(["CVE-2024-1234"]), {})
+        self.assertEqual(mock_open.call_count, 2,
+                         "EPSS gave up without retrying")
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_recovered_failure_returns_the_score(self, mock_open):
+        """The other half: a retry that succeeds must not be discarded."""
+        body = json.dumps({"data": [
+            {"cve": "CVE-2024-1234", "epss": "0.5", "percentile": "0.9"}]}).encode()
+        mock_open.side_effect = [
+            OSError("Connection refused"),
+            mock.MagicMock(__enter__=lambda s: io.BytesIO(body),
+                           __exit__=lambda *a: False),
+        ]
+        out = epss_client.fetch_epss(["CVE-2024-1234"])
+        self.assertIn("CVE-2024-1234", out)
+        self.assertEqual(mock_open.call_count, 2)
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
     def test_network_error_returns_empty(self, mock_open):
@@ -159,12 +233,11 @@ class TestErrorHandling(unittest.TestCase):
 
     @mock.patch("modules.epss_client.urllib.request.urlopen")
     def test_http_error_returns_empty(self, mock_open):
-        import urllib.error
-        mock_open.side_effect = urllib.error.HTTPError(
+        mock_open.side_effect = http_error(
+            500,
             url="https://api.first.org/data/v1/epss",
-            code=500,
-            msg="Internal Server Error",
-            hdrs=None,  # type: ignore[arg-type]
+            reason="Internal Server Error",
+            headers=None,
             fp=None,
         )
         result = epss_client.fetch_epss(["CVE-2024-9999"])
@@ -201,6 +274,88 @@ class TestErrorHandling(unittest.TestCase):
 
         # First batch of 100 succeeded.
         self.assertEqual(len(result), 100)
+
+
+class TestTheQuerySentToFirst(unittest.TestCase):
+    """FIRST keys its response case-sensitively, and the merge preserves
+    whatever casing the publisher used, so a lower-cased alias asked for a CVE
+    the API does not know and came back with nothing -- indistinguishable in
+    the UI from an advisory that genuinely has no score."""
+
+    @mock.patch("modules.epss_client.urllib.request.urlopen")
+    def test_a_lowercased_cve_is_upper_cased_on_the_way_out(self, mock_open):
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen["url"] = req.full_url
+            return _mock_urlopen({"data": [
+                {"cve": "CVE-2024-1234", "epss": "0.5", "percentile": "0.9"},
+            ]})
+
+        mock_open.side_effect = capture
+        result = epss_client.fetch_epss(["cve-2024-1234"])
+        self.assertIn("CVE-2024-1234", seen["url"])
+        self.assertNotIn("cve-2024-1234", seen["url"])
+        self.assertIn("CVE-2024-1234", result)
+
+
+class TestEnrichmentCannotCostTheSearch(unittest.TestCase):
+    """Each batch retried independently (attempts=2, timeout=30) and
+    failures were swallowed per batch, so a FIRST outage cost the FULL
+    budget rather than failing fast: sort=epss_percentage with
+    max_results=500 enriches up to 2,000 CVEs in 20 batches, which is
+    ~1240s inside one request against a 180s worker timeout. Enrichment is
+    an optimisation; it must never be why a search dies."""
+
+    def _run(self, n_cves, per_batch_seconds, fail=False):
+        now = {"t": 0.0}
+        calls = {"n": 0}
+
+        def fake_batch(batch, timeout=30):
+            calls["n"] += 1
+            now["t"] += per_batch_seconds
+            if fail:
+                raise RuntimeError("FIRST is down")
+            return {}
+
+        with mock.patch.object(epss_client, "_fetch_batch", fake_batch), \
+             mock.patch.object(epss_client.time, "monotonic", lambda: now["t"]):
+            epss_client.fetch_epss([f"CVE-2026-{i}" for i in range(n_cves)])
+        return calls["n"], now["t"]
+
+    def test_a_slow_endpoint_stops_at_the_deadline(self):
+        calls, elapsed = self._run(2000, per_batch_seconds=62.0)
+        self.assertLess(elapsed, epss_client.FETCH_DEADLINE_SECONDS + 70,
+                        f"enrichment ran for {elapsed:.0f}s")
+        self.assertLess(calls, 20, "every batch was attempted anyway")
+
+    def test_a_dead_endpoint_gives_up_rather_than_retrying_every_batch(self):
+        calls, _ = self._run(2000, per_batch_seconds=0.1, fail=True)
+        self.assertLessEqual(
+            calls, epss_client.MAX_CONSECUTIVE_FAILURES,
+            f"{calls} batches were attempted against a dead endpoint")
+
+    def test_a_healthy_endpoint_still_scores_everything(self):
+        calls, _ = self._run(500, per_batch_seconds=0.01)
+        self.assertEqual(calls, 5, "a working endpoint was cut short")
+
+
+class TestTheBatchCarriesDistinctCves(unittest.TestCase):
+    """_fetch_batch upper-cases on the way out, but dedup ran first, so
+    ["CVE-2024-1", "cve-2024-1"] survived as two entries and went out twice
+    in the same ?cve= list."""
+
+    def test_case_variants_are_one_entry(self):
+        seen = []
+
+        def fake_batch(batch, timeout=30):
+            seen.extend(batch)
+            return {}
+
+        with mock.patch.object(epss_client, "_fetch_batch", fake_batch):
+            epss_client.fetch_epss(["CVE-2024-1", "cve-2024-1", "Cve-2024-1",
+                                    "CVE-2024-2"])
+        self.assertEqual(seen, ["CVE-2024-1", "CVE-2024-2"])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -70,9 +71,44 @@ class TestCommonFilters(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     query_filters.published_bounds(value)
 
-        self.assertFalse(query_filters.valid_published_filter([]))
+        # A repeated query parameter arrives as a list, not a str: the wrong
+        # type here is the case under test.
+        self.assertFalse(query_filters.valid_published_filter(cast(Any, [])))
         with self.assertRaises(ValueError):
-            query_filters.published_bounds([])
+            query_filters.published_bounds(cast(Any, []))
+
+
+class TestAffectsReachesNvdRows(unittest.TestCase):
+    """nvd_client names packages `vendor:product`, built from the CPE
+    criteria, while GHSA and OSV use the ecosystem's own name. An exact
+    comparison could therefore never match an NVD-only record: every one of
+    them was dropped after NVD had reported a healthy count, with no
+    warning -- although the same pipeline warns about the `type` and
+    `ecosystem` filters it cannot honour."""
+
+    def test_the_product_half_of_a_cpe_name_matches(self):
+        record = {"packages": [{"name": "lodash:lodash"}]}
+        self.assertTrue(query_filters.matches_package(record, "lodash"))
+
+    def test_the_vendor_half_matches_too(self):
+        record = {"packages": [{"name": "acme:widget"}]}
+        self.assertTrue(query_filters.matches_package(record, "acme"))
+        self.assertTrue(query_filters.matches_package(record, "widget"))
+
+    def test_a_plain_ecosystem_name_still_matches_exactly(self):
+        self.assertTrue(
+            query_filters.matches_package({"packages": [{"name": "lodash"}]},
+                                          "lodash"))
+
+    def test_it_did_not_become_a_substring_match(self):
+        """The loose fix would be `wanted in name`, which makes `affects=foo`
+        match `foobar` and quietly widens every search."""
+        for name, wanted in (("lodash", "loda"), ("acme:widget", "idge"),
+                             ("acme:widget", "cme"), ("lodash:lodash", "dash")):
+            with self.subTest(name=name, wanted=wanted):
+                self.assertFalse(
+                    query_filters.matches_package({"packages": [{"name": name}]},
+                                                  wanted))
 
 
 if __name__ == "__main__":

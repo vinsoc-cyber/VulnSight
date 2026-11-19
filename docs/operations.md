@@ -6,13 +6,24 @@ Default: loopback only. The tool is built for one operator on `localhost`, and i
 holds live credentials (`gh` token, AI keys), so the defaults refuse to be
 casually widened.
 
+`HOST` is only consulted on the `python app.py` path, because that is the only
+one that binds the socket itself. Gunicorn takes its interface from its own
+`--bind`, which the app cannot read — so under any WSGI server the bind counts
+as **unknown and therefore exposed**, whatever `HOST` says. Declare it with
+`VULNSIGHT_BIND=127.0.0.1` if you really are on loopback there.
+
 | Situation | Behaviour |
 |---|---|
-| `HOST=127.0.0.1` (default) | runs normally |
-| Non-loopback `HOST`, credentials loaded, no `VULNSIGHT_EXPOSE=1` | **refuses to start** |
-| Non-loopback `HOST`, `VULNSIGHT_EXPOSE=1`, no `VULNSIGHT_API_TOKEN` | **refuses to start** |
+| `python app.py`, `HOST=127.0.0.1` (default) | runs normally, no token needed |
+| `python app.py`, non-loopback `HOST`, credentials loaded, no `VULNSIGHT_EXPOSE=1` | **refuses to start** |
+| `python app.py`, non-loopback `HOST`, `VULNSIGHT_EXPOSE=1`, no `VULNSIGHT_API_TOKEN` | **refuses to start** |
 | `--debug` off loopback | **refuses** — Werkzeug's debugger is remote code execution |
-| Docker / gunicorn binding `0.0.0.0` with credentials | requires a token; generates `.vulnsight_api_token` if you did not set one |
+| Any WSGI server (gunicorn, Docker) with credentials | requires a token; generates `.vulnsight_api_token` if you did not set one |
+| Any WSGI server with `VULNSIGHT_BIND=127.0.0.1` | treated as loopback; token optional |
+
+Setting `HOST=127.0.0.1` does **not** restrict a gunicorn listener and no
+longer waives the token. The generated token is written to the file and
+printed only when stderr is a terminal, so it does not land in `docker logs`.
 
 Set `VULNSIGHT_API_TOKEN` yourself if you want to choose the value. The UI
 prompts for it and keeps it in `sessionStorage` (per tab, not persisted).
@@ -79,7 +90,7 @@ always free.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Header shows `GH OFFLINE` | `gh` not authenticated, or unavailable | `gh auth login`; in Docker pass `GH_TOKEN` |
+| Header shows `GH Not connected` | `gh` not authenticated, or unavailable | `gh auth login`; in Docker pass `GH_TOKEN` |
 | Header shows `AI OFF` | no token / base URL / model | see [Configuration](configuration.md#ai-provider) |
 | `GHSA fetch failed.` | `gh` error, network, or rate limit | run `gh api /advisories --paginate` manually to see the real error |
 | Search returns far fewer than `max_results` | per-source truncation then exact re-filtering, most visible with NVD + `affects` | widen `max_results`, or drop the package filter |
@@ -89,7 +100,7 @@ always free.
 | `AI quota exhausted` | all keys in cooldown | add keys, or wait for the stated reset |
 | AI verdicts never come from cache | the fingerprint changed (model, prompt or class description), or old rows have a `NULL` fingerprint | expected — see [the verdict cache](ai-classification.md#the-verdict-cache) |
 | Verdicts look wrong after changing the query | they were scored for the previous selection | the banner is telling you exactly that; re-run the pass |
-| Advisories with `NO CWE · AI` and no verdicts | OSV-native records need the AI pass | run *Refine with AI*, or deselect that source |
+| Advisories with `No CWE tag` and no verdicts | OSV-native records need the AI pass | run *Refine with AI*, or deselect that source |
 | A cached advisory cannot be classified | it is not in `advisories.db` | run a search first; `missing` in the response lists them |
 
 ## Upgrading
@@ -99,6 +110,6 @@ always free.
 3. Migrations run automatically at startup (`cache.init_db()`), are idempotent,
    and are safe to re-run.
 4. If MITRE published a new CWE release, refresh the catalog:
-   `python tools/generate_cwe_catalog.py && python -m pytest tests/test_cwe_categories.py`
+   `python tools/generate_cwe_catalog.py && python -m unittest discover -s tests`
 
 Nothing in the upgrade path deletes your caches.

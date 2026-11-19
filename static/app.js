@@ -1,5 +1,50 @@
 // === Configuration & State ===
-const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQUIRED } = window.BOOT;
+
+/**
+ * One bug class, exactly as app.py's index() builds it.
+ *
+ * @typedef {object} BugClass
+ * @property {string} key       stable id, e.g. "bac"
+ * @property {string} code      short display code
+ * @property {string} group     heading the picker files it under
+ * @property {string} label     human name
+ * @property {string} description
+ * @property {string[]} terms   community words people actually type
+ * @property {string[]} core    CWE ids at the heart of the class
+ * @property {string[]} extended  CWE ids on its edges, never also in core
+ * @property {string[]} [cwes]  core + extended, derived below rather than
+ *   sent: the server has no reason to ship the concatenation twice. It is
+ *   optional here because it does not exist until that line runs.
+ */
+
+/**
+ * Everything the server hands the page, rendered into the one inline
+ * bootstrap script in templates/index.html. This is the whole server->client
+ * contract and it was entirely untyped: a typo in any of these names, or a
+ * field renamed on the Python side, was a silent `undefined` hundreds of
+ * lines later rather than an error. Writing it down also caught that the
+ * shapes assumed here were not the shapes being sent.
+ *
+ * @typedef {object} Boot
+ * @property {Record<string, string[]>} POPULAR   package names per ecosystem
+ * @property {BugClass[]} CLASSES
+ * @property {string[]} OSV_SUPPORTED
+ * @property {boolean} AI_CONFIGURED
+ * @property {number} AI_CALL_BUDGET
+ * @property {boolean} AUTH_REQUIRED
+ */
+
+// Everything below is one scope, not the page's. This file had no wrapper:
+// all ~79 functions and every piece of state were true globals, indented
+// four spaces as a leftover from when this code lived inside a <script> tag
+// in the template. `let AI = {}` collided with the browser's own `AI`
+// global, and any future global -- ours or the platform's -- was free to
+// collide with the rest. The indentation now means what it looks like.
+(function () {
+  'use strict';
+
+    const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQUIRED } =
+      /** @type {Boot} */ (/** @type {any} */ (window).BOOT);
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
     let LAST = [];           // last result set (normalized advisories)
@@ -7,7 +52,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     // The sorted category list `AI` was scored against. A verdict for "bac" says
     // nothing about "sqli", so the queue must not be filtered or exported as if
     // it did once the selection moves on.
-    let AI_CATS = null;
     // Facts about the last successful search, so the summary can be re-rendered
     // whenever the visible set changes instead of going stale after one write.
     let SEARCH_META = null;
@@ -19,9 +63,16 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     }
 
     // Below this width the rail is a modal slide-over, not a static sidebar.
-    const MODAL_PANEL_WIDTH = 900;
+    // Read from CSS, not duplicated: the rail becomes a slide-over at a
+    // width the stylesheet decides, and a second copy here was free to
+    // drift from it. --breakpoint-panel is declared next to the media query.
+    const MODAL_PANEL_WIDTH = (() => {
+      const declared = getComputedStyle(document.documentElement)
+        .getPropertyValue('--breakpoint-panel').trim();
+      return parseInt(declared, 10) || 900;
+    })();
 
-    function setFilterPanel(open, restoreFocus = true) {
+    function setFilterPanel(open, returnFocus = true) {
       const isOpen = Boolean(open);
       const modal = window.innerWidth <= MODAL_PANEL_WIDTH;
       const rail = $('#control-panel');
@@ -47,7 +98,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
       if (isOpen) {
         focusWhenVisible(rail, $('#filters-close'));
-      } else if (restoreFocus && filterReturnFocus && document.contains(filterReturnFocus)) {
+      } else if (returnFocus && filterReturnFocus && document.contains(filterReturnFocus)) {
         filterReturnFocus.focus();
       }
     }
@@ -103,7 +154,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const sel = $('#affects_pick');
       const prev = sel.value;
       sel.innerHTML = '<option value="">— any package —</option>' +
-        list.map(p => `<option value="${p}">${p}</option>`).join('');
+        list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
       if (list.includes(prev)) sel.value = prev;
     }
 
@@ -180,6 +231,10 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         toast('“Force-refresh OSV cache” left off for this replay', 'ok');
       }
       renderSelection();
+      // Writing .value and .checked fires no change event, so the folded
+      // headings would still describe the query this one just replaced.
+      renderFoldValues();
+      updateNvdHint();
     }
 
     // localStorage is user-writable, so a restored query is re-validated here
@@ -271,6 +326,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       if (state.affects) parts.push(state.affects.split(':').pop());
       if (state.published && state.published !== 'any') {
         // Look the option up by value rather than interpolating into a selector.
+        // From BOOT, not the DOM: this used to read #published's options,
+        // so moving or renaming that control silently degraded every
+        // history row to a raw value like "90d".
         const option = Array.from($('#published').options)
           .find(o => o.value === state.published);
         parts.push(option ? option.textContent.trim() : state.published);
@@ -401,8 +459,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         label: c.label,
         note: (c.cwes || []).length + ' CWEs',
         // The community terms are what people type ("__proto__", "toctou"),
-        // so they must be searchable and worth showing.
-        aliases: (c.terms || []).slice(0, 4),
+        // so they must be searchable and worth showing. NOT capped here:
+        // this list is what scoreEntry matches on, and a cap of four meant
+        // whether a class outranked its own CWE depended on an accident of
+        // KEYWORDS order -- "idor" is 6th in KEYWORDS["bac"], so searching
+        // IDOR surfaced CWE-639 above the Broken Access Control class, while
+        // "xss" is 3rd and the XSS class won. The display has its own cap
+        // further down.
+        aliases: c.terms || [],
         hay: CLASS_HAY[c.key],
       }));
     }
@@ -486,16 +550,24 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return scored.slice(0, COMBO_LIMIT).map(pair => pair[1]);
     }
 
-    function isPicked(entry) {
-      return entry.kind === 'class'
-        ? $$('input[name=category]').some(c => c.value === entry.key && c.checked)
-        : PICKED.has(entry.id);
+    // Hoisted out of the per-option loop: this used to run a full-document
+    // querySelectorAll for each of the 40 rendered options, so one keystroke
+    // cost 40 document queries over 29 checkboxes, and so did each arrow key.
+    function checkedClassKeys() {
+      return new Set($$('input[name=category]:checked').map(c => c.value));
+    }
+
+    function isPicked(entry, checked) {
+      if (entry.kind === 'class') {
+        return (checked || checkedClassKeys()).has(entry.key);
+      }
+      return PICKED.has(entry.id);
     }
 
     // Two rows: code + full name + level, then the aliases and the curated class
     // that already covers this CWE. The name gets the space it needs; the
     // secondary line is what truncates.
-    function comboOptionHtml(entry, index) {
+    function comboOptionHtml(entry, index, checked) {
       // The sidebar is ~300px wide, so the covering class is shown as its short
       // key ("BAC") with the full name on hover — the CWE name gets the room.
       const cls = entry.kind === 'cwe' && (CLASS_BY_CWE[entry.id] || [])[0];
@@ -509,7 +581,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         ? `<span class="combo-sub">${aliases}${covered}</span>` : '';
       // "Already added" was conveyed only by opacity and a CSS checkmark, and
       // aria-selected="false" told assistive tech the opposite.
-      const picked = isPicked(entry);
+      const picked = isPicked(entry, checked);
       return `<li class="combo-option ${entry.kind}${picked ? ' picked' : ''}"
           role="option" id="cwe-option-${index}" data-key="${safeAttr(entry.key)}"
           aria-selected="${index === comboActive}"${picked ? ' aria-disabled="true"' : ''}>
@@ -535,12 +607,19 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         return;
       }
       comboMatches = searchEntries(query);
+      // Default the highlight to the first match. Enter already committed
+      // match 0, but nothing carried aria-selected and no row was styled, so
+      // there was no way to see what it would add.
+      if (comboMatches.length && comboActive < 0) comboActive = 0;
       if (!comboMatches.length) {
         const why = catalogError ? 'CWE catalog unavailable' : 'No bug class or CWE matches';
-        list.innerHTML = `<li class="combo-empty">${esc(why)} “${esc(query)}”</li>`;
+        list.innerHTML = `<li class="combo-empty" role="presentation">`
+          + `${esc(why)} “${esc(query)}”</li>`;
       } else {
         if (comboActive >= comboMatches.length) comboActive = comboMatches.length - 1;
-        list.innerHTML = comboMatches.map(comboOptionHtml).join('');
+        const checked = checkedClassKeys();
+        list.innerHTML = comboMatches
+          .map((entry, index) => comboOptionHtml(entry, index, checked)).join('');
       }
       list.hidden = false;
       input.setAttribute('aria-expanded', 'true');
@@ -562,12 +641,26 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function moveComboActive(delta) {
       if (!comboMatches.length) return;
       const last = comboMatches.length - 1;
+      const previous = comboActive;
       comboActive = comboActive < 0
         ? (delta > 0 ? 0 : last)
         : Math.min(last, Math.max(0, comboActive + delta));
-      renderCombo();
+      // Only the highlight moved. renderCombo() here re-scored all 973
+      // catalog entries and rebuilt all 40 rows just to change which one is
+      // marked -- on every arrow key. The matches are already in
+      // comboMatches and nothing about them changed.
+      // .combo-option[aria-selected="true"] carries the highlight, so the
+      // attribute is both the a11y state and the style hook.
+      const before = previous >= 0 ? $(`#cwe-option-${previous}`) : null;
+      if (before) {
+        before.setAttribute('aria-selected', 'false');
+      }
       const el = $(`#cwe-option-${comboActive}`);
-      if (el) el.scrollIntoView({block: 'nearest'});
+      if (el) {
+        el.setAttribute('aria-selected', 'true');
+        $('#cwe-search').setAttribute('aria-activedescendant', el.id);
+        el.scrollIntoView({block: 'nearest'});
+      }
     }
 
     function announceSelection(message) {
@@ -602,7 +695,63 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return ENTRIES.find(e => e.kind === 'cwe' && e.id === id);
     }
 
+    // === Opening screen: the taxonomy as a map ===
+    // The workspace used to open on a card of instructions with the rest of
+    // it empty. The bug classes are what this tool is for, so they are what
+    // it opens with: every class, under its family, with the size of its CWE
+    // set, and one click to pick one. Built from BOOT.CLASSES -- the same
+    // data the rail's checkbox list uses, so the two cannot disagree.
+    function renderClassMap() {
+      const map = $('#class-map');
+      if (!map) return;                       // replaced by results already
+      const checked = checkedClassKeys();
+      const groups = [];
+      CLASSES.forEach(c => {
+        let group = groups.find(g => g.name === c.group);
+        if (!group) groups.push(group = { name: c.group, items: [] });
+        group.items.push(c);
+      });
+      // The widest class sets the scale: its track runs the full width and
+      // every other one is read against it. Without a common denominator the
+      // bars would only say "some number", which the text already says.
+      const widest = CLASSES.reduce(
+        (m, c) => Math.max(m, (c.cwes || []).length), 0) || 1;
+      map.innerHTML = groups.map(group => `
+        <section class="map-group">
+          <h4 class="map-group-name">${esc(group.name)}</h4>
+          <div class="map-grid">
+            ${group.items.map(c => {
+              const n = (c.cwes || []).length;
+              const on = checked.has(c.key);
+              return `<button type="button" class="map-class${on ? ' is-picked' : ''}"
+                data-class="${safeAttr(c.key)}"
+                aria-pressed="${on}"
+                title="${safeAttr(c.description || c.label)}">
+                <span class="map-code">${esc(c.code || c.key.toUpperCase())}</span>
+                <span class="map-label">${esc(c.label)}</span>
+                <span class="map-count">${n} CWE${n === 1 ? '' : 's'}</span>
+                <span class="map-track" aria-hidden="true"><i></i></span>
+              </button>`;
+            }).join('')}
+          </div>
+        </section>`).join('');
+
+      // Set here and not as a style attribute: the CSP is `style-src 'self'`
+      // with no unsafe-inline, so an inline style is dropped and every track
+      // renders empty -- which looks like a design choice rather than a bug.
+      // CSSOM writes are not governed by style-src, and a browser test
+      // asserts a non-zero width so a CSP change cannot quietly flatten them.
+      map.querySelectorAll('.map-class').forEach(el => {
+        const cls = CLASSES.find(c => c.key === el.dataset.class);
+        const n = cls ? (cls.cwes || []).length : 0;
+        const fill = el.querySelector('.map-track > i');
+        // A one-CWE class still gets a visible mark rather than nothing.
+        if (fill) fill.style.width = (Math.max(n / widest, 0.03) * 100).toFixed(2) + '%';
+      });
+    }
+
     function renderSelection() {
+      renderClassMap();
       const classBoxes = $$('input[name=category]:checked');
       const ids = Array.from(PICKED).sort((a, b) => Number(a) - Number(b));
       const chips = classBoxes.map(box => {
@@ -628,7 +777,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         : '<span class="chips-empty">Nothing selected — search above or tick a class.</span>';
       const total = classBoxes.length + ids.length;
       $('#selection-count').textContent = total
-        ? `${total} selected · ${total} AI pass${total > 1 ? 'es' : ''} per advisory`
+        ? `${total} selected, ${total} AI pass${total > 1 ? 'es' : ''} per advisory`
         : '';
       updateNvdHint();
       // Changing the selection can invalidate verdicts already on screen.
@@ -647,6 +796,27 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         : 'Without NVD_API_KEY, queries take ~7s per CWE. Free key at nvd.nist.gov';
     }
 
+    // What a folded section is currently set to, written onto its own
+    // heading. Folding a control away is only honest if the setting stays
+    // on screen: with Sources shut and no value here, a query could run
+    // against OSV's 220MB npm export with nothing in the rail saying so.
+    function renderFoldValues() {
+      const sourceSlot = $('#sources-value');
+      if (sourceSlot) {
+        const picked = $$('input[name=source]:checked')
+          .map(box => box.value === 'osv-native'
+            ? 'OSV native' : box.value.toUpperCase());
+        sourceSlot.textContent = picked.length
+          ? picked.join(' + ') : 'none selected';
+      }
+      const optionSlot = $('#options-value');
+      if (optionSlot) {
+        const chosen = $('#published').selectedOptions[0];
+        const when = (chosen ? chosen.textContent : '').trim().toLowerCase();
+        optionSlot.textContent = `${$('#max_results').value} results, ${when}`;
+      }
+    }
+
     // Exactly what resolve_cwes() will produce server-side for this selection.
     function estimatedCweCount() {
       const extended = $('#include_extended').checked;
@@ -660,20 +830,74 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return set.size;
     }
 
+    // Toasts stack in one region instead of each pinning itself to the same
+    // viewport corner. A degraded multi-source search emits one toast per
+    // warning ("NVD rate-limited", "OSV export stale", "GHSA truncated"), and
+    // as independent fixed-position elements they landed exactly on top of
+    // each other: the user saw one line and silently lost the rest.
+    function toastRegion() {
+      let region = document.getElementById('toast-region');
+      if (!region) {
+        region = document.createElement('div');
+        region.id = 'toast-region';
+        region.className = 'toast-region';
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', 'Notifications');
+        document.body.appendChild(region);
+      }
+      return region;
+    }
+
     function toast(msg, kind='') {
       const t = document.createElement('div');
       t.className = 'toast ' + kind;
       t.textContent = msg;
       t.setAttribute('role', kind === 'err' ? 'alert' : 'status');
       t.setAttribute('aria-live', kind === 'err' ? 'assertive' : 'polite');
-      document.body.appendChild(t);
+      toastRegion().appendChild(t);
       setTimeout(() => t.remove(), 5000);
+    }
+
+    // The card carries role="dialog" aria-modal="true", but nothing made the
+    // background inert and nothing wrapped Tab -- so a keyboard user could
+    // Tab straight past "Continue" into the CWE search box behind the scrim,
+    // invisible, focus ring hidden under the overlay, every control they
+    // reached returning 401. Meanwhile a screen reader honouring aria-modal
+    // was told there was nothing outside the dialog. Same machinery the
+    // filter panel already uses.
+    function trapAuthGateTab(e) {
+      if (e.key !== 'Tab') return;
+      const gate = $('#auth-gate');
+      if (!gate || gate.hidden) return;
+      const items = Array.from(gate.querySelectorAll(FOCUSABLE))
+        .filter(el => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    function setAuthGateBackgroundInert(inert) {
+      ['.topbar', '.layout'].forEach(selector => {
+        const el = document.querySelector(selector);
+        if (!el) return;
+        if (inert) el.setAttribute('inert', '');
+        else el.removeAttribute('inert');
+      });
     }
 
     function showAuthGate(msg) {
       const gate = $('#auth-gate');
       if (!gate) return;
       gate.hidden = false;
+      setAuthGateBackgroundInert(true);
+      document.addEventListener('keydown', trapAuthGateTab, true);
       const hint = $('#auth-gate-hint');
       if (hint && msg) hint.textContent = msg;
       const input = $('#auth-token');
@@ -686,6 +910,8 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function hideAuthGate() {
       const gate = $('#auth-gate');
       if (gate) gate.hidden = true;
+      setAuthGateBackgroundInert(false);
+      document.removeEventListener('keydown', trapAuthGateTab, true);
     }
 
     function saveAuthToken() {
@@ -723,9 +949,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    function safeAttr(s) {
-      return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    }
+    // Was a second escaper that differed from esc() only by not coercing:
+    // a numeric advisory_id or CWE label threw inside renderCard and blanked
+    // the whole result list, because render() builds every card in one
+    // expression. esc() is correct for text and for a double-quoted
+    // attribute, so there is one of them now.
+    const safeAttr = esc;
 
     function safeUrl(value) {
       try {
@@ -752,7 +981,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           const advice = quota
             ? 'The AI provider is rate-limiting or out of quota — wait a moment, then retry.'
             : esc(v.error);
-          aiHtml = `<div class="ai-verdict error" role="alert">
+          aiHtml = `<div class="ai-verdict error">
             <div class="verdict-head">
               <span class="verdict-state">AI error</span>
               <button type="button" class="verdict-retry" data-retry="${safeAttr(a.advisory_id)}">Retry</button>
@@ -770,7 +999,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
             <div class="verdict-head">
               <span class="verdict-state">${state}</span>
               ${v.vuln_type ? '<span class="verdict-type">/ '+esc(v.vuln_type)+'</span>' : ''}
-              <span class="verdict-score">${pct}%${v.cached?' · CACHED':''}${v.has_errors?' · PARTIAL':''}</span>
+              <span class="verdict-score">${pct}%</span>${v.cached
+                ? '<span class="verdict-note" title="Re-used a stored verdict; no AI call was made">reused</span>' : ''}${v.has_errors
+                ? '<span class="verdict-note verdict-note--warn" title="Some categories failed to score">scored in part</span>' : ''}
             </div>
             <progress class="conf-bar" max="100" value="${pct}" aria-label="AI confidence ${pct}%">${pct}%</progress>
             <div class="desc">${esc(v.reason||'')}</div>
@@ -801,42 +1032,64 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const srcBadge = srcs.length
         ? `<span class="badge src src-${sourceClass}" title="Data source(s)">${srcs.map(s=>esc(String(s).toUpperCase())).join('+')}</span>` : '';
       const nativeBadge = (a.native && !(a.cwes||[]).length)
-        ? `<span class="badge badge--native" title="Native OSV record with no CWE — relies on AI">NO CWE · AI</span>` : '';
+        ? `<span class="badge badge--native" title="Native OSV record with no CWE — relies on AI">No CWE tag</span>` : '';
       const withdrawnBadge = a.withdrawn_at
-        ? `<span class="badge badge--withdrawn">WITHDRAWN ${esc(String(a.withdrawn_at).slice(0,10))}</span>` : '';
+        ? `<span class="badge badge--withdrawn">Withdrawn ${esc(String(a.withdrawn_at).slice(0,10))}</span>` : '';
       const kevBadge = a.kev
-        ? `<span class="badge badge--kev" title="CISA Known Exploited Vulnerability">KEV / EXPLOITED</span>` : '';
+        ? `<span class="badge badge--kev" title="In CISA's Known Exploited Vulnerabilities catalog: attacks have been observed in the wild">Exploited (KEV)</span>` : '';
       // Number(null) is 0 and finite, which used to render "no EPSS data" as a
       // measured 0.00% exploit probability — a fabricated fact in a triage tool.
       const hasEpss = a.epss_percentage != null && Number.isFinite(Number(a.epss_percentage));
       const epssPct = hasEpss ? Number(a.epss_percentage) : NaN;
       const hasPercentile = a.epss_percentile != null && Number.isFinite(Number(a.epss_percentile));
       const epssMeta = hasEpss
-        ? `<span class="epss-meter" title="EPSS exploit probability${hasPercentile ? ' · percentile ' + Math.round(Number(a.epss_percentile) * 100) : ''}">
+        ? `<span class="epss-meter" title="EPSS exploit probability${hasPercentile ? ', percentile ' + Math.round(Number(a.epss_percentile) * 100) : ''}">
             <span class="meta-label">EPSS</span>
             <progress max="100" value="${Math.min(100, Math.max(0, epssPct * 100))}" aria-label="EPSS ${(epssPct * 100).toFixed(2)}%"></progress>
-            ${(epssPct * 100).toFixed(2)}%${hasPercentile ? ' · p' + Math.round(Number(a.epss_percentile) * 100) : ''}
+            ${(epssPct * 100).toFixed(2)}%${hasPercentile ? ' (p' + Math.round(Number(a.epss_percentile) * 100) + ')' : ''}
           </span>`
         : '';
+      // Three rows of 11px grey used to sit between the title and the
+      // verdict -- provenance, then packages, then ids -- all at one rank,
+      // which is what made a column of these unscannable: nothing told the
+      // eye which row to read. They are ranked now.
+      //
+      // The flag row carries only what is exceptional. KEV, withdrawn and
+      // "no CWE tag" are true of a few rows in a result set, so each one
+      // earns a line of its own; the row is omitted entirely when none
+      // applies, rather than rendering an empty flex box with a margin.
+      const flags = `${nativeBadge}${kevBadge}${withdrawnBadge}`;
+      const flagRow = flags ? `<div class="badges card-flags">${flags}</div>` : '';
+      // The package and the version that fixes it: the one fact on the card
+      // that is an instruction. It is the only secondary row at --text-sm.
+      const affected = `${pkgs}${morePkgs}`;
+      const affectedRow = affected
+        ? `<div class="badges card-affected">${affected}</div>` : '';
+      // Everything that is true of every row in the result set -- the
+      // source, the ecosystem, the CWE you searched by -- joins the ids and
+      // the dates in one quiet row. Per-row they carry almost no signal; it
+      // is the set they belong to that was already chosen in the rail.
+      //
+      // Below the verdict, not above it. The verdict answers the question
+      // the page exists to ask, and it used to sit under a wall of ids.
       return `<article class="card ${sevbar} ${dimClass}" data-id="${esc(a.advisory_id)}">
         <div class="card-top">
           <h3 class="title">${esc(a.summary)}</h3>
           <span class="badge sev ${safeSeverity}">${esc(a.severity)}</span>
         </div>
-        <div class="badges">
-          ${srcBadge}${nativeBadge}${kevBadge}${withdrawnBadge}
+        ${flagRow}
+        ${affectedRow}
+        ${aiHtml}
+        <div class="meta">
+          ${srcBadge}
           ${ecoNames.length ? `<span class="badge eco">${esc(ecoNames.join(', '))}</span>` : ''}
           ${cwes}
-        </div>
-        <div class="badges">${pkgs}${morePkgs}</div>
-        <div class="meta">
           <span><span class="meta-label">Advisory</span><a href="${safeUrl(a.html_url)}" target="_blank" rel="noopener noreferrer">${esc(a.ghsa_id || a.advisory_id)}</a></span>
           <span><span class="meta-label">CVE</span>${cve}</span>
           <span><span class="meta-label">Published</span><time datetime="${esc((a.published_at||'').slice(0,10))}">${esc((a.published_at||'').slice(0,10))}</time></span>
           ${a.cvss_score ? '<span><span class="meta-label">CVSS</span>'+esc(a.cvss_score)+'</span>' : ''}
           ${epssMeta}
         </div>
-        ${aiHtml}
       </article>`;
     }
 
@@ -844,9 +1097,14 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     function currentItems() {
       let items = LAST.slice();
       if ($('#only_match').checked) {
+        const cats = selectedCategories();
         items = items.filter(a => {
           const v = AI[a.advisory_id] || a.ai;
-          return v && v.is_match === true;
+          if (!v || v.is_match !== true) return false;
+          // A half-rescored queue degrades per row rather than globally: a
+          // verdict that does not cover the current query cannot confirm it.
+          const scored = v.scored_categories || [];
+          return cats.every(category => scored.includes(category));
         });
       }
       // AI-confirmed matches stay at the top; otherwise honour the selected sort.
@@ -859,7 +1117,11 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         if (my !== mx) return my - mx;
         let cmp = 0;
         if (sort === 'cve_id') {
-          cmp = (x.cve_id || '').localeCompare(y.cve_id || '');
+          // numeric: a CVE id is a year and a sequence, not a word. Plain
+          // localeCompare put CVE-2026-9 above CVE-2026-100, so "newest CVE
+          // first" meant "highest ASCII first". Matches the server's sort.
+          cmp = (x.cve_id || '').localeCompare(y.cve_id || '', undefined,
+                                               { numeric: true });
         } else if (sort === 'updated') {
           cmp = (x.updated_at || '').localeCompare(y.updated_at || '');
         } else if (sort === 'epss_percentage') {
@@ -877,6 +1139,8 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // Only rows that still need work. A partial verdict that already resolved to
     // a match is done — counting it made "Retry failed" re-bill finished rows.
+    // AI is the single source of verdict truth; `a.ai` is folded into it at
+    // ingestion. See search().
     function failedIds() {
       return LAST.map(a => a.advisory_id).filter(id => {
         const v = AI[id];
@@ -886,11 +1150,28 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // True when verdicts on screen were scored for a different selection than
     // the one now active — they describe another question's answer.
+    // Staleness is a property of each verdict, not one flag for the whole
+    // map. AI_CATS was a single global that classifyIds overwrote after
+    // scoring ANY subset: score 100 against BAC, change the class to SQLi,
+    // then hit "Retry failed" for the 3 that errored, and AI_CATS became
+    // ['sqli'] -- so the banner vanished and "Confirmed only" re-enabled
+    // while 97 verdicts still answered "is this BAC?". Every aggregate
+    // already carries scored_categories, so ask the verdicts themselves.
+    function staleVerdictCategories() {
+      const cats = selectedCategories();
+      if (!cats.length) return null;
+      for (const verdict of Object.values(AI)) {
+        const scored = verdict && verdict.scored_categories;
+        // An error verdict was never scored against anything; it is missing,
+        // not stale, and updateActionButtons already handles that.
+        if (!scored || !scored.length) continue;
+        if (cats.some(category => !scored.includes(category))) return scored;
+      }
+      return null;
+    }
+
     function verdictsAreStale() {
-      if (!AI_CATS || !Object.keys(AI).length) return false;
-      const now = selectedCategories().slice().sort();
-      return now.length !== AI_CATS.length
-        || now.some((c, i) => c !== AI_CATS[i]);
+      return staleVerdictCategories() !== null;
     }
 
     function classLabelFor(key) {
@@ -901,11 +1182,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     function renderStaleBanner() {
       const banner = $('#stale-banner');
-      const stale = verdictsAreStale();
+      const scored = staleVerdictCategories();
+      const stale = scored !== null;
       banner.hidden = !stale;
       if (stale) {
         banner.textContent = 'AI verdicts below were scored for '
-          + AI_CATS.map(classLabelFor).join(' + ')
+          + scored.map(classLabelFor).join(' + ')
           + ', not the current selection. Re-run “Refine with AI” before trusting or exporting them.';
       }
       return stale;
@@ -939,6 +1221,18 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       rb.textContent = nfail ? `Retry failed (${nfail})` : 'Retry failed';
     }
 
+    // Facts qualifying the result set. They used to be glued into one
+    // string with " · " between them -- "248 advisories · Most urgent first
+    // · 12 not scored · GHSA:100 + NVD:80 · capped at 250 · CWEs: …" -- so
+    // seven unrelated facts, two of them warnings, arrived as a single run
+    // of text with no way to skip to the one that mattered. Each is its own
+    // element now, separated by space rather than punctuation.
+    function fact(html, title, cls, raw) {
+      const attrs = (cls ? ` class="summary-fact ${cls}"` : ' class="summary-fact"')
+        + (title ? ` title="${safeAttr(title)}"` : '');
+      return `<span${attrs}>${raw ? html : esc(html)}</span>`;
+    }
+
     // The summary used to be written once per search and then contradict the
     // screen as soon as a filter hid anything.
     function renderSummary(shown) {
@@ -946,31 +1240,130 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       if (!m) return;
       const ps = Object.entries(m.perSource);
       const psText = ps.length
-        ? ' · ' + ps.map(([k, v]) => `${k.toUpperCase()}:${v}`).join(' + ') : '';
-      const head = shown === m.count
-        ? `<b>${m.count}</b> advisories`
-        : `<b>${shown}</b> of ${m.count} shown`;
+        ? fact(ps.map(([k, v]) => `${k.toUpperCase()}\u2009${v}`).join(' + '),
+               'How many rows each source contributed before the merge') : '';
       // "Hidden" and "never scored" look identical once the filter is on, which
       // reads as "the AI cleared these" when the AI never saw them.
       const unscored = $('#only_match').checked ? unscoredCount() : 0;
       const unscoredNote = unscored
-        ? ` · <span class="summary-unscored" title="These were never scored, so they are hidden rather than cleared">${unscored} not scored</span>`
+        ? fact(`${unscored} not scored`,
+               'These were never scored, so they are hidden rather than cleared',
+               'summary-unscored')
         : '';
       // A full page is very likely a truncated one; saying so prevents reading
       // "0 hits for CWE-639" as "this CWE has no advisories".
       const capped = m.count >= m.maxResults
-        ? ` · <span class="summary-capped" title="Raise “Max results” to widen the query">capped at ${m.maxResults}</span>`
+        ? fact(`capped at ${m.maxResults}`,
+               'Raise “Max results” to widen the query', 'summary-capped')
         : '';
       const shownCwes = m.cwes.slice(0, 6).join(', ');
       const more = m.cwes.length > 6 ? `<span title="${safeAttr(m.cwes.join(', '))}"> +${m.cwes.length - 6} more</span>` : '';
-      $('#summary').innerHTML = head + unscoredNote + psText + capped
-        + ` · CWEs: <code>${esc(shownCwes)}</code>${more}`
-        + (m.cached ? ` · <span class="summary-cached">${m.cached} already AI-scored</span>` : '');
+      // Only when there is something to list: an empty set still rendered
+      // "CWEs" followed by an empty <code>, which paints as a stray 6px box.
+      const cweText = shownCwes
+        ? fact(`CWEs <code>${esc(shownCwes)}</code>${more}`, '', '', true)
+        : '';
+      const cachedText = m.cached
+        ? fact(`${m.cached} already AI-scored`,
+               'Verdicts re-used from the cache; these cost nothing to show',
+               'summary-cached')
+        : '';
+      // The count and the order are one statement -- "248 advisories, most
+      // urgent first" -- not two facts that happen to be adjacent. Nothing
+      // on the results surface said what the order was, so a date-sorted
+      // queue read as a ranked one, and the first row being LOW looked like
+      // a bug rather than the newest advisory.
+      const head = shown === m.count
+        ? `<b>${m.count}</b> advisories`
+        : `<b>${shown}</b> of ${m.count} shown`;
+      $('#summary').innerHTML =
+        `<p class="summary-head">${head}, `
+        + `<span class="summary-order">${esc(currentOrderWords().toLowerCase())}</span></p>`
+        + `<p class="summary-facts">${unscoredNote}${capped}${psText}${cweText}${cachedText}</p>`;
+    }
+
+    // "Newest first" is a date word. It was shown for every sort field, so
+    // ordering by CVE ID offered "Newest/Oldest" for a thing that has no
+    // age, and ordering by EPSS called the highest probability "newest" --
+    // the control described a different query than the one it ran.
+    const DIRECTION_WORDS = {
+      risk: ['Most urgent first', 'Least urgent first'],
+      published: ['Newest first', 'Oldest first'],
+      updated: ['Most recently updated', 'Least recently updated'],
+      cve_id: ['Highest CVE id first', 'Lowest CVE id first'],
+      epss_percentage: ['Most likely exploited first', 'Least likely first'],
+      epss_percentile: ['Highest percentile first', 'Lowest percentile first'],
+    };
+
+    function currentOrderWords() {
+      const words = DIRECTION_WORDS[$('#sort').value] || DIRECTION_WORDS.published;
+      return ($('#direction').value === 'asc' ? words[1] : words[0]).toLowerCase();
+    }
+
+    function syncDirectionWords() {
+      const select = $('#direction');
+      const words = DIRECTION_WORDS[$('#sort').value] || DIRECTION_WORDS.published;
+      const [desc, asc] = words;
+      for (const option of select.options) {
+        option.textContent = option.value === 'asc' ? asc : desc;
+      }
+    }
+
+    // The workspace has two views. "browse" is the bug-class map on its own;
+    // "results" adds the command bar, whose every control is dead until a
+    // search has run. One way only, and set when the search *starts*: the
+    // spinner, an empty result set and an error all belong to the results
+    // view, because each of them is an answer to a question that was asked.
+    function setView(view) {
+      const workspace = $('#workspace');
+      if (workspace) workspace.dataset.view = view;
+    }
+
+    function renderWarnings(list) {
+      const slot = $('#search-warnings');
+      if (!slot) return;
+      slot.innerHTML = list
+        .map(w => `<li>${esc(String(w))}</li>`)
+        .join('');
+      slot.hidden = list.length === 0;
+    }
+
+    // render() replaces all of #results in one innerHTML write, so whatever
+    // had focus inside it is destroyed. A keyboard user who Tabbed to the
+    // Retry button on advisory 47 of 200 and pressed Enter lost focus to
+    // <body>, lost their scroll position, and Tabbed from the top of the
+    // document again -- with nothing announcing that the retry had worked.
+    function focusAnchor() {
+      const active = document.activeElement;
+      const results = $('#results');
+      if (!active || !results || !results.contains(active)) return null;
+      const card = /** @type {HTMLElement | null} */ (active.closest('.card'));
+      if (!card || !card.dataset.id) return null;
+      return {
+        id: card.dataset.id,
+        retry: active.classList.contains('verdict-retry'),
+        scrollY: window.scrollY,
+      };
+    }
+
+    function restoreFocus(anchor) {
+      if (!anchor) return;
+      let card = null;
+      try {
+        card = $('#results .card[data-id="' + CSS.escape(anchor.id) + '"]');
+      } catch (_) { card = null; }
+      if (!card) return;
+      const target = anchor.retry ? card.querySelector('.verdict-retry') : null;
+      // preventScroll, then put the page back where it was: focusing scrolls
+      // the element into view, which is its own jump.
+      if (target) target.focus({ preventScroll: true });
+      window.scrollTo({ top: anchor.scrollY });
     }
 
     function render() {
       const items = currentItems();
       const el = $('#results');
+      const anchor = focusAnchor();
       renderSummary(items.length);
       if (!items.length) {
         // Distinguish "the query found nothing" from "your filter hid it all".
@@ -983,6 +1376,7 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       }
       el.innerHTML = items.map(renderCard).join('');
       updateActionButtons();
+      restoreFocus(anchor);
     }
 
     // `overrides` lets the Auto pipeline run with its own source set without
@@ -997,6 +1391,10 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       const sources = state.sources;
       if (document.body.classList.contains('filters-open')) setFilterPanel(false, false);
       $('#search-btn').disabled = true;
+      // After the validation bail-outs above, not before: a rejected query
+      // never ran, so the page is still browsing and the command bar would
+      // arrive with nothing behind it.
+      setView('results');
       setResultsBusy(true);
       $('#results').innerHTML = `<div class="loading"><span class="spinner"></span>Searching advisories…</div>`;
       $('#summary').textContent = 'Searching…';
@@ -1004,7 +1402,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       // the Auto pipeline or export controls as if it were fresh data.
       LAST = [];
       AI = {};
-      AI_CATS = null;
       updateActionButtons();
       const payload = Object.assign({}, state, {
         published: publishedWindow(state.published),
@@ -1021,17 +1418,16 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
         AI = {};
         LAST.forEach(a => { if (a.ai) AI[a.advisory_id] = a.ai; });
         const cached = LAST.filter(a => a.ai).length;
-        // The server only attaches cached verdicts when every requested
-        // category has one, so they belong to exactly this selection.
-        AI_CATS = cached ? state.categories.slice().sort() : null;
         SEARCH_META = {
-          count: data.count,
+          // Coerced at the boundary: renderSummary writes these straight into
+          // innerHTML, and the sink has no defence of its own.
+          count: Number(data.count) || 0,
           perSource: data.query.per_source || {},
           cwes: data.query.cwes || [],
           maxResults: state.max_results,
           cached: cached,
         };
-        (data.warnings || []).forEach(w => toast('⚠️ ' + w, 'err'));
+        renderWarnings(data.warnings || []);
         $('#ai-btn').disabled = LAST.length === 0;
         $('#only_match').disabled = LAST.length === 0;
         $('#only_match').checked = false;
@@ -1068,7 +1464,6 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           advisory_ids: batch,
         });
         Object.assign(AI, data.verdicts);
-        AI_CATS = sent.slice().sort();
       }
       return ids.filter(id => AI[id] && (AI[id].error || AI[id].has_errors)).length;
     }
@@ -1220,6 +1615,12 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       let items = currentItems();
       if (fmt === 'csv-matches') items = items.filter(a => (AI[a.advisory_id]||a.ai||{}).is_match === true);
       if (!items.length) { toast('Nothing to export', 'err'); return; }
+      // The stale banner says "before trusting or exporting them" and
+      // nothing acted on the second half. Not a block: the CSV carries
+      // ai_scored_categories so it self-describes. But it should say so.
+      if (verdictsAreStale()) {
+        toast('Exporting AI verdicts scored for a different selection.', 'err');
+      }
       const rows = items.map(flatRow);
       if (fmt === 'json') {
         const full = items.map(a => ({...a, ai: AI[a.advisory_id] || a.ai || null}));
@@ -1290,7 +1691,9 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
 
     // === Event Listeners ===
     $('#auto-btn').addEventListener('click', autoRun);
-    $('#search-btn').addEventListener('click', search);
+    $('#sort').addEventListener('change', syncDirectionWords);
+    syncDirectionWords();
+    $('#search-btn').addEventListener('click', () => search());
     $('#ai-btn').addEventListener('click', refineAI);
     // "Only AI matches" is a display filter — but if nothing is scored yet it
     // would show an empty list, so auto-run the AI pass first, then filter.
@@ -1306,11 +1709,15 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
           'Filtering to confirmed matches needs an AI pass first.\n\n'
           + `${pending} advisory(ies) × ${classes} class(es) = about ${calls} AI call(s).\n\n`
           + 'Run it now?');
-        if (!proceed) { e.target.checked = false; return; }
+        // Captured before the await: re-reading e.target across a
+        // suspension point is the shape of a real race, and a reader cannot
+        // tell this one is safe without checking what refineAI does.
+        const box = /** @type {HTMLInputElement} */ (e.target);
+        if (!proceed) { box.checked = false; return; }
         if (!await refineAI()) {
           // The queue would otherwise look empty with no hint that unticking
           // this box brings the raw results back.
-          e.target.checked = false;
+          box.checked = false;
           toast('AI pass failed — showing the raw results again', 'err');
         }
       }
@@ -1319,6 +1726,36 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
     $('#retry-btn').addEventListener('click', retryFailed);
     // Per-card retry: the toolbar button can be scrolled far out of view by the
     // time the user reads the error on a card.
+    // Picking a class from the opening map. Delegated, because #results is
+    // rewritten in one innerHTML write and a bound listener would not
+    // survive it. Selection only -- it ticks the same checkbox the rail
+    // does and leaves running the search to the button that says so, so a
+    // stray click never spends anything.
+    $('#results').addEventListener('click', (e) => {
+      const hit = e.target.closest('.map-class');
+      if (!hit) return;
+      const key = hit.dataset.class;
+      const cls = CLASSES.find(c => c.key === key);
+      if (!cls) return;
+      const box = $$('input[name=category]').find(c => c.value === key);
+      if (box && box.checked) {
+        // Second click removes it, so the map is a toggle rather than a
+        // one-way door with no visible way back.
+        box.checked = false;
+        announceSelection(cls.label + ' class removed');
+        renderSelection();
+      } else {
+        pickEntry({ kind: 'class', key: cls.key, label: cls.label });
+      }
+      // pickEntry() hands focus to the rail's search box, which is right
+      // when you got there by typing and wrong when you got there by
+      // clicking a tile: it throws a keyboard user back across the page.
+      // The map is re-rendered by renderSelection(), so the tile is a new
+      // element and has to be found again by key.
+      const again = $('#class-map .map-class[data-class="' + CSS.escape(key) + '"]');
+      if (again) again.focus();
+    });
+
     $('#results').addEventListener('click', async (e) => {
       const button = e.target.closest('.verdict-retry');
       if (!button) return;
@@ -1423,7 +1860,17 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       toast('Recent searches cleared', 'ok');
     });
     $('#include_extended').addEventListener('change', updateNvdHint);
-    $$('input[name=source]').forEach(box => box.addEventListener('change', updateNvdHint));
+    $$('input[name=source]').forEach(box => box.addEventListener('change', () => {
+      updateNvdHint();
+      renderFoldValues();
+    }));
+    // applyState() restores a whole query at once -- from history, or from a
+    // shared link -- by writing straight to the controls, which fires no
+    // change event. The headings are refreshed on every path that can move
+    // these values, so a restored search never shows the previous one's.
+    ['#published', '#max_results'].forEach(sel =>
+      $(sel).addEventListener('change', renderFoldValues));
+    renderFoldValues();
     document.addEventListener('mousedown', e => {
       const finder = $('.cwe-finder');
       if (finder && !finder.contains(e.target)) closeCombo();
@@ -1474,3 +1921,60 @@ const { POPULAR, CLASSES, OSV_SUPPORTED, AI_CONFIGURED, AI_CALL_BUDGET, AUTH_REQ
       });
       if (!sessionStorage.getItem('vulnsight_token')) showAuthGate();
     }
+
+    // --- Theme -------------------------------------------------------------
+    // This used to be a second inline <script> in index.html that re-derived
+    // the effective theme and restated both theme colours, so the palette
+    // lived in three places. The browser-chrome colour is now read back out
+    // of the resolved --bg token, which means style.css stays the only file
+    // that knows what the themes look like.
+    (function initTheme() {
+      const toggle = $('#theme-toggle');
+      if (!toggle) return;
+
+      function sync() {
+        const stored = localStorage.getItem('theme');
+        const label = stored === 'light'
+          ? 'Theme: light. Switch to dark.'
+          : stored === 'dark'
+            ? 'Theme: dark. Follow the system instead.'
+            : 'Theme: following the system. Switch to light.';
+        toggle.setAttribute('aria-label', label);
+        toggle.title = label;
+        const meta = document.querySelector('meta[name="theme-color"]');
+        // instanceof, not a cast: `content` belongs to HTMLMetaElement, and
+        // assigning it on any other element silently creates an expando
+        // property -- the browser chrome would simply never change colour,
+        // with nothing to notice.
+        if (meta instanceof HTMLMetaElement) {
+          const bg = getComputedStyle(document.documentElement)
+            .getPropertyValue('--bg').trim();
+          if (bg) meta.content = bg;
+        }
+      }
+
+      // Three states, not two: following the system is the default and has
+      // to be reachable again. A two-way toggle meant one click opted the
+      // user out of prefers-color-scheme permanently.
+      toggle.addEventListener('click', () => {
+        const stored = localStorage.getItem('theme');
+        const next = stored === 'light' ? 'dark' : stored === 'dark' ? '' : 'light';
+        if (next) {
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem('theme', next);
+        } else {
+          delete document.documentElement.dataset.theme;
+          localStorage.removeItem('theme');
+        }
+        sync();
+      });
+      window.matchMedia('(prefers-color-scheme: light)')
+        .addEventListener('change', sync);
+      // Another tab may have changed the theme or the search history.
+      window.addEventListener('storage', e => {
+        if (e.key === 'theme') sync();
+        if (e.key === HISTORY_KEY) renderHistory();
+      });
+      sync();
+    })();
+})();

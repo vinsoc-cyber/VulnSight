@@ -38,7 +38,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 
 - **The whole CWE catalog is searchable.** Type a code (`639`), MITRE's official
   name ("prototype pollution"), or a community alias (`IDOR`, `BOLA`, `SSRF`,
-  `XXE`) and pick from all **944 weaknesses of CWE 4.20**. The catalog is
+  `XXE`) and pick from all **956 weaknesses of CWE 5.0**. The catalog is
   searched in the browser — ~0.5 ms per keystroke, no round trip.
 - **29 curated bug classes** in 7 groups, each with a high-precision *core* CWE
   set, a wider *extended* set, and the terms people actually type (`toctou`,
@@ -64,23 +64,26 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 | [Configuration](docs/configuration.md) | Every environment variable, with defaults |
 | [Using the UI](docs/usage.md) | The full walkthrough, control by control |
 | [Bug classes](docs/bug-classes.md) | All 29 classes, and how to add one correctly |
-| [CWE catalog](docs/cwe-catalog.md) | Where the 944 CWEs come from, `cwe:<id>`, regeneration |
+| [CWE catalog](docs/cwe-catalog.md) | Where the 956 CWEs come from, `cwe:<id>`, regeneration |
 | [Data sources](docs/data-sources.md) | GHSA / NVD / OSV / OSV-native, and honest coverage limits |
 | [AI classification](docs/ai-classification.md) | Prompt, verdict cache, key rotation, cost controls |
 | [HTTP API](docs/api.md) | Every endpoint, request and response shape |
 | [Scripting and CI](docs/automation.md) | Driving it from cron or a pipeline, and what will bite you |
 | [Architecture](docs/architecture.md) | Module map and the search pipeline end to end |
-| [Testing](docs/testing.md) | 311 offline tests + 21 browser tests, and how to verify a change |
+| [Testing](docs/testing.md) | the suite, the frontend linters, and how to verify a change |
+| [Design](docs/design.md) | the plan this interface is built to, and the measurements that check it |
 | [Operations](docs/operations.md) | Exposure, caches, quotas, troubleshooting |
+| [Review dispositions](docs/review-dispositions.md) | Every finding from the code review, and what happened to it |
+| [Open findings](docs/open-findings.md) | Defects found and reproduced by the review that are **not** fixed yet |
 | [SECURITY.md](SECURITY.md) | Threat model and how to report a vulnerability |
 
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest discover -s tests    # 332 tests; 311 need no credentials
+.venv/bin/python -m unittest discover -s tests    # 543 tests; 517 need no credentials
 ```
 
-The 21 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
+The 59 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
 and a browser are installed — see [Testing](docs/testing.md).
 
 ## Status and limits

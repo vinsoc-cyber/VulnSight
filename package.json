@@ -1,0 +1,19 @@
+{
+  "name": "vulnsight-frontend-checks",
+  "private": true,
+  "description": "Dev-only tooling for static/. VulnSight ships no bundler and no build step: static/app.js and static/style.css are served exactly as they are written. These are checkers, not a pipeline.",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:css": "stylelint \"static/*.css\"",
+    "typecheck": "tsc -p jsconfig.json",
+    "test": "node tests/test_frontend_security.js && node tests/test_frontend_finder.js",
+    "check": "npm run lint && npm run lint:css && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "eslint": "9.17.0",
+    "globals": "15.14.0",
+    "stylelint": "16.12.0",
+    "stylelint-config-standard": "36.0.1",
+    "typescript": "5.7.2"
+  }
+}

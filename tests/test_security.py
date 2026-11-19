@@ -1,9 +1,12 @@
 """Unit tests for CSRF origin parsing, bind guards, tokens, and rate limits."""
 
 import inspect
+import io
 import os
 import re
 import sys
+import shutil
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -190,18 +193,135 @@ class TestBindGuard(unittest.TestCase):
             self.assertTrue(security.has_loaded_secrets())
 
 
+class TestResolvedBindHost(unittest.TestCase):
+    """HOST is authoritative only when this process binds the socket itself.
+
+    Gunicorn -- which this project ships in its own Dockerfile -- binds from
+    its own --bind and never reads HOST, so trusting HOST there served the
+    operator's credentials unauthenticated on 0.0.0.0.
+    """
+
+    def setUp(self):
+        self._saved = security._declared_bind
+        security._declared_bind = None
+
+    def tearDown(self):
+        security._declared_bind = self._saved
+
+    def test_unknown_bind_is_treated_as_exposed(self):
+        with mock.patch.dict(os.environ, {"HOST": "", "VULNSIGHT_BIND": ""}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "0.0.0.0")
+
+    def test_a_loopback_host_env_does_not_vouch_for_a_wsgi_bind(self):
+        """`docker run -e HOST=127.0.0.1 -p 0.0.0.0:5000:5000` must still require a token."""
+        with mock.patch.dict(os.environ, {"HOST": "127.0.0.1", "VULNSIGHT_BIND": ""}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "0.0.0.0")
+            self.assertFalse(security.is_loopback_bind(security.resolved_bind_host()))
+
+    def test_a_self_declared_bind_wins(self):
+        security.declare_self_bind("127.0.0.1")
+        with mock.patch.dict(os.environ, {"HOST": "0.0.0.0"}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "127.0.0.1")
+
+    def test_operator_can_declare_a_loopback_wsgi_bind_explicitly(self):
+        with mock.patch.dict(os.environ, {"HOST": "", "VULNSIGHT_BIND": "127.0.0.1"}, clear=False):
+            self.assertEqual(security.resolved_bind_host(), "127.0.0.1")
+
+    def test_credentials_on_an_unknown_bind_mint_a_token(self):
+        env = {"HOST": "", "VULNSIGHT_BIND": "", "VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            token = security.ensure_api_token_for_bind(security.resolved_bind_host())
+            self.assertTrue(token)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, security.TOKEN_FILENAME)))
+
+    def test_a_second_worker_reuses_the_first_workers_token(self):
+        """Both workers used to write; the file kept one token and each worker
+        authenticated against its own, so a client got 401 from one and 200
+        from the next."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            path = os.path.join(tmp, security.TOKEN_FILENAME)
+            first = security._load_or_create_token(path)
+            second = security._load_or_create_token(path)
+            self.assertEqual(first, second)
+
+    def test_a_worker_that_loses_the_race_reuses_the_winners_token(self):
+        """The real race: both workers are already past the "no file yet"
+        check when the first one writes. Without an exclusive create the
+        second overwrites it, so the file holds one token while each worker
+        authenticates against its own -- a client gets 401 from one and 200
+        from the next, with no diagnosable pattern."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            path = os.path.join(tmp, security.TOKEN_FILENAME)
+            first = security._load_or_create_token(path)
+            with mock.patch("os.path.isfile", return_value=False):
+                second = security._load_or_create_token(path)
+        self.assertEqual(second, first)
+
+    def test_the_generated_token_is_not_printed_when_stderr_is_not_a_tty(self):
+        """The shipped Dockerfile pipes stderr to --error-logfile -."""
+        env = {"VULNSIGHT_API_TOKEN": "", "GLM_TOKEN": "live"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, {**env, "VULNSIGHT_DATA_DIR": tmp}, clear=False):
+            buf = io.StringIO()  # a StringIO is not a tty
+            with mock.patch.object(sys, "stderr", buf):
+                token = security._load_or_create_token(
+                    os.path.join(tmp, security.TOKEN_FILENAME))
+            self.assertNotIn(token, buf.getvalue())
+            self.assertIn("not logged", buf.getvalue())
+
+
 class TestClientKey(unittest.TestCase):
     def test_forwarded_for_ignored_unless_proxy_is_trusted(self):
         with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": ""}, clear=False):
             self.assertEqual(security.client_key("10.0.0.1", "1.2.3.4"), "10.0.0.1")
 
     def test_forwarded_for_used_when_proxy_is_trusted(self):
+        """The entry is counted from the right, because a proxy appends to
+        this header rather than overwriting it. This test used to assert the
+        leftmost entry, which is the half the client wrote."""
         with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
             self.assertEqual(
-                security.client_key("10.0.0.1", "1.2.3.4, 10.0.0.1"), "1.2.3.4"
+                security.client_key("10.0.0.1", "1.2.3.4, 203.0.113.9"), "203.0.113.9"
             )
             # A trusted proxy sending nothing usable falls back rather than crashing.
             self.assertEqual(security.client_key("10.0.0.1", "  "), "10.0.0.1")
+
+    def test_a_client_cannot_mint_a_fresh_rate_limit_bucket_per_request(self):
+        """nginx's own `$proxy_add_x_forwarded_for` is "what the client sent,
+        plus the peer I saw", so reading the leftmost entry let anyone send
+        `X-Forwarded-For: 10.0.0.<n>` and get a new bucket every time. The
+        limiter is the only thing metering the operator's paid AI calls."""
+        with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
+            keys = {security.client_key("10.0.0.5", f"10.0.0.{n}, 10.0.0.5")
+                    for n in range(50)}
+        self.assertEqual(keys, {"10.0.0.5"},
+                         f"50 forged headers produced {len(keys)} buckets")
+
+    def test_a_client_cannot_lock_someone_else_out(self):
+        """The same hole ran the other way: 30 searches carrying a
+        colleague's address spent their bucket for the window."""
+        with mock.patch.dict(os.environ, {"VULNSIGHT_TRUST_PROXY": "1"}, clear=False):
+            victim = security.client_key("10.0.0.9", "198.51.100.7, 10.0.0.9")
+        self.assertNotEqual(victim, "198.51.100.7")
+
+    def test_two_proxies_are_counted_with_trusted_hops(self):
+        env = {"VULNSIGHT_TRUST_PROXY": "1", "VULNSIGHT_TRUSTED_HOPS": "2"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(
+                security.client_key("10.0.0.1", "1.2.3.4, 203.0.113.9, 10.0.0.1"),
+                "203.0.113.9")
+
+    def test_a_chain_shorter_than_the_configured_hops_uses_the_peer(self):
+        """A client that strips the header leaves one entry it chose itself.
+        Falling back to the leftmost would hand that straight back."""
+        env = {"VULNSIGHT_TRUST_PROXY": "1", "VULNSIGHT_TRUSTED_HOPS": "2"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(security.client_key("10.0.0.1", "1.2.3.4"), "10.0.0.1")
 
     def test_missing_remote_addr_still_yields_a_key(self):
         self.assertEqual(security.client_key(None, None), "unknown")
@@ -249,6 +369,9 @@ class TestClientKey(unittest.TestCase):
     def test_ensure_token_autogens_on_public_bind(self):
         import tempfile
         data_dir = tempfile.mkdtemp()
+        # Holds a generated API token; every other case here uses a
+        # TemporaryDirectory and this one leaked a token per run.
+        self.addCleanup(shutil.rmtree, data_dir, ignore_errors=True)
         env = {
             "GLM_TOKEN": "live",
             "VULNSIGHT_API_TOKEN": "",
@@ -280,6 +403,21 @@ class TestRateLimiter(unittest.TestCase):
         self.assertTrue(limiter.allow("b"))
         self.assertTrue(limiter.allow("c"))
         self.assertLessEqual(len(limiter._hits), 2)
+
+
+    def test_the_key_being_rate_limited_is_not_the_one_evicted(self):
+        """Eviction used to scan every key for the oldest *hit*, under the
+        lock. A caller over its budget stops appending hits, so its own
+        bucket became the oldest and was the one dropped -- which hands the
+        window back to exactly the caller the limiter is holding down."""
+        limiter = security.RateLimiter(1, 60, max_keys=2)
+        self.assertTrue(limiter.allow("attacker"))
+        self.assertTrue(limiter.allow("quiet"))
+        self.assertFalse(limiter.allow("attacker"))   # over budget, still active
+        self.assertTrue(limiter.allow("newcomer"))    # cap reached: one is evicted
+        self.assertLessEqual(len(limiter._hits), 2)
+        self.assertFalse(limiter.allow("attacker"),
+                         "evicting the limited key resets its window")
 
 
 class TestDocsHygiene(unittest.TestCase):
@@ -319,6 +457,41 @@ class TestDocsHygiene(unittest.TestCase):
             with open(os.path.join(self.ROOT, name), encoding="utf-8") as fh:
                 hit = pattern.search(fh.read())
             self.assertIsNone(hit, f"{name}: possible credential {hit.group(0) if hit else ''}")
+
+
+class TestAnEmptyTokenFileSaysWhatIsWrong(unittest.TestCase):
+    """An existing-but-empty token file fell through the `if existing:`
+    guard into the create path, O_EXCL raised FileExistsError, the re-read
+    was still empty, and the bare `raise` sent it out of create_app. Every
+    boot then died with a traceback saying "file exists" when the actual
+    problem is "file is empty" -- and nothing told the operator that
+    deleting a zero-byte file is the fix. A volume provisioned with
+    `touch`, or a write truncated by a full disk, gets here."""
+
+    def test_it_exits_with_a_reason_rather_than_an_errno(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            open(path, "w").close()          # exists, empty
+            with self.assertRaises(SystemExit) as caught:
+                security._load_or_create_token(path)
+        message = str(caught.exception)
+        self.assertIn("empty", message)
+        self.assertIn(path, message)
+        self.assertIn("Delete it", message)
+
+    def test_a_file_with_a_token_in_it_is_still_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("a-real-token\n")
+            self.assertEqual(security._load_or_create_token(path), "a-real-token")
+
+    def test_a_missing_file_is_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".vulnsight_api_token")
+            token = security._load_or_create_token(path)
+            self.assertTrue(token)
+            self.assertEqual(oct(os.stat(path).st_mode)[-3:], "600")
 
 
 if __name__ == "__main__":

@@ -1,32 +1,42 @@
 /* API reference page. Standalone rather than sharing style.css: that file is
-   1700 lines of app UI, and this page needs a dozen rules. Light and dark both
-   come from the same tokens. */
+   1700 lines of app UI and this page needs a dozen rules. The palette is the
+   app's, restated here as the small subset this page uses -- it used to be an
+   unrelated scheme that happened to reuse the same token names with different
+   values (--accent was a blue here and a green there), so the two pages did
+   not read as one product.
+
+   Same rule as the app: chroma carries meaning. The only hues are the HTTP
+   method tags, because GET and POST are the distinction a reader scans for. */
 
 :root {
-  --bg: #fbfbfd;
-  --panel: #ffffff;
-  --ink: #1a1d24;
-  --muted: #616a7a;
-  --line: #e2e6ee;
-  --accent: #2f5bd4;
-  --code-bg: #f1f3f8;
-  --get: #1f7a4d;
-  --post: #9a4d0f;
+  color-scheme: light dark;
+  --bg:      light-dark(#f7f8f9, #15181d);
+  --panel:   light-dark(#ffffff, #1e232a);
+  --ink:     light-dark(#14181d, #e9ebef);
+  --muted:   light-dark(#4e5862, #a6aeb9);
+  --line:    light-dark(#e3e6ea, #2a3038);
+  --accent:  light-dark(#334e68, #8fb3d9);
+  --code-bg: light-dark(#f1f3f5, #171b21);
+  --get:     light-dark(#1a6b4a, #4fc08d);
+  --post:    light-dark(#b4500a, #ff9348);
+
+  /* The type scale, restated for the same reason the palette is: this sheet
+     is standalone, and before this it carried seven hard-coded sizes of its
+     own -- so the "design system" covered one of the product's two pages.
+     The steps are style.css's, and tests/test_frontend_js.py now checks
+     both sheets rather than only the app's. */
+  --text-xs:   11px;
+  --text-sm:   12.5px;
+  --text-base: 14px;
+  --text-lg:   17px;
+  --text-xl:   22px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161b;
-    --panel: #1b1e25;
-    --ink: #e7eaf0;
-    --muted: #9aa3b4;
-    --line: #2b313c;
-    --accent: #7fa4ff;
-    --code-bg: #232833;
-    --get: #6ed3a0;
-    --post: #e9a765;
-  }
-}
+/* Honour the theme chosen in the app: it is stored per browser, and a reader
+   who picked dark there should not get a white page when they follow the
+   "API" link. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -34,7 +44,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: var(--text-base)/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
@@ -50,8 +60,8 @@ code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   background: var(--panel);
 }
 
-.head h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
-.sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.head h1 { margin: 0; font-size: var(--text-xl); letter-spacing: -0.01em; }
+.sub { margin: 4px 0 0; color: var(--muted); font-size: var(--text-sm); }
 
 .speclink {
   color: var(--accent);
@@ -59,7 +69,7 @@ code, .ty { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .speclink:hover { border-color: var(--accent); }
@@ -94,9 +104,9 @@ nav button {
 }
 nav button:hover { background: var(--code-bg); }
 nav button.on { background: var(--panel); border-color: var(--line); }
-nav button code { font-size: 13px; }
+nav button code { font-size: var(--text-sm); }
 
-.m { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; }
+.m { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em; }
 .m-get { color: var(--get); }
 .m-post { color: var(--post); }
 
@@ -108,13 +118,23 @@ section {
   min-width: 0;
 }
 
-section h2 { margin: 0 0 10px; font-size: 17px; display: flex; gap: 10px; align-items: baseline; }
-section h2 code { font-size: 15px; }
-section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
-             letter-spacing: 0.07em; color: var(--muted); }
+section h2 { margin: 0 0 10px; font-size: var(--text-lg); display: flex; gap: 10px; align-items: baseline; }
+section h2 code { font-size: var(--text-base); }
+/* "Request body", "Responses", "Response body". These were set in
+   capitals with 0.07em tracking -- an all-caps eyebrow above every
+   heading, which is the one typographic habit the rest of this redesign
+   spent its time removing. The main page is down to a single uppercase
+   rule, on severity badges, where the word is a band name; this sheet had
+   three and no test looked at it. Weight and colour rank a heading
+   perfectly well. */
+section h3 { margin: 24px 0 8px; font-size: var(--text-sm); font-weight: 650;
+             color: var(--muted); }
 
-.lede { margin: 0 0 8px; font-size: 15px; }
-.desc { margin: 0 0 8px; color: var(--muted); }
+/* The endpoint prose, capped for the same reason the advisory card's is:
+   an integrator reads this closely, and it ran 145 characters a line on a
+   1440px screen. The audit measures it at every state now. */
+.lede { max-width: 72ch; margin: 0 0 8px; font-size: var(--text-base); }
+.desc { max-width: 72ch; margin: 0 0 8px; color: var(--muted); }
 .muted { color: var(--muted); }
 
 .note {
@@ -123,19 +143,17 @@ section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
   border-left: 3px solid var(--accent);
   background: var(--code-bg);
   border-radius: 0 6px 6px 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* Wide tables scroll inside their own box; the page never scrolls sideways. */
-.fields { width: 100%; border-collapse: collapse; font-size: 13px; display: block;
+.fields { width: 100%; border-collapse: collapse; font-size: var(--text-sm); display: block;
           overflow-x: auto; }
 .fields thead th {
   text-align: left;
   font-weight: 600;
   color: var(--muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--text-xs);
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
 }
@@ -166,12 +184,11 @@ section h3 { margin: 24px 0 8px; font-size: 12px; text-transform: uppercase;
 
 .req {
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--post);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 650;
 }
-.dflt { color: var(--muted); font-size: 12px; }
+.dflt { color: var(--muted); font-size: var(--text-sm); }
 
 .code-2 { color: var(--get); }
 .code-4, .code-5 { color: var(--post); }

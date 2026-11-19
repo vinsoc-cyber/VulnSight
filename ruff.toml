@@ -1,0 +1,78 @@
+# Lint configuration.
+#
+# Ruff's default ruleset is E4/E7/E9 + F — roughly "syntax errors and unused
+# names". That is a low bar for a tool that holds an operator's credentials
+# and whose whole value is not silently returning wrong results, and it is
+# why a shadowed import, a bare useless expression and several dead `noqa`
+# directives sat in the tree unnoticed.
+#
+# What is selected below is the bug-finding half of ruff, not the stylistic
+# half: no line-length police, no opinionated string or argument rules. Every
+# ignore states why, so the next person can re-litigate it rather than guess.
+
+line-length = 100
+target-version = "py39"
+exclude = [".venv", "osv_cache", "__pycache__", ".ruff_cache", ".pytest_cache"]
+
+[lint]
+select = [
+    "F",        # pyflakes: undefined names, unused imports, shadowed imports
+    "E4", "E7", "E9",   # import placement, statement errors, syntax
+    "W",        # whitespace problems that hide real edits in diffs
+    "B",        # bugbear: mutable defaults, loop-variable binding, raise-from
+    "SIM",      # simplifications that usually reveal a redundant branch
+    "C4",       # comprehension misuse
+    "RUF",      # ruff's own checks, including unused-noqa
+    "UP",       # outdated constructs
+    "PIE",      # small dead-code patterns
+    "RET",      # unreachable or redundant returns
+    "PERF",     # loops that should be comprehensions, try inside loops
+    "FLY",      # static str.join that should be an f-string
+    "LOG",      # logging misuse
+    "ISC",      # implicit string concatenation (usually a missing comma)
+    "DTZ",      # naive datetimes — this codebase compares timestamps across
+                # four sources, so an unzoned one is a real defect
+    "S",        # bandit: subprocess, SQL, deserialisation, weak crypto
+    "TRY004", "TRY300", "TRY401",
+]
+
+ignore = [
+    # Fetching http(s) URLs is the entire purpose of the source clients. Every
+    # URL is built from a module constant plus a percent-encoded path segment;
+    # none is user-supplied.
+    "S310",
+    # The CWE catalog is generated from MITRE's XML by a tool an operator runs
+    # by hand, and the generator now validates and compiles its output before
+    # writing. Swapping in defusedxml would add a dependency to a tool that
+    # never runs in the server.
+    "S314",
+    # Every "SQL injection" hit is an IN-clause whose placeholders are built
+    # from a count and whose values are all bound. Checked by hand; the
+    # comments at those call sites say so.
+    "S608",
+    # Constants naming a credential file or env var, not credentials.
+    "S105", "S106",
+    # HOST=0.0.0.0 appears in the bind-guard logic that exists precisely to
+    # make that case safe.
+    "S104",
+    # `assert` is how the tests assert, and the two in production narrow types
+    # after a branch that has already returned.
+    "S101",
+    # The AI key rotation jitter is scheduling, not cryptography.
+    "S311",
+    # `gh` is resolved via shutil.which before use and invoked with an argv
+    # list, never a shell string.
+    "S603", "S607",
+    # Unicode in prose: the docs and comments use real typographic quotes and
+    # dashes deliberately.
+    "RUF001", "RUF002", "RUF003",
+    # try/except inside a loop is how per-record degradation works here: one
+    # bad advisory must not sink a page of 100.
+    "PERF203",
+]
+
+[lint.per-file-ignores]
+# Tests may stub, poke at privates, and hold deliberately odd data.
+"tests/*" = ["S", "SIM", "PERF", "DTZ", "B008", "RUF012"]
+# The generator writes Python as text; its string handling is the point.
+"tools/generate_cwe_catalog.py" = ["S", "ISC"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hmac
 import ipaddress
@@ -11,7 +12,7 @@ import secrets
 import sys
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,43 @@ def is_loopback_bind(host: str) -> bool:
         return ipaddress.ip_address(text).is_loopback
     except ValueError:
         return False
+
+
+_declared_bind: str | None = None
+
+
+def declare_self_bind(host: str) -> None:
+    """Record the interface this process is about to bind itself.
+
+    Only ``python app.py`` can say this truthfully, because only it passes the
+    address to ``app.run()``.
+    """
+    global _declared_bind
+    _declared_bind = (host or "").strip() or "127.0.0.1"
+
+
+def resolved_bind_host() -> str:
+    """The interface the server actually listens on, as far as we can know it.
+
+    ``HOST`` is authoritative only when this process binds the socket itself.
+    Gunicorn -- the server this project ships in its own Dockerfile -- takes
+    the interface from its own ``--bind`` instead, which we cannot read. Under
+    any WSGI server ``HOST`` therefore describes nothing, yet operators do set
+    it, reasonably believing it restricts the listener. Reading it there meant
+    ``HOST`` unset, or set to a loopback value, switched the API-token
+    requirement off on a process actually listening on ``0.0.0.0`` -- handing
+    anyone who reached the port the operator's ``gh``, AI and NVD credentials.
+
+    So: trust a bind this process declared, else an explicit ``VULNSIGHT_BIND``,
+    else assume exposed. Failing closed costs a loopback deployment one pasted
+    token; failing open costs the operator their GitHub account.
+    """
+    if _declared_bind is not None:
+        return _declared_bind
+    stated = os.environ.get("VULNSIGHT_BIND", "").strip()
+    if stated:
+        return stated
+    return "0.0.0.0"
 
 
 _SECRET_ENV_NAMES = (
@@ -187,26 +225,51 @@ def _load_or_create_token(path: str) -> str:
         with open(path, encoding="utf-8") as fh:
             existing = fh.read().strip()
         if existing:
-            try:
+            with contextlib.suppress(OSError):
                 os.chmod(path, 0o600)
-            except OSError:
-                pass
             logger.info("Using API token from %s", path)
             return existing
     token = secrets.token_urlsafe(32)
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        # O_EXCL, not O_TRUNC: two workers starting together both saw no file
+        # and both wrote, so the file held one token while each worker
+        # authenticated against its own. A client using the file then got 401
+        # from one worker and 200 from the next, with no diagnosable pattern.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        with open(path, encoding="utf-8") as fh:  # another worker won the race
+            existing = fh.read().strip()
+        if existing:
+            logger.info("Using API token from %s", path)
+            return existing
+        # The file exists and is empty, which is not a race -- a volume
+        # provisioned with `touch`, or a write truncated by a full disk.
+        # The bare `raise` re-raised FileExistsError out of create_app, so
+        # every boot died with a traceback saying "file exists" when the
+        # actual problem is "file is empty", and nothing told the operator
+        # that deleting a zero-byte file is the fix.
+        raise SystemExit(
+            f"{path} exists but is empty, so there is no API token to use. "
+            f"Delete it and start again; a new token will be generated."
+        ) from None
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token + "\n")
-    print(
-        f"!! Bind is {os.environ.get('HOST', 'non-loopback')} with credentials "
-        f"and no VULNSIGHT_API_TOKEN.\n"
-        f"!! Generated a token and saved it to {path} (mode 0600).\n"
-        f"!! Enter this token in the UI: {token}",
-        file=sys.stderr,
+    # The token is a credential, so it is shown only on a terminal a human is
+    # watching. The shipped Dockerfile pipes stderr to --error-logfile -, which
+    # would otherwise put it in `docker logs` and every shipper behind it.
+    banner = (
+        f"!! Bind is {resolved_bind_host()} with credentials and no "
+        f"VULNSIGHT_API_TOKEN.\n"
+        f"!! Generated a token and saved it to {path} (mode 0600)."
     )
+    if sys.stderr.isatty():
+        banner += f"\n!! Enter this token in the UI: {token}"
+    else:
+        banner += "\n!! Read it from that file; it is not logged."
+    print(banner, file=sys.stderr)
     return token
 
 
@@ -244,7 +307,8 @@ def _hostname_from_url(value: str) -> tuple[str, bool]:
     try:
         # Invalid ports (e.g. http://127.0.0.1:5000.evil.com) raise here.
         # hostname itself still returns 127.0.0.1, so this check is required.
-        parts.port
+        # Assigned, not a bare expression: the point is the ValueError.
+        _ = parts.port
     except ValueError:
         return "", False
     host = canonical_host(parts.hostname)
@@ -324,11 +388,30 @@ def client_key(remote_addr: str | None, forwarded_for: str | None) -> str:
     mint unlimited buckets. Ignoring it means everyone behind a proxy shares the
     proxy's address, which is wrong in the other direction — so which failure
     you get has to be the operator's choice, not a default.
+
+    The entry is counted from the RIGHT. A proxy does not overwrite this
+    header, it appends to it — nginx's own `$proxy_add_x_forwarded_for` is
+    "whatever the client sent, plus the peer address I saw" — so the leftmost
+    entry is still the attacker's string even behind a proxy you fully
+    control. Reading it meant anyone could mint a fresh rate-limit bucket per
+    request with `X-Forwarded-For: 10.0.0.<n>`, and the limiter is the only
+    thing metering the operator's paid AI calls and GitHub quota. It also ran
+    the other way: sending a colleague's address 30 times locked them out.
+
+    VULNSIGHT_TRUSTED_HOPS is how many proxies append before the request
+    reaches this process; with the default of 1 the last entry is the address
+    the single trusted proxy observed.
     """
     if forwarded_for and env_flag("VULNSIGHT_TRUST_PROXY", False):
-        first = forwarded_for.split(",")[0].strip()
-        if first:
-            return first
+        chain = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        hops = max(env_int("VULNSIGHT_TRUSTED_HOPS", 1), 1)
+        if len(chain) >= hops:
+            return chain[-hops]
+        # Fewer entries than hops means the chain is shorter than configured:
+        # the client stripped it or a proxy did not append. Falling back to
+        # the leftmost here would hand back the only entry the client chose,
+        # so use the peer address, which no client can forge.
+        return remote_addr or "unknown"
     return remote_addr or "unknown"
 
 
@@ -356,7 +439,11 @@ class RateLimiter:
         self.max_requests = max(1, int(max_requests))
         self.window_seconds = max(1, int(window_seconds))
         self.max_keys = max(1, int(max_keys))
-        self._hits: dict[str, deque[float]] = {}
+        # OrderedDict, so eviction is popitem(last=False) rather than an
+        # O(n) min() over up to max_keys entries while holding the lock --
+        # which an attacker could trigger on every request by varying the
+        # key, whenever VULNSIGHT_TRUST_PROXY lets them choose it.
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
@@ -366,13 +453,12 @@ class RateLimiter:
             bucket = self._hits.get(key)
             if bucket is None:
                 if len(self._hits) >= self.max_keys:
-                    stale = min(
-                        self._hits.items(),
-                        key=lambda item: item[1][0] if item[1] else now,
-                    )[0]
-                    del self._hits[stale]
+                    # Least recently touched, in O(1).
+                    self._hits.popitem(last=False)
                 bucket = deque()
                 self._hits[key] = bucket
+            else:
+                self._hits.move_to_end(key)
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
             if len(bucket) >= self.max_requests:

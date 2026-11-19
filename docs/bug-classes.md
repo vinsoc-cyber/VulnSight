@@ -21,71 +21,71 @@ Each class carries:
 
 `~` marks the extended set.
 
-#### Injection
-
-| Key | Code | Class | Core | Extended |
-|---|---|---|---|---|
-| `sqli` | `SQLI` | SQL Injection | 89 | 564, 943 |
-| `xss` | `XSS` | Cross-Site Scripting (XSS) | 79 | 80, 83, 87, 116 |
-| `ssti` | `SSTI` | Server-Side Template Injection / Code Injection | 1336, 94 | 95, 96, 917 |
-| `cmdi` | `CMDI` | OS / Command Injection | 77, 78 | 88 |
-| `deserialization` | `DESER` | Insecure Deserialization | 502 | — |
-| `xxe` | `XXE` | XML External Entity (XXE) | 611 | 827, 776 |
-| `queryinj` | `QINJ` | LDAP / XPath / XQuery Injection | 643, 90 | 91, 652 |
-| `crlf` | `CRLF` | CRLF / Header Injection & Request Smuggling | 93, 113 | 117, 444 |
-| `protopollution` | `PROTO` | Prototype Pollution | 1321 | 915 |
-
 #### Access control & auth
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
-| `bac` | `BAC` | Broken Access Control (BAC / BOLA / BFLA / IDOR) | 284, 285, 639, 862, 863, 732, 306, 287 | 269, 266, 668, 1220, 552, 425, 913 |
+| `bac` | `BAC` | Broken Access Control (BAC / BOLA / BFLA / IDOR) | 284, 285, 639, 862, 863, 732, 306, 287 | 269, 266, 668, 1220, 552, 425, 290, 288, 276 |
 | `csrf` | `CSRF` | Cross-Site Request Forgery (CSRF) | 352 | 1275 |
-| `cors` | `CORS` | CORS / Origin Validation Failure | 942 | 346, 1385 |
-| `session` | `SESS` | Session Management Flaws | 384 | 613, 539, 488 |
-| `hardcodedcreds` | `CREDS` | Hard-coded / Default Credentials | 798 | 259, 321, 1392 |
+| `cors` | `CORS` | CORS / Origin Validation Failure | 942, 346 | 1385 |
+| `session` | `SESS` | Session Management Flaws | 384, 1462, 1463, 1464 | 539, 488, 1465, 1466 |
+| `hardcodedcreds` | `CREDS` | Hard-coded / Default Credentials | 798, 259, 321, 1392 | — |
 | `clickjacking` | `CLICK` | Clickjacking / UI Redressing | 1021 | — |
+
+#### Injection
+
+| Key | Code | Class | Core | Extended |
+|---|---|---|---|---|
+| `sqli` | `SQLI` | SQL Injection | 89, 943, 564 | — |
+| `xss` | `XSS` | Cross-Site Scripting (XSS) | 79, 80, 83, 87 | 116 |
+| `ssti` | `SSTI` | Server-Side Template Injection / Code Injection | 1336, 94, 95 | 96, 917, 470 |
+| `cmdi` | `CMDI` | OS / Command Injection | 77, 78 | 88 |
+| `deserialization` | `DESER` | Insecure Deserialization | 502 | 913 |
+| `xxe` | `XXE` | XML External Entity (XXE) | 611 | 827, 776 |
+| `queryinj` | `QINJ` | LDAP / XPath / XQuery Injection | 643, 90, 652 | 91 |
+| `crlf` | `CRLF` | CRLF / Header Injection & Request Smuggling | 93, 113, 444 | 117, 436 |
+| `protopollution` | `PROTO` | Prototype Pollution | 1321 | 915 |
 
 #### Files & server-side requests
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
-| `ssrf` | `SSRF` | Server-Side Request Forgery (SSRF) | 918 | — |
-| `pathtraversal` | `PATH` | Path Traversal / File Disclosure | 22 | 23, 36, 73, 434 |
+| `ssrf` | `SSRF` | Server-Side Request Forgery (SSRF) | 918 | 441 |
+| `pathtraversal` | `PATH` | Path Traversal / File Disclosure | 22, 23, 36 | 73, 434, 59 |
 | `openredirect` | `OPRED` | Open Redirect | 601 | 610 |
-| `upload` | `UPLD` | Unrestricted File Upload | 434 | 646, 351, 436 |
-| `searchpath` | `SPATH` | Untrusted Search Path / Library Hijack | 426, 427 | 428, 114 |
+| `upload` | `UPLD` | Unrestricted File Upload | 434 | 646, 351 |
+| `searchpath` | `SPATH` | Untrusted Search Path / Library Hijack | 426, 427, 428 | 114 |
 
 #### Crypto & secrets
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
-| `crypto` | `CRYPT` | Broken Cryptography & Verification | 327, 347, 295 | 326, 328, 916, 261, 759, 760, 780, 323, 324 |
+| `crypto` | `CRYPT` | Broken Cryptography & Verification | 327, 347, 295 | 326, 328, 916, 261, 759, 760, 780, 323, 324, 345, 208 |
 | `randomness` | `RAND` | Insufficient Randomness | 330, 338 | 335, 340, 341, 1241 |
-| `infoleak` | `INFO` | Sensitive Information Disclosure | 200 | 209, 532, 359, 497, 215, 540, 1230 |
+| `infoleak` | `INFO` | Sensitive Information Disclosure | 200, 522 | 209, 532, 359, 497, 215, 540, 1230, 311, 312, 319, 256, 922 |
 
 #### Memory & concurrency
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
 | `memory` | `MEM` | Memory Safety (OOB / UAF / Double Free) | 787, 125, 416, 415, 476 | 121, 122, 119, 120, 824, 908, 843, 401, 590 |
-| `intoverflow` | `INT` | Integer Overflow / Wraparound | 190 | 191, 192, 197, 680, 681 |
-| `race` | `RACE` | Race Condition / TOCTOU | 362, 367 | 366, 421, 1223 |
+| `intoverflow` | `INT` | Integer Overflow / Wraparound | 190, 191 | 192, 197, 680, 681 |
+| `race` | `RACE` | Race Condition / TOCTOU | 362, 367 | 366, 421, 1223, 833, 667 |
 
 #### Availability
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
 | `redos` | `REDOS` | Regular Expression DoS (ReDoS) | 1333 | 407 |
-| `dos` | `DOS` | Denial of Service / Resource Exhaustion | 400, 770 | 409, 674, 789, 405, 834, 617 |
+| `dos` | `DOS` | Denial of Service / Resource Exhaustion | 400, 770 | 409, 674, 789, 405, 834, 617, 835, 1325 |
 
 #### Broad / umbrella
 
 | Key | Code | Class | Core | Extended |
 |---|---|---|---|---|
-| `inputval` | `INPUT` | Improper Input Validation (umbrella) | 20 | 1284, 129, 704 |
+| `inputval` | `INPUT` | Improper Input Validation (umbrella) | 20 | 1284, 129, 704, 74 |
 
-139 distinct CWEs are reachable through these classes; the other ~800 are
+162 distinct CWEs are reachable through these classes; the other ~800 are
 reachable individually — see [CWE catalog](cwe-catalog.md).
 
 ## Reading the tables honestly
@@ -123,7 +123,8 @@ but it does cost one extra AI pass per advisory.
    during development precisely because its anchor, `CWE-16`, turned out to be a
    MITRE *Category* rather than a Weakness — it does not exist in the weakness
    catalog and would have silently matched nothing.
-3. Run `python -m pytest tests/test_cwe_categories.py`. The suite enforces:
+3. Run `python -m unittest discover -s tests -p test_cwe_categories.py`.
+   The suite enforces:
    - a code that is unique, uppercase and ≤ 5 characters;
    - a non-empty group, label and `core` set;
    - a description of at least 40 characters, because it *is* the AI's definition;

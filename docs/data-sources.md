@@ -66,7 +66,7 @@ primary mechanism.
 
 They are narrowed by the keyword prefilter of your selected bug classes (see
 [Bug classes](bug-classes.md)) and then handed to the AI pass, which is the only
-thing that can classify them. Cards show a `NO CWE · AI` badge.
+thing that can classify them. Cards show a `No CWE tag` badge.
 
 Without the AI pass this source is close to useless, and the search says so with
 a warning.

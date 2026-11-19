@@ -7,7 +7,20 @@ sets up sys.path itself (so every file also runs standalone) and then does
 
 import io
 import json
+import os
+import shutil
+import tempfile
+import unittest
+import urllib.error
 import zipfile
+from email.message import Message
+from typing import TYPE_CHECKING, Any, cast
+from unittest import mock
+
+# Sentinels: `headers=None` means "no header store", which is different from
+# "build the default one", and `fp=None` is a real urllib case too.
+_AUTO = object()
+_MISSING = object()
 
 # --- sample raw advisory as returned by GHSA -------------------------------
 SAMPLE = {
@@ -137,9 +150,16 @@ NVD_VULN = {
 }
 
 # --- sortable GHSA raw records for the /api/search sort-fix regression ------
-# The three orderings all differ so a wrong sort field is always detectable:
-#   published desc : A, C, B          updated desc : B, C, A
-#   cve_id    desc : B, A, C          (asc = each reversed)
+# All six orderings differ, so any wrong (field, direction) pair is
+# detectable:
+#   published desc : A, C, B      asc : B, C, A
+#   updated   desc : A, B, C      asc : C, B, A
+#   cve_id    desc : B, A, C      asc : C, A, B
+#
+# The comment here used to claim the same while updated_at was the exact
+# reverse of published_at -- so `published desc` and `updated asc` were the
+# identical order, and a mix-up that also flipped direction was invisible.
+# A same-direction field swap was caught; the other half was not.
 SORT_A = "GHSA-aaaa-aaaa-aaaa"
 SORT_B = "GHSA-bbbb-bbbb-bbbb"
 SORT_C = "GHSA-cccc-cccc-cccc"
@@ -151,7 +171,134 @@ def make_sortable_raw():
         return dict(SAMPLE, ghsa_id=gid, cve_id=cve, published_at=pub, updated_at=upd)
 
     return [
-        _rec(SORT_A, "CVE-2026-0002", "2026-01-03T00:00:00Z", "2026-02-01T00:00:00Z"),
-        _rec(SORT_B, "CVE-2026-0003", "2026-01-01T00:00:00Z", "2026-02-03T00:00:00Z"),
-        _rec(SORT_C, "CVE-2026-0001", "2026-01-02T00:00:00Z", "2026-02-02T00:00:00Z"),
+        _rec(SORT_A, "CVE-2026-0002", "2026-01-03T00:00:00Z", "2026-02-03T00:00:00Z"),
+        _rec(SORT_B, "CVE-2026-0003", "2026-01-01T00:00:00Z", "2026-02-02T00:00:00Z"),
+        _rec(SORT_C, "CVE-2026-0001", "2026-01-02T00:00:00Z", "2026-02-01T00:00:00Z"),
     ]
+
+
+# --- Normalized advisory ---------------------------------------------------
+# What the AI classifier and the cache are handed: a *normalized* record, not
+# a raw GHSA one. Four tests built this by hand and the four copies had
+# already drifted -- one dropped `advisory_id`, so a code path that falls back
+# to it was never exercised, and another omitted `severity`. One builder, and
+# `test_the_fixture_matches_a_real_normalized_advisory` keeps it honest
+# against what ghsa_client.normalize() actually emits.
+
+def advisory(**overrides):
+    """A normalized advisory carrying every field the classifier reads."""
+    record = {
+        "advisory_id": "GHSA-aaaa-aaaa-aaaa",
+        "ghsa_id": "GHSA-aaaa-aaaa-aaaa",
+        "cve_id": "CVE-2026-0001",
+        "severity": "high",
+        "summary": "s",
+        "description": "d",
+        "cwes": ["639"],
+        "packages": [],
+    }
+    record.update(overrides)
+    return record
+
+
+# --- HTTP failure fixtures -------------------------------------------------
+# Five test files each built their own urllib HTTPError, three of them with a
+# local `_http_error` helper that differed in argument order and defaults.
+# One helper, one place to carry the typeshed note below.
+
+def http_error(code, *, retry_after=None, body=b"{}", reason="err",
+               url="https://example.test/api", headers=_AUTO, fp=_MISSING):
+    """An HTTPError as urllib raises one, for the failure paths.
+
+    Pass ``headers=None`` to build one with no header store at all: typeshed
+    types ``hdrs`` as ``Message``, but urllib itself passes ``None`` and the
+    retry/backoff code has to survive reading ``Retry-After`` off it.
+    """
+    if headers is _AUTO:
+        headers = Message()
+        if retry_after is not None:
+            headers["Retry-After"] = retry_after
+    body_fp = io.BytesIO(body) if fp is _MISSING else fp
+    return urllib.error.HTTPError(
+        url, code, reason,
+        cast(Any, headers),          # typeshed is stricter than urllib here
+        cast(Any, body_fp),
+    )
+
+
+# --- cache isolation -------------------------------------------------------
+
+# At runtime this is a plain mixin: inheriting unittest.TestCase here would
+# make the loader collect it as a test class of its own. A type checker
+# still has to know where super().setUp() goes, hence the split.
+if TYPE_CHECKING:
+    _MixinBase = unittest.TestCase
+else:
+    _MixinBase = object
+
+
+class TempCacheDB(_MixinBase):
+    """Point modules.cache at a throwaway database for the test's lifetime.
+
+    `run_search()` ends in `cache.upsert_advisories(results)`. Four classes
+    here called it with neither a temp DB nor a patched upsert, so every
+    suite run wrote their fixtures into the repo's real advisories.db --
+    `GHSA-a`, `GHSA-0/1/2`, `CVE-2026-0/1/2`, and the genuine
+    CVE-2021-44228 row overwritten with `summary: "Log4Shell",
+    description: "d"` inside a 1,059-row cache the app serves from.
+
+    It also hid an ordering dependency: advisories.db is gitignored, so on
+    a clean checkout those classes errored with "no such table: advisories"
+    and only passed in a full run because an earlier test had created the
+    schema as a side effect.
+
+    Mix in before unittest.TestCase so setUp/tearDown resolve here first.
+    """
+
+    def setUp(self):
+        from modules import cache as _cache
+        self._cache = _cache
+        self._orig_db = _cache.DB_PATH
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        self._db_path = handle.name
+        _cache.DB_PATH = self._db_path
+        _cache.init_db(self._db_path)
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self._cache.DB_PATH = self._orig_db
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self._db_path + suffix)
+            except OSError:
+                pass
+
+
+def redirect_cooldown():
+    """Point the AI key-cooldown file at a temp dir for a whole module.
+
+    `mark_skip_token` defaults to `persist=True`, and classify/ping park a
+    key on 401/403, so any module that exercises the classifier can write
+    the real `.ai_key_cooldown.json`. Several did: the file in the repo
+    root held nothing but the sha256 of fixture tokens -- "tok", "dead",
+    "key0", "key1", "key2" -- with expiries hours out. In Docker that file
+    lives in the mounted DATA_DIR beside the operator's genuine cooldowns,
+    so a suite run there parks real keys with fake entries.
+
+    Returns a callable that undoes it, for tearDownModule.
+    """
+    from modules import ai_classifier
+
+    directory = tempfile.mkdtemp(prefix="vulnsight-cooldown-")
+    patcher = mock.patch.object(
+        ai_classifier, "COOLDOWN_PATH",
+        os.path.join(directory, ".ai_key_cooldown.json"))
+    patcher.start()
+
+    def undo():
+        patcher.stop()
+        shutil.rmtree(directory, ignore_errors=True)
+
+    return undo

@@ -15,7 +15,7 @@ import os
 import secrets
 import sys
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, make_response, render_template, request
 
 from modules import (
     ai_classifier,
@@ -27,6 +27,7 @@ from modules import (
     search_service,
     security,
 )
+from modules.config import MAX_AI_BATCH, MAX_AI_CALLS_PER_REQUEST
 from modules import ghsa_client as ghsa
 from modules.cwe_categories import (
     CATEGORIES,
@@ -45,12 +46,6 @@ logging.basicConfig(level=logging.INFO,
 
 logger = logging.getLogger(__name__)
 
-MAX_AI_BATCH = 100
-
-# One classify request fans out to len(categories) × len(advisory_ids) model
-# calls. Capping the product keeps a single request from turning into thousands
-# of paid calls; the UI sizes its batches from the same number.
-MAX_AI_CALLS_PER_REQUEST = 500
 
 
 @functools.lru_cache(maxsize=1)
@@ -112,6 +107,46 @@ def _run_search_job(request_body: dict) -> dict:
     return _search_payload(q, outcome)
 
 
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """RFC 9110 S13.1.2 If-None-Match, not a string equality.
+
+    `== etag` rejected both legal forms a caller may send: a comma-separated
+    tag list, and `*`. That matters more than a style nit on /openapi.json,
+    which is unauthenticated and exempt from the rate limiter precisely
+    because the 304 is supposed to be the cheap path -- so a caller sending
+    a tag list walked straight past the control and re-serialised the whole
+    document every time. Comparison is weak, which is correct for the weak
+    validators both endpoints emit.
+    """
+    if not header:
+        return False
+    header = header.strip()
+    if header == "*":
+        return True
+    wanted = etag[2:] if etag.startswith("W/") else etag
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate and candidate == wanted:
+            return True
+    return False
+
+
+def _not_modified(etag: str, cache_control: str):
+    """A 304 that still carries its validators.
+
+    RFC 9110 S15.4.5 says a 304 SHOULD send the headers a 200 would have
+    sent for caching; dropping ETag and Cache-Control makes the next
+    request unconditional, so the 304 saves one round trip and then stops
+    saving anything.
+    """
+    response = make_response("", 304)
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = cache_control
+    return response
+
+
 def create_app():
     """Application factory: build and return a fully configured Flask app."""
     config.load_dotenv()
@@ -127,8 +162,10 @@ def create_app():
     except ValueError:
         _max_request_bytes = 1048576
     app.config["MAX_CONTENT_LENGTH"] = max(1024, _max_request_bytes)
-    _bind_host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
-    security.ensure_api_token_for_bind(_bind_host)
+    # Not HOST: gunicorn binds from its own --bind and never reads HOST, so
+    # under any WSGI server HOST describes nothing and must not be allowed to
+    # switch the token requirement off. See security.resolved_bind_host.
+    security.ensure_api_token_for_bind(security.resolved_bind_host())
     app.config["VULNSIGHT_TOKEN"] = os.environ.get("VULNSIGHT_API_TOKEN", "").strip()
     app.config["PUBLIC_HOSTS"] = security.public_hosts_from_env()
     _rate_off = os.environ.get("VULNSIGHT_RATE_LIMIT", "on").strip().lower() in (
@@ -146,6 +183,20 @@ def create_app():
     # -----------------------------------------------------------------------
     # Request lifecycle hooks
     # -----------------------------------------------------------------------
+
+    # Registered before the guards: before_request hooks run in registration
+    # order, and a request short-circuited by CSRF, auth or the rate limiter
+    # skipped this one -- so its response carried
+    # `script-src 'self' 'nonce-'`, a malformed source expression. Harmless
+    # while those responses are JSON, but it is backwards.
+    @app.before_request
+    def create_csp_nonce():
+        """A fresh nonce per response for the inline scripts in the templates.
+
+        index.html has two (the pre-paint theme read and window.BOOT) and
+        apidocs.html one; the comment here used to claim a single script.
+        """
+        g.csp_nonce = secrets.token_urlsafe(18)
 
     @app.before_request
     def _csrf_check():
@@ -165,16 +216,31 @@ def create_app():
     # Flask runs before_request hooks in registration order, so with it the
     # other way round an unauthenticated caller spent the operator's own bucket
     # and locked them out with a 429 while every one of its requests was 401.
+    # Reference data a reader may fetch without a token: the CWE catalog,
+    # the taxonomy, the spec, the status pills. Everything else -- including
+    # an endpoint added later -- needs one.
+    _UNAUTHENTICATED_ENDPOINTS = frozenset({
+        "index", "static", "api_meta", "api_cwes", "api_docs",
+        "api_openapi", "api_osv_status",
+    })
+
     @app.before_request
     def _auth_check():
-        # Job polling is the one GET that is guarded. Every other GET serves
-        # public reference data (the CWE catalog, the taxonomy); a job result is
-        # the output of the operator's own query, and the id alone should not be
-        # the only thing standing between a reader and it.
-        guarded_read = request.endpoint == "api_jobs_get"
-        if request.method not in ("POST", "PUT", "PATCH", "DELETE") and not guarded_read:
+        # OPTIONS is protocol, not data: it returns Flask's method list and
+        # no application content, and refusing it would only break a
+        # preflight that CSRF already refuses on its own terms.
+        if request.method == "OPTIONS":
             return None
-        if not request.path.startswith("/api/"):
+        # One allowlist decides, for every method. There used to be a method
+        # check above this -- "anything that is not a write, except job
+        # polling, is public" -- which returned before the allowlist was
+        # ever consulted. Since every allowlisted endpoint is GET-only and
+        # api_jobs_get was the one GET excluded by name, the allowlist was
+        # unreachable: dead code whose own comment claimed it was what made
+        # a new route fail closed. It is now. A GET added later is guarded
+        # until it is listed here, which is the behaviour this was written
+        # for; an unknown endpoint (404) lands here and is guarded too.
+        if request.endpoint in _UNAUTHENTICATED_ENDPOINTS:
             return None
         expected = app.config.get("VULNSIGHT_TOKEN") or ""
         if not expected:
@@ -214,11 +280,6 @@ def create_app():
         response.status_code = 429
         response.headers["Retry-After"] = retry_after
         return response
-
-    @app.before_request
-    def create_csp_nonce():
-        """Give every response a fresh nonce for the one inline bootstrap script."""
-        g.csp_nonce = secrets.token_urlsafe(18)
 
     @app.after_request
     def add_security_headers(response):
@@ -303,7 +364,11 @@ def create_app():
         for category in categories:
             name = category["group"]
             if not groups or groups[-1]["name"] != name:
-                existing = next((g for g in groups if g["name"] == name), None)
+                # Not `g`: that is the imported Flask request global, used
+                # further down this same function. The genexp has its own
+                # scope so it worked, but it reads like a bug.
+                existing = next(
+                    (grp for grp in groups if grp["name"] == name), None)
                 if existing is None:
                     groups.append({"name": name, "items": [category]})
                     continue
@@ -368,8 +433,8 @@ def create_app():
         """
         payload = _cwe_payload()
         etag = f'W/"cwe-{payload["version"]}"'
-        if request.headers.get("If-None-Match") == etag:
-            return "", 304
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
+            return _not_modified(etag, "private, max-age=86400")
         response = jsonify(payload)
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = "private, max-age=86400"
@@ -399,11 +464,15 @@ def create_app():
     @app.route("/api/v1/openapi.json")
     def api_openapi():
         """The machine-readable contract, for client generators and Postman."""
-        payload = openapi.build_spec()
+        # The ETag already declares this immutable per API_VERSION, so the
+        # 304 is checked before anything is built. This endpoint is
+        # unauthenticated and exempt from the rate limiter (POST only), which
+        # made rebuilding and re-serialising a 449-line document per request
+        # the cheapest CPU on the box to burn remotely.
         etag = f'W/"openapi-{openapi.API_VERSION}"'
-        if request.headers.get("If-None-Match") == etag:
-            return "", 304
-        response = jsonify(payload)
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
+            return _not_modified(etag, "private, max-age=3600")
+        response = jsonify(openapi.build_spec())
         response.headers["ETag"] = etag
         response.headers["Cache-Control"] = "private, max-age=3600"
         return response
@@ -483,9 +552,18 @@ def create_app():
                 max_item_length=64,
             )
             if not categories:
-                categories = [search_service.parse_text(
-                    body.get("category"), "bac", "category"
-                )]
+                # No default. parse_text would have returned "bac" for a
+                # missing value, so a request with no category at all ran a
+                # paid pass against Broken Access Control and returned
+                # verdicts the caller never asked for -- up to MAX_AI_BATCH
+                # model calls, silently. /api/v1/search rejects the same
+                # omission, and openapi.py declares `categories` required.
+                single = body.get("category")
+                if not isinstance(single, str) or not single.strip():
+                    return jsonify(
+                        {"error": "Select at least one bug class or CWE."}
+                    ), 400
+                categories = [single.strip()]
             # Fold 'CWE:639' / 'cwe:639' into one key so the verdict cache and
             # the search path agree on the category name.
             categories = list(dict.fromkeys(canonical_category(c) for c in categories))
@@ -510,10 +588,10 @@ def create_app():
             return jsonify({"error": "AI not configured. Set AI_* in .env."}), 400
         if not advisory_ids:
             return jsonify({"error": "No advisories to classify."}), 400
-        if len(advisory_ids) > MAX_AI_BATCH:
-            return jsonify({
-                "error": f"Too many advisories; maximum batch size is {MAX_AI_BATCH}."
-            }), 400
+        # No batch-size check here: parse_str_list above was given
+        # max_items=MAX_AI_BATCH and raises on overflow, and the dict.fromkeys
+        # de-duplication can only shrink the list. The check that used to sit
+        # here was unreachable, and its wording is what docs/api.md quoted.
         if any(len(gid) > 128 for gid in advisory_ids):
             return jsonify({"error": "Advisory identifiers may not exceed 128 characters."}), 400
         planned_calls = len(categories) * len(advisory_ids)
@@ -527,73 +605,28 @@ def create_app():
                 )
             }), 400
 
-        records: dict[str, dict] = {}
-        missing: list[str] = []
-        for gid in advisory_ids:
-            rec = cache.get_advisory(gid)
-            if rec:
-                # The id we looked it up by is authoritative. Older cache rows
-                # predate the advisory_id field, and without this the verdict
-                # comes back keyed by nothing and is dropped on the floor.
-                rec["advisory_id"] = rec.get("advisory_id") or gid
-                records[gid] = rec
-            else:
-                missing.append(gid)
-
-        by_category: dict[str, dict[str, dict]] = {}
-        for category in categories:
-            fingerprints = {
-                gid: ai_classifier.classification_fingerprint(cfg, rec, category)
-                for gid, rec in records.items()
-            }
-            category_results: dict[str, dict] = {}
-            if not force:
-                category_results.update(cache.get_classifications(
-                    list(records), category, expected_fingerprints=fingerprints
-                ))
-            todo = [rec for gid, rec in records.items() if gid not in category_results]
-
-            def _persist(gid, verdict, *, _category=category, _fps=fingerprints):
-                cache.save_classification(
-                    gid,
-                    _category,
-                    verdict,
-                    cfg.model,
-                    fingerprint=_fps[gid],
-                )
-
-            fresh = ai_classifier.classify_many(
-                cfg, todo, category, on_result=_persist
-            )
-            category_results.update(fresh)
-            by_category[category] = category_results
-
-        verdicts = {
-            gid: ai_classifier.aggregate_category_verdicts({
-                category: by_category[category][gid]
-                for category in categories
-                if gid in by_category[category]
-            })
-            for gid in records
-        }
-
-        return jsonify({
-            "category": categories[0],
-            "categories": categories,
-            "verdicts": verdicts,
-            "by_category": by_category,
-            "missing": missing,
-        })
+        # Orchestration lives in the module, not the view: it is callable
+        # from a script, and docs/architecture.md's "app.py ... No logic" is
+        # true again.
+        payload = ai_classifier.classify_batch(
+            cfg, advisory_ids, categories, force=force)
+        # `category` is the first requested one, kept for the older clients
+        # that read it.
+        return jsonify({"category": categories[0], **payload})
 
     return app
 
 
 if __name__ == "__main__":
-    app = create_app()
     port = int(os.environ.get("PORT", "5000"))
     host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
-    security.assert_safe_bind(host)
     debug = "--debug" in sys.argv
+    # Declare the bind before building the app: this is the one entry point
+    # that knows the real listen address, and create_app() decides whether an
+    # API token is mandatory from it.
+    security.declare_self_bind(host)
+    security.assert_safe_bind(host)
     security.assert_safe_debug(host, debug)
+    app = create_app()
     print(f"  VulnSight -> http://{host}:{port}")
     app.run(host=host, port=port, debug=debug)

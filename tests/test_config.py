@@ -32,6 +32,7 @@ class TestDotenvIsLoadedBeforeConstants(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         shutil.copytree(os.path.join(ROOT, "modules"),
                         os.path.join(self.tmp, "modules"))
 
@@ -74,6 +75,18 @@ class TestDotenvIsLoadedBeforeConstants(unittest.TestCase):
             os.path.join(target, "advisories.db"),
         )
 
+    def test_the_cooldown_file_follows_the_dotenv_too(self):
+        """COOLDOWN_PATH was derived from BASE_DIR, the one piece of state
+        VULNSIGHT_DATA_DIR did not relocate: in Docker it was written to /app
+        and lost on every container replacement, re-learning which keys are
+        spent by paying for a request on each one."""
+        target = os.path.join(self.tmp, "elsewhere")
+        self.assertEqual(
+            self._probe(f"VULNSIGHT_DATA_DIR={target}\n",
+                        "ai_classifier.COOLDOWN_PATH"),
+            os.path.join(target, ".ai_key_cooldown.json"),
+        )
+
     def test_a_real_environment_variable_still_wins(self):
         """load_dotenv uses setdefault; the .env is a default, not an override."""
         with open(os.path.join(self.tmp, ".env"), "w", encoding="utf-8") as fh:
@@ -106,8 +119,48 @@ class TestLoadDotenvParsing(unittest.TestCase):
             os.unlink(path)
 
     def test_a_missing_file_is_not_an_error(self):
-        config.load_dotenv("/nonexistent/.env")
+        """Running without a .env is the normal case, not a failure."""
+        config.load_dotenv("/nonexistent/.env")   # must not raise
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+
+class TestDotenvQuirks(unittest.TestCase):
+    """A .env written to be `source`d is a normal thing to hand this tool."""
+
+    def _load(self, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, ".env")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            saved = {k: os.environ.get(k)
+                     for k in ("VS_PLAIN", "VS_EXPORTED", "VS_SPACED")}
+            for key in saved:
+                os.environ.pop(key, None)
+            try:
+                config.load_dotenv(path)
+                return {k: os.environ.get(k) for k in saved}
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    def test_an_exported_line_sets_the_variable_it_names(self):
+        """`export FOO=bar` used to set a variable literally named
+        "export FOO", which nothing reads -- the setting silently did not
+        apply, with no warning."""
+        loaded = self._load("export VS_EXPORTED=yes\nVS_PLAIN=ok\n")
+        self.assertEqual(loaded["VS_EXPORTED"], "yes")
+        self.assertEqual(loaded["VS_PLAIN"], "ok")
+
+    def test_a_key_that_is_not_an_identifier_is_skipped(self):
+        loaded = self._load("not a key = value\nVS_PLAIN=ok\n")
+        self.assertEqual(loaded["VS_PLAIN"], "ok")
+        # The guard itself, not just "the other key still loaded". Deleting
+        # `if not key.isidentifier(): continue` left this green -- and
+        # _load restores only VS_* names, so the bad key would stay in
+        # os.environ for the rest of the run.
+        self.assertNotIn("not a key", loaded)
+        self.assertNotIn("not a key", os.environ)
+

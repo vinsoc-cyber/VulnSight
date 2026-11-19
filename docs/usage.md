@@ -3,10 +3,17 @@
 The left rail builds a query; the right column is the result queue. Nothing is
 fetched until you press one of the two buttons at the bottom of the rail.
 
+The right column has two states. Before a search it is the bug-class map —
+every class, with its CWE count as a comparable length — and picking one is a
+click. After a search it is the queue, with the result controls (Refine with
+AI, Retry failed, Confirmed only, Export) in a bar that sticks to the top.
+Those controls do not exist before a search, because none of them can do
+anything until there is a result to act on.
+
 ## 1 · Find a bug
 
 The search box at the top of the rail matches **both** the 29 curated bug
-classes and all **944 weaknesses of CWE 4.20**, by:
+classes and all **956 weaknesses of CWE 5.0**, by:
 
 | You type | It matches |
 |---|---|
@@ -55,6 +62,11 @@ picked yourself is always used exactly as-is.
 Full table: [Bug classes](bug-classes.md).
 
 ## 4 · Sources
+
+**Sources** and **Options** ship folded — the defaults suit almost every
+query — so click the heading to open either. A folded heading states what
+the section is currently set to (`GHSA + NVD`, `100 results, last 30 days`),
+so nothing a search will do is hidden behind a shut section.
 
 Tick any combination of GHSA, NVD, OSV and OSV-native. The NVD hint below the
 checkbox computes the real cost of your current selection
@@ -141,10 +153,10 @@ restore every filter and re-run it; `×` forgets it; **Clear** empties the list.
 |---|---|
 | Left bar + `CRITICAL/HIGH/…` | Severity (highest across sources) |
 | `GHSA`, `GHSA+NVD` | Which sources contributed |
-| `KEV / EXPLOITED` | In CISA's Known Exploited Vulnerabilities catalog |
+| `Exploited (KEV)` | In CISA's Known Exploited Vulnerabilities catalog |
 | `CWE-639 Authorization Bypass…` | Code **and** name, inline — not tooltip-only |
-| `NO CWE · AI` | OSV-native record with no CWE; only the AI pass can classify it |
-| `WITHDRAWN 2024-09-20` | Retired advisory; the card is de-emphasised |
+| `No CWE tag` | OSV-native record with no CWE; only the AI pass can classify it |
+| `Withdrawn 2024-09-20` | Retired advisory; the card is de-emphasised |
 | `EPSS 94.12% · p100` | Exploit-prediction score and percentile. Absent when there is no data — it is never rendered as a measured `0.00%` |
 | Verdict block | `Confirmed match` / `Not a match` / `Incomplete score` / `AI error`, with a confidence bar coloured by state |
 

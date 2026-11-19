@@ -3,9 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1218">
+  <meta name="theme-color" content="#15181d">
   <meta name="description" content="VulnSight searches GHSA, NVD and OSV by bug class (CWE), then optionally confirms matches with an LLM.">
   <title>VulnSight — advisory search by bug class</title>
+  <!-- The browser asks for /favicon.ico whether or not a page declares an
+       icon; with none declared that is a 404 on every first load, visible
+       in the console of a tool whose whole job is to show you problems. -->
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -22,21 +26,20 @@
     </a>
 
     <div class="system-status" role="group" aria-label="System status">
-      <span class="status-title">STATUS</span>
       <span class="pill">
         <span class="dot {{ 'ok' if gh_ok else 'bad' }}" aria-hidden="true"></span>
         <span class="pill-key">GH</span>
-        <span class="pill-value">{{ 'AUTHED' if gh_ok else 'OFFLINE' }}</span>
+        <span class="pill-value">{{ 'Connected' if gh_ok else 'Not connected' }}</span>
       </span>
       <span class="pill">
         <span class="dot {{ 'ok' if ai_configured else 'bad' }}" aria-hidden="true"></span>
         <span class="pill-key">AI</span>
-        <span class="pill-value">{{ 'READY' if ai_configured else 'OFF' }}</span>
+        <span class="pill-value">{{ 'Ready' if ai_configured else 'Not configured' }}</span>
       </span>
       <button class="pill pill-action" id="ai-test-pill" type="button" title="Test the configured AI endpoint">Test AI</button>
       <span class="pill cache-pill" title="Advisories in the local cache">
         <span class="cache-mark" aria-hidden="true"></span>
-        <span>{{ cached_count }} cached</span>
+        <span><span class="cache-count">{{ cached_count }}</span> cached</span>
       </span>
       <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
         <span class="theme-icon" aria-hidden="true"></span>
@@ -52,18 +55,21 @@
 
   <div class="layout">
     <aside class="control-rail" id="control-panel" aria-label="Search filters">
+      <div class="rail-scroll">
       <div class="rail-intro">
         <div>
-          <span class="eyebrow">Query</span>
           <h2>Build a search</h2>
           <p>Filter GHSA, NVD and OSV by bug class, ecosystem and package. Optionally confirm matches with AI.</p>
         </div>
         <button class="rail-close" id="filters-close" type="button" aria-label="Close filters">×</button>
-        <div class="rail-stats" role="group" aria-label="Available search dimensions">
-          <span><b>4</b> sources</span>
-          <span><b>{{ categories|length }}</b> classes</span>
-          <span><b>{{ cwe_count }}</b> CWEs</span>
-        </div>
+        <!-- Three bordered boxes holding "4 / 29 / 944" used to sit here.
+             None of the three is a number anyone acts on, and the shape --
+             a big figure over a small label, in a row of identical cards --
+             is the default hero treatment this design is meant to avoid.
+             The counts that matter are per-class, and they are now a length
+             you can compare in the class field itself. -->
+        <p class="rail-reach">{{ categories|length }} bug classes over
+          {{ cwe_count }} CWEs, across four sources.</p>
       </div>
 
       <section class="control-section history-section" id="history-section" aria-labelledby="history-heading" hidden>
@@ -87,7 +93,7 @@
           <label class="combo-input" for="cwe-search">
             <span class="combo-icon" aria-hidden="true"></span>
             <input id="cwe-search" type="text" role="combobox" autocomplete="off" spellcheck="false"
-                   placeholder="639 · IDOR · sql injection"
+                   placeholder="e.g. 639, IDOR, SQL injection"
                    aria-expanded="false" aria-controls="cwe-options" aria-autocomplete="list"
                    aria-describedby="cwe-search-help">
             <button class="combo-clear" id="cwe-clear" type="button" hidden aria-label="Clear search">×</button>
@@ -142,30 +148,38 @@
         </div>
       </section>
 
-      <section class="control-section" aria-labelledby="sources-heading">
-        <div class="section-heading">
-          <h3 id="sources-heading">Sources</h3>
-          <span class="section-note">Coverage</span>
-        </div>
+      <!-- Sources and Options fold. The rail held seven sections, all open,
+           all the time: about 1400px of scroll behind a 320px column, so
+           opening the page put you in the middle of a checkbox list with no
+           visible beginning. These two are the ones a search rarely needs --
+           the defaults are right for almost every query -- and each keeps a
+           value beside its name while shut, so folding hides the controls
+           and never the setting. Scope stays open: ecosystem is the filter
+           people actually change between searches. -->
+      <details class="control-section control-fold">
+        <summary class="section-heading">
+          <h3>Sources</h3>
+          <span class="fold-value" id="sources-value"></span>
+        </summary>
         <fieldset class="field field-last">
           <legend class="sr-only">Choose data sources</legend>
-          <div class="cats source-list">
+          <div class="cats">
             <label class="cat" title="GitHub Advisory Database — server-side CWE filter, any ecosystem">
               <input type="checkbox" name="source" value="ghsa" checked>
-              <span class="cat-copy"><span class="source-code">GHSA</span><span class="c-desc">GitHub · CWE filter</span></span>
+              <span class="cat-copy"><span class="source-code">GHSA</span><span class="c-desc">GitHub, filtered by CWE at the source</span></span>
             </label>
             <label class="cat" title="NIST National Vulnerability Database — CWE filter, CVSS v3/v4, CPE, KEV">
               <input type="checkbox" name="source" value="nvd">
-              <span class="cat-copy"><span class="source-code">NVD</span><span class="c-desc">NIST · CVSS, CPE, KEV</span></span>
+              <span class="cat-copy"><span class="source-code">NVD</span><span class="c-desc">NIST, with CVSS, CPE and KEV</span></span>
             </label>
             <p class="nvd-hint">Without NVD_API_KEY, queries take ~7s per CWE. Free key at nvd.nist.gov</p>
             <label class="cat" title="OSV.dev bulk export — broader coverage, filtered locally by CWE">
               <input type="checkbox" name="source" value="osv">
-              <span class="cat-copy"><span class="source-code">OSV</span><span class="c-desc">Bulk export · local CWE filter</span></span>
+              <span class="cat-copy"><span class="source-code">OSV</span><span class="c-desc">Bulk export, filtered here</span></span>
             </label>
             <label class="cat" title="OSV source-native records without a CWE tag — classified by AI">
               <input type="checkbox" name="source" value="osv-native">
-              <span class="cat-copy"><span class="source-code">OSV native</span><span class="c-desc">No CWE · AI-assisted</span></span>
+              <span class="cat-copy"><span class="source-code">OSV native</span><span class="c-desc">Untagged records, classified by AI</span></span>
             </label>
           </div>
           <label class="check advanced-check" title="Re-download the OSV bulk export even if cached">
@@ -173,12 +187,11 @@
             <span><span class="check-title">Force-refresh OSV cache</span><span class="hint">~10 MB for maven/go, ~220 MB for npm</span></span>
           </label>
         </fieldset>
-      </section>
+      </details>
 
       <section class="control-section" aria-labelledby="scope-heading">
         <div class="section-heading">
           <h3 id="scope-heading">Scope</h3>
-          <span class="section-note">Target</span>
         </div>
         <div class="row">
           <div class="field">
@@ -202,11 +215,11 @@
         </div>
       </section>
 
-      <section class="control-section" aria-labelledby="query-heading">
-        <div class="section-heading">
-          <h3 id="query-heading">Options</h3>
-          <span class="section-note">Retrieval</span>
-        </div>
+      <details class="control-section control-fold">
+        <summary class="section-heading">
+          <h3>Options</h3>
+          <span class="fold-value" id="options-value"></span>
+        </summary>
         <div class="row">
           <div class="field">
             <label for="published">Published</label>
@@ -235,8 +248,14 @@
         <div class="row">
           <div class="field">
             <label for="sort">Sort by</label>
+            <!-- "Risk" is the UI default and `published` is the API
+                 default, deliberately. A person opening this page is
+                 triaging; a script calling /api/v1/search has already
+                 decided what it wants, and changing the API default would
+                 silently reorder every existing caller's results. -->
             <select id="sort">
-              <option value="published" selected>Published</option>
+              <option value="risk" selected>Risk</option>
+              <option value="published">Published</option>
               <option value="updated">Updated</option>
               <option value="cve_id">CVE ID</option>
               <option value="epss_percentage">EPSS score</option>
@@ -245,6 +264,9 @@
           </div>
           <div class="field">
             <label for="direction">Order</label>
+            <!-- The option text is rewritten by app.js to match the chosen
+                 sort field: "Newest first" is meaningless for CVE ID and
+                 wrong for EPSS, where desc means highest. -->
             <select id="direction">
               <option value="desc" selected>Newest first</option>
               <option value="asc">Oldest first</option>
@@ -259,11 +281,12 @@
             <option value="malware">Malware</option>
           </select>
         </div>
-      </section>
+      </details>
+
+      </div><!-- /.rail-scroll -->
 
       <div class="control-actions">
         <button class="primary" id="auto-btn" type="button" title="Pick optimal sources, search, run AI, and show only real matches">
-          <span class="button-kicker">Full pipeline</span>
           <span class="button-main">Run intelligent scan</span>
         </button>
         <button class="secondary-action" id="search-btn" type="button" title="Fetch advisories without AI classification">
@@ -273,31 +296,27 @@
       </div>
     </aside>
 
-    <main class="workspace" id="workspace">
-      <section class="workspace-intro" aria-labelledby="workspace-title">
-        <div class="workspace-heading">
-          <span class="eyebrow">Results</span>
-          <h2 id="workspace-title">Advisory queue</h2>
-          <p>Merged records from GHSA, NVD and OSV, ranked for triage. Confirm with AI when CWE tags are too broad.</p>
-        </div>
-        <div class="threat-key" role="group" aria-label="Severity key">
-          <div class="threat-key-head"><span>Severity</span><span>CVSS</span></div>
-          <div class="threat-scale">
-            <span class="threat-level critical"><i aria-hidden="true"></i><b>Critical</b><small>9.0–10</small></span>
-            <span class="threat-level high"><i aria-hidden="true"></i><b>High</b><small>7.0–8.9</small></span>
-            <span class="threat-level medium"><i aria-hidden="true"></i><b>Medium</b><small>4.0–6.9</small></span>
-            <span class="threat-level low"><i aria-hidden="true"></i><b>Low</b><small>0.1–3.9</small></span>
-          </div>
-          <div class="threat-key-foot" role="group" aria-label="Signals shown on each advisory">
-            <span>GHSA</span><span>NVD</span><span>OSV</span><span>EPSS</span><span>AI</span>
-          </div>
-        </div>
-      </section>
+    <!-- Two views of one page, switched by data-view.
 
+         At rest the workspace is the bug-class map and nothing else. What
+         used to sit above it — "Advisory queue" at display size, a
+         paragraph, four figures at 52px and a severity key — was roughly
+         290px of chrome that never changed and never left, so the page
+         carried two display headings fighting for the top and a legend for
+         badges that were not on screen yet. Three of the four figures were
+         constants (the catalog size, the number of classes); the rail says
+         both in one line, and the live two are in the summary below.
+
+         The command bar appears with the first search, because every
+         control on it — Refine with AI, Retry failed, Confirmed only,
+         Export — is dead until there is a result to act on, and four dead
+         controls above the fold read as a broken page rather than an
+         early one. -->
+    <main class="workspace" id="workspace" data-view="browse">
       <section class="result-command" aria-label="Result controls">
         <div class="result-summary">
-          <span class="command-label">Queue</span>
           <div class="summary" id="summary" role="status" aria-live="polite">Select a bug class, then run a search.</div>
+          <ul class="search-warnings" id="search-warnings" aria-label="Search warnings" hidden></ul>
         </div>
         <div class="toolbar-actions">
           <span id="needs-search-hint" class="sr-only">Run a search first</span>
@@ -307,7 +326,7 @@
             <input type="checkbox" id="only_match" disabled><span>Confirmed only</span>
           </label>
           <details class="export-menu">
-            <summary id="export-btn" aria-disabled="true" tabindex="-1"><span>Export</span><span aria-hidden="true">↓</span></summary>
+            <summary id="export-btn" aria-disabled="true" tabindex="0"><span>Export</span><span aria-hidden="true">↓</span></summary>
             <div class="export-pop">
               <span class="menu-label">Export current queue</span>
               <button type="button" data-fmt="csv"><span>CSV</span><small>All visible records</small></button>
@@ -321,18 +340,21 @@
       <p class="stale-banner" id="stale-banner" role="status" hidden></p>
 
       <section id="results" class="results" aria-label="Advisory results" aria-busy="false">
+        <!-- The opening screen is the taxonomy itself, not instructions
+             about it. This used to be a bordered card holding a headline, a
+             paragraph and three numbered steps, with the rest of the
+             workspace empty -- it told you to go and tick a class in a
+             320px rail you then had to scroll. The thing this tool is for
+             is the set of bug classes, so that is what the page opens with,
+             and picking one is a click rather than a search for the
+             control. Filled by renderClassMap() from window.BOOT.CLASSES. -->
         <div class="empty empty-onboarding">
-          <div class="empty-copy">
-            <span class="eyebrow">No query yet</span>
+          <div class="onboarding-head">
             <h3>Search by how the bug works, not by the title.</h3>
-            <p>Type a CWE ID or a bug name — “639”, “IDOR”, “SQL injection” — or tick a class. VulnSight merges sources, then you can score the queue with AI.</p>
-            <ol class="workflow" aria-label="Analysis workflow">
-              <li><span>1</span><b>Search</b><small>Collect by CWE</small></li>
-              <li><span>2</span><b>Refine</b><small>Score with AI</small></li>
-              <li><span>3</span><b>Isolate</b><small>Keep true matches</small></li>
-            </ol>
-            <p class="empty-tip">BAC + Maven is preselected. “Run intelligent scan” runs the full flow.</p>
+            <p>Pick a class to start — or type a CWE id, a bug name or an alias in the rail.</p>
           </div>
+          <div class="class-map" id="class-map" role="group"
+               aria-label="Bug classes"></div>
         </div>
       </section>
     </main>
@@ -340,7 +362,6 @@
 
   <div id="auth-gate" class="auth-gate" hidden>
     <div class="auth-gate-card" role="dialog" aria-labelledby="auth-gate-title" aria-modal="true">
-      <span class="eyebrow">Access</span>
       <h2 id="auth-gate-title">API token required</h2>
       <p id="auth-gate-hint">This instance sets VULNSIGHT_API_TOKEN. Enter it to search or classify.</p>
       <label for="auth-token">Token</label>
@@ -350,18 +371,13 @@
   </div>
 
   <script nonce="{{ csp_nonce }}">
+    // Runs before paint so the page never flashes the wrong theme. It only
+    // applies the stored choice; the colour itself is read back out of the
+    // stylesheet in app.js, so no hex is duplicated here.
     (function() {
       var saved = localStorage.getItem('theme');
       if (saved === 'light' || saved === 'dark') {
         document.documentElement.dataset.theme = saved;
-      }
-      var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) {
-        var theme = document.documentElement.dataset.theme;
-        if (!theme) {
-          theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        }
-        meta.content = theme === 'dark' ? '#0b1218' : '#f4f7f8';
       }
     })();
   </script>
@@ -376,35 +392,5 @@
     };
   </script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
-  <script nonce="{{ csp_nonce }}">
-    (function() {
-      var toggle = document.getElementById('theme-toggle');
-      if (!toggle) return;
-
-      function getEffectiveTheme() {
-        var explicit = document.documentElement.dataset.theme;
-        if (explicit === 'light' || explicit === 'dark') return explicit;
-        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-      }
-
-      function updateToggle() {
-        var theme = getEffectiveTheme();
-        toggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
-        toggle.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
-        var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.content = theme === 'dark' ? '#0b1218' : '#f4f7f8';
-      }
-
-      toggle.addEventListener('click', function() {
-        var next = getEffectiveTheme() === 'dark' ? 'light' : 'dark';
-        document.documentElement.dataset.theme = next;
-        localStorage.setItem('theme', next);
-        updateToggle();
-      });
-
-      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', updateToggle);
-      updateToggle();
-    })();
-  </script>
 </body>
 </html>

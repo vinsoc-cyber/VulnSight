@@ -134,7 +134,8 @@ Which OSV bulk exports are on disk, and how stale.
   "direction": "desc",                 // asc|desc
   "max_results": 100,                  // clamped to 1..500
   "sources": ["ghsa", "osv-native"],   // ghsa|nvd|osv|osv-native
-  "refresh_osv": false
+  "refresh_osv": false,
+  "include_source_records": false      // per-source snapshots; ~35% more payload
 }
 ```
 
@@ -166,11 +167,16 @@ Response:
 ```
 
 Each result carries `advisory_id`, `ghsa_id`, `cve_id`, `aliases`, `sources`,
-`source_records`, `severity` and `severity_by_source`, `cvss_score`,
+`severity` and `severity_by_source`, `cvss_score`,
 `cvss_vector` and `cvss_by_source`, `cwes`, `cwe_labels`, `packages`, `ecosystems`, `published_at`,
 `updated_at`, `withdrawn_at`, `kev`, `epss_percentage`, `epss_percentile`,
 `html_url`, `summary`, `description`, and `ai` when a fresh cached verdict exists
 for **every** requested category.
+
+`source_records` — each contributing source's untouched snapshot — is returned
+only when the request sets `include_source_records`. It is about 35% of the
+response by size (measured over 500 cached rows: 2.91 MB against 1.89 MB) and
+is useful for auditing how a row was merged, not for displaying it.
 
 `cvss_score` is `null` when the advisory's only vector is CVSS v4.0 — v4 is not
 scored here, and the reason is in
@@ -233,12 +239,16 @@ same upstream budget as running one.
   "started_at": 1756000001.2,
   "finished_at": 1756000118.9,
   "result": { /* identical to a POST /api/v1/search response */ },
-  "error": "GHSA fetch failed."   // present only when status is "failed"
+  "error": "GHSA fetch failed.",  // present only when status is "failed"
+  "error_status": 502             // the HTTP status this failure maps to
 }
 ```
 
-`result` appears only on `done`, `error` only on `failed` — there are no partial
-results to poll for. The payload under `result` is byte-identical to what the
+`result` appears only on `done`, `error` and `error_status` only on `failed` —
+there are no partial results to poll for. `error_status` is what the
+synchronous endpoint would have returned, so a polling client can tell "your
+query is wrong, do not retry" (4xx) from "upstream is unwell, back off"
+(5xx) without parsing the message. The payload under `result` is byte-identical to what the
 synchronous endpoint returns, so a client never parses two shapes.
 
 Unlike every other `GET`, this one **requires the token when one is configured**.
@@ -258,7 +268,11 @@ Unknown or malformed ids return `404 {"error": "No such job."}`.
   shipped `Dockerfile` uses one worker, so this is only a concern if you change it.
 - **A restart fails in-flight jobs.** They are marked `failed` with
   `Server restarted while this job was in flight; resubmit it.` rather than left
-  in `running` forever, because nothing is executing them any more.
+  in `running` forever, because nothing is executing them any more. Only jobs
+  whose owning process is actually gone are reconciled, so a second worker
+  starting up cannot fail a job the first one is still running; a job in
+  flight for more than three hours is reconciled regardless, as a backstop
+  for a recycled PID.
 - **One worker by default** (`VULNSIGHT_JOB_WORKERS`). The sources are rate
   limited per account, not per request, so running searches concurrently spends
   the same GitHub and NVD budget faster without finishing any job sooner.
@@ -292,7 +306,8 @@ per request. Over it you get `400` naming both factors. See
 [AI classification](ai-classification.md#what-a-pass-costs).
 
 Errors: `AI not configured. Set AI_* in .env.` · `No advisories to classify.` ·
-`Too many advisories; maximum batch size is 100.` ·
+`Too many advisory IDs; maximum is 100.` ·
+`Advisory identifiers may not exceed 128 characters.` ·
 `Request would issue N AI calls …`
 
 ## `POST /api/v1/ai/test`
@@ -334,3 +349,26 @@ advisories = [g.normalize(a) for a in g.fetch_advisories(params)]
 
 resolve_cwes(["cwe:1321"])      # -> ['1321']
 ```
+
+The AI pass likewise. `classify_batch` is the whole of what
+`POST /api/v1/ai/classify` does — cache lookup, scoring, persistence and
+aggregation — so a script can score a queue without a Flask test client:
+
+```python
+from modules import ai_classifier, config
+config.load_dotenv()
+
+cfg = ai_classifier.load_config()
+result = ai_classifier.classify_batch(
+    cfg,
+    [r["advisory_id"] for r in outcome.results],
+    ["bac"],
+)
+for advisory_id, verdict in result["verdicts"].items():
+    if verdict.get("is_match"):
+        print(advisory_id, verdict["vuln_type"], verdict["reason"])
+```
+
+The advisories must already be in the cache — run a search first; unknown ids
+come back under `missing` rather than failing. It spends real money on the
+same terms as the endpoint.

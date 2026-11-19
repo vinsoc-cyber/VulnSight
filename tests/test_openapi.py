@@ -16,12 +16,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import re
 import tempfile
 import unittest
 from unittest import mock
 
-from modules import cache, openapi
+from modules import ai_classifier, cache, openapi
 from samples import SAMPLE
 
 
@@ -106,6 +107,7 @@ class _AppCase(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {
             "VULNSIGHT_API_TOKEN": "", "VULNSIGHT_RATE_LIMIT": "off",
             "HOST": "127.0.0.1",
+            "VULNSIGHT_BIND": "127.0.0.1",
         }, clear=False)
         self._env.start()
         from app import create_app
@@ -116,6 +118,9 @@ class _AppCase(unittest.TestCase):
     def tearDown(self):
         from modules import jobs
         jobs.shutdown(wait=True)
+        # Disposing of the pool must not leave the process-wide stop
+        # signal raised for every later test in the run.
+        jobs.resume()
         self._env.stop()
         cache.DB_PATH = self._orig_db
         for ext in ["", "-wal", "-shm"]:
@@ -177,6 +182,66 @@ class TestSpecMatchesRealResponses(_AppCase):
             ).get_json()
         self.assertEqual(validate(body, schema), [])
 
+    def test_a_real_cwe_catalog_response_validates(self):
+        """It was documented as an unconstrained object too, and the release
+        date it now carries was generated but read by nothing."""
+        schema = (self.spec["paths"]["/api/v1/cwes"]["get"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        body = self.client.get("/api/v1/cwes").get_json()
+        self.assertEqual(validate(body, schema), [], list(body)[:6])
+        self.assertTrue(body["released"], "the catalog must state its release date")
+
+    def test_a_real_classify_response_validates(self):
+        """The module's headline claim is that the document is checked
+        against what the server actually sends. That was vacuous for the
+        richest response in the API, which was documented as an
+        unconstrained {"type": "object"} and posted to by no test."""
+        schema = (self.spec["paths"]["/api/v1/ai/classify"]["post"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        verdict = {"is_match": True, "confidence": 0.9,
+                   "vuln_type": "BOLA/IDOR", "reason": "r"}
+        with mock.patch("modules.cache.get_advisories",
+                        return_value={"GHSA-aaaa": {
+                            "advisory_id": "GHSA-aaaa", "cve_id": "CVE-1",
+                            "summary": "s", "description": "d",
+                            "cwes": ["639"], "packages": []}}), \
+             mock.patch("modules.ai_classifier.load_config") as load_config, \
+             mock.patch("modules.ai_classifier.classify_one", return_value=verdict), \
+             mock.patch("modules.cache.save_classification"), \
+             mock.patch("modules.cache.get_classifications", return_value={}):
+            load_config.return_value = ai_classifier.AIConfig(
+                provider="glm", base_url="https://x", tokens=["k"], model="m")
+            body = self.client.post(
+                "/api/v1/ai/classify",
+                json={"categories": ["bac"],
+                      "advisory_ids": ["GHSA-aaaa", "GHSA-missing"]},
+            ).get_json()
+        self.assertEqual(validate(body, schema), [], body)
+        self.assertEqual(body["missing"], ["GHSA-missing"])
+
+    def test_a_classify_response_with_an_error_verdict_validates(self):
+        """The error branch used to return a different shape, so a schema
+        for this response could not have been written at all."""
+        schema = (self.spec["paths"]["/api/v1/ai/classify"]["post"]
+                  ["responses"]["200"]["content"]["application/json"]["schema"])
+        with mock.patch("modules.cache.get_advisories",
+                        return_value={"GHSA-aaaa": {
+                            "advisory_id": "GHSA-aaaa", "cve_id": "CVE-1",
+                            "summary": "s", "description": "d",
+                            "cwes": ["639"], "packages": []}}), \
+             mock.patch("modules.ai_classifier.load_config") as load_config, \
+             mock.patch("modules.ai_classifier.classify_one",
+                        side_effect=ai_classifier.AIError("boom")), \
+             mock.patch("modules.cache.save_classification"), \
+             mock.patch("modules.cache.get_classifications", return_value={}):
+            load_config.return_value = ai_classifier.AIConfig(
+                provider="glm", base_url="https://x", tokens=["k"], model="m")
+            body = self.client.post(
+                "/api/v1/ai/classify",
+                json={"categories": ["bac"], "advisory_ids": ["GHSA-aaaa"]},
+            ).get_json()
+        self.assertEqual(validate(body, schema), [], body)
+
     def test_an_empty_search_response_validates(self):
         schema = self.spec["components"]["schemas"]["SearchResponse"]
         with mock.patch("modules.ghsa_client.fetch_advisories", return_value=[]):
@@ -218,6 +283,116 @@ class TestSpecMatchesRealResponses(_AppCase):
         self.assertNotEqual(validate({"count": "twelve"}, schema), [])
         stats = self.spec["components"]["schemas"]["SearchStats"]
         self.assertNotEqual(validate({"truncated": "yes"}, stats), [])
+
+
+class TestEveryStatusTheHandlersSendIsDocumented(_AppCase):
+    """The spec listed responses the handlers do not send, and omitted ones
+    they do.
+
+    `/api/v1/ai/test` declared its body optional while `_json_object`
+    returns **415** without a JSON content-type and **400** for a non-object
+    body; neither was listed, so a client generated from this document
+    called pingAiProvider() with no arguments and got an undocumented 415.
+    `/api/v1/ai/classify` omitted 415 from the same helper while `/search`
+    and `/jobs` both listed it.
+
+    The existing tests check path and method parity and validate the
+    responses they happen to elicit, so a status nothing provokes was
+    invisible. These provoke them."""
+
+    def _documented(self, path, method="post"):
+        return set(self.spec["paths"][path][method]["responses"])
+
+    def _assert_documented(self, path, status, **kwargs):
+        response = self.client.post(path, **kwargs)
+        self.assertEqual(response.status_code, status)
+        self.assertIn(str(status), self._documented(path),
+                      f"{path} returns {status} and the spec does not say so")
+
+    def test_a_request_with_no_json_content_type_is_a_documented_415(self):
+        for path in ("/api/v1/search", "/api/v1/ai/classify", "/api/v1/ai/test",
+                     "/api/v1/jobs"):
+            with self.subTest(path=path):
+                self._assert_documented(path, 415, data="not json")
+
+    def test_a_non_object_json_body_is_a_documented_400(self):
+        for path in ("/api/v1/search", "/api/v1/ai/classify", "/api/v1/ai/test",
+                     "/api/v1/jobs"):
+            with self.subTest(path=path):
+                self._assert_documented(path, 400, data="[1, 2, 3]",
+                                        content_type="application/json")
+
+    def test_ai_test_does_not_claim_its_body_is_optional(self):
+        """It is the handler that decides, and the handler requires one."""
+        body = self.spec["paths"]["/api/v1/ai/test"]["post"]["requestBody"]
+        self.assertTrue(body["required"])
+
+
+class TestTheComponentsAreActuallyReferenced(_AppCase):
+    """`components.schemas` registered six schemas and the document
+    contained zero `$ref`: every use site inlined the same object, so the
+    served JSON carried each schema twice (Error six times) and a generator
+    emitted anonymous inline models instead of Error, Advisory, Job and
+    SearchResponse. Two more shapes, Verdict and ClassifyResponse, were
+    used by the paths and never registered at all."""
+
+    def test_the_document_uses_refs(self):
+        text = json.dumps(self.spec)
+        self.assertGreater(text.count('"$ref"'), 10,
+                           "components.schemas is decoration again")
+
+    def test_every_ref_resolves(self):
+        text = json.dumps(self.spec)
+        names = set(self.spec["components"]["schemas"])
+        dangling = sorted({ref for ref in
+                           re.findall(r"#/components/schemas/(\w+)", text)
+                           if ref not in names})
+        self.assertEqual(dangling, [], f"unresolvable $ref: {dangling}")
+
+    def test_every_registered_schema_is_referenced_somewhere(self):
+        """A schema nobody points at is the same decoration in a new place."""
+        text = json.dumps(self.spec)
+        referenced = set(re.findall(r"#/components/schemas/(\w+)", text))
+        unused = sorted(set(self.spec["components"]["schemas"]) - referenced)
+        self.assertEqual(unused, [], f"registered but never referenced: {unused}")
+
+    def test_the_shapes_a_client_needs_to_name_are_all_published(self):
+        for name in ("Error", "Advisory", "Job", "SearchRequest",
+                     "SearchResponse", "Verdict", "ClassifyResponse"):
+            with self.subTest(schema=name):
+                self.assertIn(name, self.spec["components"]["schemas"])
+
+
+class TestTheSpecDoesNotRestateLimits(_AppCase):
+    """100, 300 and 500 were typed into the schema while the module that
+    enforces them held the same numbers, so raising one left the published
+    contract saying the old value and no test failed."""
+
+    def test_the_published_limits_are_the_enforced_ones(self):
+        from modules import search_service
+
+        properties = self.spec["components"]["schemas"]["SearchRequest"]["properties"]
+        self.assertEqual(properties["categories"]["maxItems"],
+                         search_service.MAX_CATEGORY_INPUTS)
+        self.assertEqual(properties["affects"]["maxLength"],
+                         search_service.MAX_AFFECTS_LENGTH)
+        self.assertEqual(properties["max_results"]["maximum"],
+                         search_service.MAX_RESULTS_CAP)
+        self.assertEqual(properties["max_results"]["default"],
+                         search_service.DEFAULT_MAX_RESULTS)
+
+    def test_the_enforced_limit_is_the_one_a_request_actually_hits(self):
+        """Reading the constant proves the spec and the module agree; this
+        proves the module agrees with itself."""
+        from modules import search_service
+
+        over = "x" * (search_service.MAX_AFFECTS_LENGTH + 1)
+        with self.assertRaises(search_service.SearchError):
+            search_service.parse_search_query(
+                {"categories": ["bac"], "affects": over})
+        query = search_service.parse_search_query(
+            {"categories": ["bac"], "max_results": 10_000})
+        self.assertEqual(query.max_results, search_service.MAX_RESULTS_CAP)
 
 
 if __name__ == "__main__":

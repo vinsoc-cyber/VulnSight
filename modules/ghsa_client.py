@@ -16,7 +16,9 @@ until we hit `max_results` so the caller can bound cost.
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -25,7 +27,10 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlsplit
 
+from . import http_retry
 from .cwe_categories import normalize_cwe_id
+
+logger = logging.getLogger(__name__)
 
 
 class GhCliError(RuntimeError):
@@ -35,8 +40,19 @@ class GhCliError(RuntimeError):
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+@functools.lru_cache(maxsize=1)
+def gh_executable() -> str | None:
+    """Absolute path to `gh`, resolved once.
+
+    Invoking it by bare name resolved through the inherited PATH on every
+    call. gh_available() already did the lookup, so this reuses it and the
+    subprocess calls below get an absolute path.
+    """
+    return shutil.which("gh")
+
+
 def gh_available() -> bool:
-    return shutil.which("gh") is not None
+    return gh_executable() is not None
 
 
 #: How long a `gh auth status` result is reused. Logging in or out is rare;
@@ -51,14 +67,15 @@ def _gh_auth_uncached() -> bool:
         return False
     try:
         r = subprocess.run(
-            ["gh", "auth", "status"],
+            [gh_executable() or "gh", "auth", "status"],
             capture_output=True,
             text=True,
             timeout=15,
         )
-        return r.returncode == 0
     except Exception:
         return False
+    else:
+        return r.returncode == 0
 
 
 def gh_auth_ok(*, force: bool = False) -> bool:
@@ -140,7 +157,7 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
     on an empty body. `-i` includes response headers so we can read the Link
     header for the pagination cursor.
     """
-    cmd = ["gh", "api", "-i", "-X", "GET", path_with_query,
+    cmd = [gh_executable() or "gh", "api", "-i", "-X", "GET", path_with_query,
            "-H", "Accept: application/vnd.github+json"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -163,11 +180,15 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
 
     next_url = None
     for line in header_blob.splitlines():
-        if line.lower().startswith("link:"):
-            m = _LINK_NEXT_RE.search(line)
-            if m:
-                next_url = m.group(1)
+        if not line.lower().startswith("link:"):
+            continue
+        m = _LINK_NEXT_RE.search(line)
+        if m:
+            next_url = m.group(1)
             break
+        # Keep scanning: HTTP permits repeated Link headers, and breaking on
+        # the first one regardless of whether it held rel="next" stopped
+        # pagination at page 1 if rel="prev" happened to arrive first.
 
     body = body.strip()
     if not body:
@@ -183,10 +204,61 @@ def _run_gh_api(path_with_query: str, timeout: int = 60) -> tuple[list | dict, s
     return data, next_url
 
 
+# GitHub answers through the `gh` CLI, so a transient failure arrives as a
+# subprocess result rather than an HTTPError. These are the ones worth another
+# attempt; anything else (a bad query, no credentials) will fail identically.
+# Phrases, matched anywhere in the message.
+_TRANSIENT_GH_PHRASES = (
+    "timed out", "bad gateway", "service unavailable",
+    "gateway timeout", "connection reset", "connection refused",
+    "temporary failure", "tls handshake",
+)
+# Short tokens that must match as whole words. As bare substrings these were
+# false positives waiting to happen: "502"/"503"/"504" sit inside any GHSA id
+# or CVE number containing those digits, and "eof" inside words. A permanent
+# `HTTP 404: ... GHSA-xxxx-1503-xxxx` was retried three times.
+_TRANSIENT_GH_TOKENS = ("502", "503", "504", "eof")
+_TRANSIENT_TOKEN_RE = re.compile(
+    r"(?<![0-9a-z])(?:" + "|".join(_TRANSIENT_GH_TOKENS) + r")(?![0-9a-z])")
+
+# Deliberately NOT transient: a rate limit is not a "try again in 1.5
+# seconds" condition. GitHub's primary limit resets up to an hour out and
+# its secondary-limit guidance says to stop rather than retry; retry_after_of
+# cannot help because a GhCliError is not an HTTPError, so the reset time in
+# the response was never read. Three futile retries per page, across five
+# pages and four sources, is ~15 extra authenticated calls against the same
+# exhausted budget -- which is what abuse detection looks for.
+_PERMANENT_GH_PHRASES = ("rate limit", "secondary rate limit")
+
+
+def _is_transient_gh_error(exc: BaseException) -> bool:
+    if not isinstance(exc, GhCliError):
+        return False
+    text = str(exc).lower()
+    if any(phrase in text for phrase in _PERMANENT_GH_PHRASES):
+        return False
+    if any(phrase in text for phrase in _TRANSIENT_GH_PHRASES):
+        return True
+    return bool(_TRANSIENT_TOKEN_RE.search(text))
+
+
+# A whole fetch, pagination included, may not outlast this. The 50-page guard
+# times a 60s per-call timeout was otherwise a 50-minute worst case inside one
+# request, against the 180s the shipped gunicorn config allows.
+FETCH_DEADLINE_SECONDS = 150.0
+
+
 def fetch_advisories(params: SearchParams) -> list[dict]:
-    """Fetch advisories following pagination up to params.max_results."""
+    """Fetch advisories following pagination up to params.max_results.
+
+    A page that fails transiently is retried. If it keeps failing, whatever
+    has already been collected is returned rather than discarded: losing 200
+    advisories because page 3 of 5 hit a 502 made a flaky page look like a
+    dead source.
+    """
     q = params.to_query()
     path = "/advisories?" + urlencode(q)
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
 
     results: list[dict] = []
     guard = 0
@@ -194,24 +266,68 @@ def fetch_advisories(params: SearchParams) -> list[dict]:
         guard += 1
         if guard > 50:  # safety: never loop forever
             break
-        batch, next_url = _run_gh_api(path)
+        if time.monotonic() >= deadline:
+            logger.warning("GHSA: stopping after %d page(s); fetch deadline reached", guard - 1)
+            break
+        try:
+            batch, next_url = http_retry.with_retries(
+                lambda p=path: _run_gh_api(p),
+                what=f"GHSA page {guard}",
+                deadline=deadline,
+                retryable=_is_transient_gh_error,
+            )
+        except GhCliError:
+            if not results:
+                raise          # nothing collected: the source really did fail
+            logger.warning("GHSA: keeping %d advisory(ies) from the pages that "
+                           "succeeded; a later page kept failing", len(results))
+            break
+        # Both of the checks below used to raise from inside this loop,
+        # three lines under the handler that exists to keep earlier pages --
+        # so a bad shape or a bad cursor on page 4 discarded pages 1-3, which
+        # is the regression that handler was written for. They end the walk
+        # instead, and only fail the source outright if nothing was collected.
         if not isinstance(batch, list):
-            raise GhCliError("unexpected GHSA response shape (expected a list)")
+            if not results:
+                raise GhCliError("unexpected GHSA response shape (expected a list)")
+            logger.warning("GHSA: page %d was not a list; keeping %d advisory(ies) "
+                           "from the pages that parsed", guard, len(results))
+            break
         results.extend(batch)
         if not next_url:
             break
         # next_url is a full https URL; gh api accepts a full URL too, but we
         # strip to the path+query for consistency.
-        path = _strip_to_path(next_url)
+        try:
+            path = _strip_to_path(next_url)
+        except GhCliError:
+            if not results:
+                raise
+            logger.warning("GHSA: refusing the page-%d cursor; keeping %d "
+                           "advisory(ies) already fetched", guard + 1, len(results))
+            break
 
     return results[: params.max_results]
 
 
 def _strip_to_path(url: str) -> str:
+    """The pagination cursor, reduced to the path+query `gh api` accepts.
+
+    The value comes from a response header and becomes an argv element, so it
+    is checked rather than trusted: anything that is not an /advisories path
+    would otherwise be handed to gh's flag parser.
+
+    The check is equality, not a prefix. `startswith("/advisories")` also
+    accepted "/advisories/../user" -- which the API server resolves back to
+    /user, the endpoint that returns the operator's account -- as well as a
+    sibling route like "/advisories-beta". This endpoint paginates one list,
+    so the only cursor it can legitimately hand back is a query string on
+    /advisories itself.
+    """
     parts = urlsplit(url)
-    if parts.query:
-        return f"{parts.path}?{parts.query}"
-    return parts.path
+    if parts.path != "/advisories":
+        raise GhCliError(f"refusing a pagination cursor outside /advisories: {url!r}")
+    return f"{parts.path}?{parts.query}" if parts.query else parts.path
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from . import http_retry, records
+
 from .cwe_categories import normalize_cwe_id
 from .query_filters import published_bounds
 
@@ -98,18 +100,21 @@ def _build_date_windows(
         })
         if cursor_start <= start:
             break
-        cursor_end = cursor_start - timedelta(milliseconds=1)
+        # A full day back, not a millisecond: the dates are truncated to
+        # midnight/23:59:59.999 below, so a millisecond stayed inside the
+        # same day and both windows fetched it.
+        cursor_end = cursor_start - timedelta(days=1)
     return windows
 
 
-def _build_date_params(published: str | None) -> dict[str, str]:
-    """Compatibility helper returning the newest NVD date window."""
-    windows = _build_date_windows(published)
-    return windows[0] if windows else {}
-
-
 def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
-    """Make a single NVD API GET request and return parsed JSON."""
+    """Make a single NVD API GET request and return parsed JSON.
+
+    Transient failures are retried with backoff. NVD is the most
+    failure-prone source here -- one request per CWE per date window, rate
+    limited hard without an API key -- and it was the only client with no
+    retry at all, so a single 503 dropped that CWE from the results entirely.
+    """
     qs = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}"
                   for k, v in params.items())
     url = f"{NVD_BASE}?{qs}"
@@ -120,12 +125,27 @@ def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
         headers["apiKey"] = key
 
     req = urllib.request.Request(url, headers=headers)
-    try:
+
+    def _once() -> bytes:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+            return resp.read()
+
+    try:
+        data = http_retry.with_retries(_once, what="NVD request", attempts=3)
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            raise NvdError("NVD rate limit hit (HTTP 403). Try again in 30s or set NVD_API_KEY.") from e
+            # NVD returns 403 both for throttling and for a rejected key, and
+            # reporting only the former sent operators to the wrong fix.
+            detail = ""
+            try:
+                detail = (e.read() or b"")[:200].decode("utf-8", "replace").strip()
+            except Exception:
+                logger.debug("NVD 403 body could not be read", exc_info=True)
+            logger.warning("NVD 403: %s", detail or "(no body)")
+            raise NvdError(
+                "NVD refused the request (HTTP 403): rate limited, or "
+                "NVD_API_KEY is invalid. Try again in 30s, or check the key."
+            ) from e
         raise NvdError(f"NVD API HTTP {e.code}: {e.reason}") from e
     except Exception as e:
         raise NvdError(f"NVD API request failed: {e}") from e
@@ -136,18 +156,59 @@ def _fetch_page(params: dict[str, str], timeout: int = 60) -> dict:
         raise NvdError(f"Could not parse NVD response: {e}") from e
 
 
+def _vulnerabilities(body: object) -> list[dict]:
+    """The `vulnerabilities` array, or an empty list.
+
+    `body.get("vulnerabilities") or []` trusted two things the NVD schema
+    does not promise: that the value is a list, and that each entry is an
+    object. `{"vulnerabilities": [None]}` reached `item.get` in the sort key
+    and raised AttributeError, and an object instead of a list raised on
+    `.sort`. Neither is an NvdError, so neither was caught by fetch_nvd's
+    handler or by run_search's per-source degradation -- they surfaced from
+    app.py as a 500 that discarded the GHSA and OSV results already paid for
+    in the same request. The guard added for this covered `normalize`, which
+    runs later.
+    """
+    if not isinstance(body, dict):
+        return []
+    items = body.get("vulnerabilities")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _total_results(body: object) -> int:
+    """`totalResults`, or 0. A non-numeric value used to raise ValueError."""
+    if not isinstance(body, dict):
+        return 0
+    try:
+        return max(0, int(body.get("totalResults") or 0))
+    except (TypeError, ValueError):
+        logger.warning("NVD: totalResults was %r, not a number",
+                       body.get("totalResults"))
+        return 0
+
+
+def _sleep_bounded(seconds: float, deadline: float | None = None) -> None:
+    """Sleep, but never past a deadline the caller is still holding open."""
+    if deadline is None:
+        time.sleep(seconds)
+        return
+    time.sleep(min(seconds, max(0.0, deadline - time.monotonic())))
+
+
 def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     """Fetch all CVEs matching a single CWE, paginating as needed."""
     base_q: dict[str, str] = {
         "cweId": f"CWE-{normalize_cwe_id(cwe)}",
-        "resultsPerPage": str(min(params.results_per_page, 2000)),
         "noRejected": "",
     }
     if params.severity and params.severity != "any":
-        nvd_sev = params.severity.upper()
-        if nvd_sev in _SEVERITY_MAP.values():
-            nvd_sev = {v: k for k, v in _SEVERITY_MAP.items()}[nvd_sev]
-        base_q["cvssV3Severity"] = nvd_sev
+        # NVD wants the uppercase form, which is what _SEVERITY_MAP's keys
+        # are. The inverse lookup that used to sit here could never fire --
+        # an upper-cased severity is never one of that map's lowercase values
+        # -- so it was dead code that made the passthrough look conditional.
+        base_q["cvssV3Severity"] = params.severity.upper()
 
     if params.keyword:
         base_q["keywordSearch"] = params.keyword
@@ -168,17 +229,30 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
         # locally to the caller's much smaller result budget.
         page_size = min(max(params.results_per_page, remaining), 2000)
         query = dict(base_q, **window, startIndex="0", resultsPerPage=str(page_size))
-        body = _fetch_page(query)
-        vulns = body.get("vulnerabilities") or []
-        total = int(body.get("totalResults") or len(vulns))
 
-        # NVD returns publish-date ascending. Fetch the tail page so a bounded
-        # "newest first" search does not return the oldest CVEs in the range.
-        if total > page_size:
-            time.sleep(delay)
+        # A one-row probe, not a full page. This used to fetch `page_size`
+        # rows here and then throw every one of them away when a tail page
+        # was needed -- two 2,000-row responses to return 100 rows, doubling
+        # the request count against the tightest rate limit in the app
+        # (4.6 req/30s against NVD's documented 5/30s, where a 403 is not
+        # retryable and cascades into the next CWE). The probe costs one
+        # request either way and tells us the same `totalResults`.
+        probe = _fetch_page(dict(query, resultsPerPage="1"))
+        total = _total_results(probe)
+
+        if total <= page_size:
+            # Everything fits in one page; fetch it.
+            _sleep_bounded(delay)
+            vulns = _vulnerabilities(_fetch_page(query))
+        else:
+            # NVD returns publish-date ascending, so the newest rows are at
+            # the end. tail_index is read from this window's own probe
+            # rather than from a response fetched earlier, so records
+            # published between the two calls cannot shift the window out
+            # from under us.
+            _sleep_bounded(delay)
             tail_index = max(0, total - page_size)
-            body = _fetch_page(dict(query, startIndex=str(tail_index)))
-            vulns = body.get("vulnerabilities") or []
+            vulns = _vulnerabilities(_fetch_page(dict(query, startIndex=str(tail_index))))
 
         vulns.sort(
             key=lambda item: ((item.get("cve") or {}).get("published") or ""),
@@ -193,10 +267,48 @@ def _fetch_cves_for_cwe(cwe: str, params: NvdSearchParams) -> list[dict]:
     return results[: params.max_results]
 
 
-def fetch_nvd(params: NvdSearchParams) -> list[dict]:
-    """Fetch CVEs for all requested CWEs, deduplicate, and normalize."""
+# How long a whole NVD fetch may take. Chosen below gunicorn's --timeout
+# (180s in the shipped Dockerfile) so the worker reports a partial result
+# rather than being killed mid-request.
+def _shutting_down() -> bool:
+    """Whether the process is shutting down, without importing jobs.
+
+    modules.jobs imports the search pipeline, which imports this module, so
+    a module-level import here would be a cycle. The lookup is cheap and
+    happens once per CWE.
+    """
+    try:
+        from .jobs import shutting_down
+    except ImportError:                                  # pragma: no cover
+        return False
+    return shutting_down()
+
+
+FETCH_DEADLINE_SECONDS = 150.0
+
+def fetch_nvd(params: NvdSearchParams, report: dict | None = None) -> list[dict]:
+    """Fetch CVEs for all requested CWEs, deduplicate, and normalize.
+
+    *report*, if given, is filled with ``failed_cwes``/``total_cwes`` so the
+    caller can tell the user the result set is incomplete. Passed in rather
+    than returned so existing callers are unaffected, and held per call rather
+    than on the module so concurrent searches cannot overwrite each other.
+    """
     if not params.cwes:
         return []
+    if report is not None:
+        report["failed_cwes"] = 0
+        report["total_cwes"] = len(params.cwes)
+        report["timed_out"] = False
+
+    # ghsa_client has had a deadline for exactly this; NVD had none, and it
+    # is the source that sleeps between every request. Selecting every bug
+    # class resolves to 158 CWEs, and without NVD_API_KEY _request_delay()
+    # is 6.5s -- 1027 seconds of mandatory sleep before a single round trip,
+    # against a gunicorn `--timeout 180` with one worker and eight threads.
+    # The worker is killed and takes all eight threads with it, so one click
+    # on "select all" aborted every other search in flight.
+    deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
 
     seen_ids: set[str] = set()
     raw_all: list[dict] = []
@@ -205,8 +317,30 @@ def fetch_nvd(params: NvdSearchParams) -> list[dict]:
     successful_queries = 0
 
     for i, cwe in enumerate(params.cwes):
+        # Checked between CWEs, not inside a request. This is the loop that
+        # can run for minutes, so it is the one that decides whether
+        # `docker stop` is graceful or a SIGKILL ten seconds later.
+        if _shutting_down():
+            logger.info("NVD: stopping at %d of %d CWE(s); shutdown requested",
+                        i, len(params.cwes))
+            if report is not None:
+                report["timed_out"] = True
+                report["fetched_cwes"] = i
+            break
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "NVD: stopping after %d of %d CWE(s); the %.0fs budget is "
+                "spent. Narrow the class selection or set NVD_API_KEY.",
+                i, len(params.cwes), FETCH_DEADLINE_SECONDS)
+            if report is not None:
+                report["timed_out"] = True
+                report["fetched_cwes"] = i
+            break
         if i > 0:
-            time.sleep(delay)
+            # Never sleep past the deadline: the sleep itself is most of the
+            # budget here, so waiting 6.5s to then give up wastes the time
+            # the caller is still holding a request open for.
+            time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
 
         per_cwe = NvdSearchParams(
             cwes=[cwe],
@@ -233,7 +367,28 @@ def fetch_nvd(params: NvdSearchParams) -> list[dict]:
     if errors and not successful_queries:
         raise NvdError(f"all NVD CWE queries failed; last error: {errors[-1]}")
 
-    normalized = [normalize(v) for v in raw_all]
+    # Partial failure is the common case here -- one request per CWE per date
+    # window, rate limited hard without a key -- and it used to be invisible:
+    # 17 of 18 CWEs could fail and the caller saw a plausible "NVD: 12" with
+    # no warning, reading it as "NVD has 12 of these".
+    if report is not None:
+        report["failed_cwes"] = len(errors)
+    if errors:
+        logger.warning("NVD: %d of %d CWE queries failed",
+                       len(errors), len(params.cwes))
+
+    # Per record: normalize dereferences weaknesses[].description[],
+    # cpeMatch[].criteria.split() and float(baseScore), none of which the NVD
+    # schema guarantees. A null criteria or a baseScore of "N/A" used to raise
+    # out of here as an AttributeError/ValueError -- not an NvdError, so it
+    # bypassed the per-source degradation in run_search and 500'd the entire
+    # search, including the sources that had already succeeded.
+    normalized, skipped = records.normalize_all(
+        raw_all, normalize, source="NVD",
+        identify=lambda v: records.identify((v or {}).get("cve") or {}, "id"),
+    )
+    if skipped:
+        logger.warning("NVD: %d record(s) could not be normalized", skipped)
     normalized.sort(key=lambda item: item.get("published_at") or "", reverse=True)
     return normalized[: params.max_results]
 
@@ -254,7 +409,7 @@ def _extract_cwes(cve: dict) -> list[str]:
     return cwes
 
 
-def _extract_cvss(cve: dict) -> tuple[float | None, str]:
+def _extract_cvss(cve: dict) -> tuple[float | None, str, str | None]:
     metrics = cve.get("metrics") or {}
     # Prefer the newest CVSS version available: v4.0 > v3.1 > v3.0 > v2.
     for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30"):
@@ -263,14 +418,21 @@ def _extract_cvss(cve: dict) -> tuple[float | None, str]:
             score = cvss_data.get("baseScore")
             sev = (cvss_data.get("baseSeverity") or "").upper()
             if score is not None:
-                return float(score), _SEVERITY_MAP.get(sev, "unknown")
+                # The vector was read and thrown away, which is why
+                # docs/data-sources.md credited NVD with "CVSS v3/v4 vectors"
+                # that never reached a row: cvss_vector was OSV-only, so a
+                # GHSA+NVD merge showed cvss_vector null with nothing to look
+                # up even when NVD had supplied one.
+                return (float(score), _SEVERITY_MAP.get(sev, "unknown"),
+                        cvss_data.get("vectorString") or None)
     for entry in metrics.get("cvssMetricV2") or []:
         cvss_data = entry.get("cvssData") or {}
         score = cvss_data.get("baseScore")
         sev = (entry.get("baseSeverity") or "").upper()
         if score is not None:
-            return float(score), _SEVERITY_MAP.get(sev, "unknown")
-    return None, "unknown"
+            return (float(score), _SEVERITY_MAP.get(sev, "unknown"),
+                    cvss_data.get("vectorString") or None)
+    return None, "unknown", None
 
 
 def _extract_packages(cve: dict) -> list[dict]:
@@ -308,7 +470,7 @@ def normalize(vuln: dict) -> dict:
     cve_id = cve.get("id", "")
     desc = _extract_description(cve)
     cwes = _extract_cwes(cve)
-    cvss_score, severity = _extract_cvss(cve)
+    cvss_score, severity, cvss_vector = _extract_cvss(cve)
     packages = _extract_packages(cve)
     refs = [r.get("url") for r in (cve.get("references") or []) if r.get("url")]
 
@@ -323,6 +485,7 @@ def normalize(vuln: dict) -> dict:
         "description": desc,
         "severity": severity,
         "cvss_score": cvss_score,
+        "cvss_vector": cvss_vector,
         "cwes": cwes,
         "packages": packages,
         "ecosystems": sorted({p["ecosystem"] for p in packages if p.get("ecosystem")}),

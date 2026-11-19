@@ -1,0 +1,21 @@
+{
+  // The project shipped without a type-checker config, so pyright had never
+  // been run against it and nothing kept it clean. Standard mode is what the
+  // shipped code already satisfies; strict would mean annotating every
+  // JSON-shaped dict that crosses an API boundary, which buys little here.
+  "include": ["app.py", "modules", "tools", "tests"],
+  "exclude": ["**/__pycache__", ".venv", "osv_cache", "data"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard",
+
+  // playwright is an optional test dependency installed in .venv; without
+  // this, pyright reports the e2e import as missing.
+  "venvPath": ".",
+  "venv": ".venv",
+
+  // tests/ and tools/ are not packages on sys.path: each test file
+  // bootstraps sys.path itself, so `from samples import ...` and
+  // `import generate_cwe_catalog` are correct at runtime but invisible to a
+  // static resolver.
+  "extraPaths": ["tests", "tools"]
+}

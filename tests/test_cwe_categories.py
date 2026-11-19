@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import unittest
 
 from modules import cwe_categories as cwe
+from modules.cwe_catalog import NAMES
 
 
 class TestCweCategories(unittest.TestCase):
@@ -58,7 +59,8 @@ class TestCweCategories(unittest.TestCase):
             "1336": ("SSTI", "template injection"),
         }
         for cwe_id, terms in searches.items():
-            haystack = " ".join((cwe.cwe_label(cwe_id),) + cwe.cwe_aliases(cwe_id)).lower()
+            haystack = " ".join(
+                (cwe.cwe_label(cwe_id), *cwe.cwe_aliases(cwe_id))).lower()
             for term in terms:
                 with self.subTest(cwe=cwe_id, term=term):
                     self.assertIn(term.lower(), haystack)
@@ -109,7 +111,14 @@ class TestCwePseudoCategories(unittest.TestCase):
     def test_resolves_to_exactly_that_cwe(self):
         self.assertEqual(cwe.category_cwes("cwe:1321"), ["1321"])
         self.assertEqual(cwe.category_cwes("cwe:1321", include_extended=False), ["1321"])
-        self.assertEqual(cwe.resolve_cwes(["sqli", "cwe:1321"], False), ["89", "1321"])
+        # Composed with a curated class, the pseudo-category contributes its
+        # one CWE and nothing else. Asserted against the class's own core set
+        # rather than a copy of it, so correcting the taxonomy does not fail a
+        # test that is really about `cwe:<id>` resolution.
+        self.assertEqual(
+            cwe.resolve_cwes(["sqli", "cwe:1321"], False),
+            [*cwe.CATEGORIES["sqli"]["core"], "1321"],
+        )
 
     def test_label_and_description_are_ai_ready(self):
         """The AI prompt is built from these, so neither may be empty."""
@@ -233,7 +242,10 @@ class TestDataIntegrity(unittest.TestCase):
             code = cat["code"]
             with self.subTest(category=key):
                 self.assertTrue(code)
-                self.assertLessEqual(len(code), cwe.MAX_CATEGORY_CODE_LENGTH)
+                # Five characters: the picker renders the code in a
+                # fixed-width column beside the CWE name, and a longer
+                # one pushes the name out of a ~300px rail.
+                self.assertLessEqual(len(code), 5)
                 self.assertEqual(code, code.upper())
 
     def test_keyword_keys_are_known_categories(self):
@@ -241,12 +253,251 @@ class TestDataIntegrity(unittest.TestCase):
             self.assertIn(key, cwe.CATEGORIES,
                           msg=f"KEYWORDS['{key}'] has no matching category")
 
-    def test_all_category_cwes_have_labels(self):
+    def test_every_category_cwe_is_in_the_mitre_catalog(self):
+        """A curated id that MITRE does not define renders as the bare
+        "CWE-639" placeholder in the picker and in every result row, which
+        looks like a missing label rather than the typo it is."""
         for key, cat in cwe.CATEGORIES.items():
             for c in cat["core"] + cat["extended"]:
-                self.assertNotEqual(
-                    cwe.cwe_label(c), f"CWE-{c}",
-                    msg=f"category '{key}': CWE-{c} is not in the MITRE catalog")
+                with self.subTest(category=key, cwe=c):
+                    self.assertIn(c, NAMES, f"category '{key}': CWE-{c} "
+                                            "is not in the MITRE catalog")
+                    self.assertEqual(cwe.cwe_label(c), NAMES[c])
+
+
+
+class TestATaxonomyClassCanFindItsOwnBug(unittest.TestCase):
+    """Core is the documented precision mode: "an advisory carrying this CWE
+    is almost certainly this class" (docs/bug-classes.md).
+
+    The split had been applied backwards in a systematic way -- the vaguest
+    umbrellas (CWE-284 Pillar, CWE-200 Class) sat in `core` while the most
+    specific tags sat in `extended`, so six classes could not find, in
+    precision mode, the bug their own label names. A false negative is the
+    worst failure mode this tool has, because the result still looks like an
+    answer.
+    """
+
+    #  class            CWE     what it is
+    PROMISED = [
+        ("crlf", "444", "HTTP Request/Response Smuggling"),
+        # 613 until CWE 5.0 deprecated it and split what it covered into
+        # 1462-1467. The class has to reach the successor, or "sessions
+        # that never expire" is a promise its CWE set no longer keeps.
+        ("session", "1463", "Insufficient Session Timeout Value"),
+        ("cors", "346", "Origin Validation Error"),
+        ("hardcodedcreds", "1392", "Use of Default Credentials"),
+        ("hardcodedcreds", "259", "Use of Hard-coded Password"),
+        ("queryinj", "652", "XQuery Injection"),
+        ("sqli", "943", "NoSQL / data query logic"),
+        ("pathtraversal", "23", "Relative Path Traversal"),
+        ("pathtraversal", "36", "Absolute Path Traversal"),
+        ("xss", "80", "Basic XSS"),
+        ("ssti", "95", "Eval Injection"),
+        ("searchpath", "428", "Unquoted Search Path"),
+        ("intoverflow", "191", "Integer Underflow"),
+        ("infoleak", "522", "Insufficiently Protected Credentials"),
+    ]
+
+    def test_precision_mode_reaches_the_bug_each_class_is_named_for(self):
+        for key, cwe_id, what in self.PROMISED:
+            with self.subTest(category=key, cwe=cwe_id):
+                core_only = cwe.category_cwes(key, include_extended=False)
+                self.assertIn(cwe_id, core_only,
+                              f"{key} cannot find CWE-{cwe_id} ({what}) without extended")
+
+    def test_the_dynamic_code_family_is_not_filed_under_access_control(self):
+        """CWE-913's children are 502 (deserialization), 915 (prototype
+        pollution) and 470 (unsafe reflection). Nothing under it is
+        authorization, and it sits under CWE-664, not CWE-284."""
+        self.assertNotIn("913", cwe.category_cwes("bac"))
+        self.assertIn("913", cwe.category_cwes("deserialization"))
+
+    def test_request_smuggling_and_its_parent_are_in_the_same_class(self):
+        """CWE-436 Interpretation Conflict is CWE-444's parent. They were in
+        two unrelated classes and the parent was in neither's."""
+        crlf = cwe.category_cwes("crlf")
+        self.assertIn("444", crlf)
+        self.assertIn("436", crlf)
+        self.assertNotIn("436", cwe.category_cwes("upload"))
+
+    def test_the_credential_exposure_cluster_is_reachable(self):
+        """822 tag occurrences were in no class at all, so an analyst ticking
+        the two obvious classes concluded an ecosystem was clean of
+        cleartext-credential bugs."""
+        reachable = set(cwe.category_cwes("infoleak")) | set(
+            cwe.category_cwes("hardcodedcreds"))
+        for cwe_id in ("522", "311", "312", "319", "256", "922"):
+            self.assertIn(cwe_id, reachable, f"CWE-{cwe_id} is unreachable")
+
+    def test_keyword_promises_are_backed_by_a_cwe(self):
+        """A keyword advertises a bug on the OSV-native path; the CWE path
+        has to be able to reach the same bug."""
+        for key, cwe_id in (("pathtraversal", "59"),    # zip slip
+                            ("dos", "835"),             # infinite loop
+                            ("dos", "1325"),            # stack exhaustion
+                            ("race", "833")):           # deadlock
+            with self.subTest(category=key, cwe=cwe_id):
+                self.assertIn(cwe_id, cwe.category_cwes(key))
+
+    def test_no_keyword_is_a_substring_trap(self):
+        """docs/bug-classes.md warns about this by name ('"dos" matches
+        "kudos"'). The matcher is a bare `k in text`, so "acl" matched oracle
+        -- and "padding oracle" is itself a crypto keyword, which quietly sent
+        crypto advisories into the BAC AI queue at one paid call each."""
+        # Words that no bug-class keyword should appear *inside*. A keyword
+        # that IS one of these is a real term, not a trap, so exact matches
+        # are allowed -- it is the accidental substring that misfires.
+        decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
+                  "medieval", "obstacle", "tentacle", "reevaluated")
+        # An empty KEYWORDS would satisfy "no keyword is a trap" vacuously.
+        self.assertGreater(sum(len(v) for v in cwe.KEYWORDS.values()), 50,
+                           "KEYWORDS looks empty; this check proves nothing")
+        for category, keywords in cwe.KEYWORDS.items():
+            for keyword in keywords:
+                for decoy in decoys:
+                    if keyword != decoy and keyword in decoy:
+                        self.fail(f"KEYWORDS[{category!r}] entry {keyword!r} "
+                                  f"matches inside the unrelated word {decoy!r}")
+
+    def test_no_derived_keyword_is_a_substring_trap(self):
+        """The sweep above covers the curated classes. The incident it is
+        named for came from the *derived* side: CWE-616's name ends in
+        "(PHP)", so `cwe:616` prefiltered on "php" and matched essentially
+        every PHP advisory. Nothing checked that half.
+
+        No trap exists today across all ~940 catalog ids -- this keeps it
+        that way, because the terms are generated from MITRE's text and a
+        future catalog release can introduce one without anyone editing
+        this repo.
+        """
+        # "resource" and friends are here because they were not: the sweep
+        # asserted "no trap exists today across all ~940 catalog ids" while
+        # "rce" was whitelisted and sat inside five of these words. A decoy
+        # list is only as good as the words somebody thought to put in it.
+        decoys = ("oracle", "retrieval", "evaluation", "kudos", "miracle",
+                  "medieval", "obstacle", "tentacle", "reevaluated",
+                  "php", "association", "classification", "serialisation",
+                  "resource", "source", "enforce", "forced", "coerce",
+                  "reinforced", "outsourced")
+        ids = [row[0] for row in cwe.picker_catalog()["rows"]]
+        self.assertGreater(len(ids), 500, "the catalog looks truncated")
+
+        for cwe_id in ids:
+            for keyword in cwe.category_keywords([f"cwe:{cwe_id}"]):
+                for decoy in decoys:
+                    if keyword != decoy and keyword in decoy:
+                        self.fail(
+                            f"cwe:{cwe_id} derives the term {keyword!r}, which "
+                            f"matches inside the unrelated word {decoy!r}")
+
+
+
+class TestDerivedPrefilterTermsAreUseful(unittest.TestCase):
+    """KEYWORDS are matched as bare substrings against advisory text.
+
+    _cwe_keywords derived terms from any 3+-character parenthesised fragment
+    of a CWE's name, with no quality filter, so `cwe:616` -- whose name ends
+    "(PHP)" -- prefiltered on "php" and matched essentially every PHP
+    advisory, at one paid AI call each.
+    """
+
+    def test_junk_short_forms_are_dropped(self):
+        for category, junk in (("cwe:616", "php"),
+                               ("cwe:1192", "soc"),
+                               ("cwe:462", "alist")):
+            with self.subTest(category=category):
+                self.assertNotIn(junk, cwe.category_keywords([category]))
+
+    def test_real_acronyms_survive(self):
+        self.assertIn("xss", cwe.category_keywords(["cwe:79"]))
+        self.assertIn("csrf", cwe.category_keywords(["cwe:352"]))
+        self.assertIn("ssrf", cwe.category_keywords(["cwe:918"]))
+
+    def test_an_alias_that_is_a_common_word_is_dropped(self):
+        """MITRE lists CSS as a historical alternate term for cross-site
+        scripting; as a substring it matches every stylesheet advisory."""
+        self.assertNotIn("css", cwe.category_keywords(["cwe:79"]))
+
+    def test_the_full_name_is_always_kept(self):
+        terms = cwe.category_keywords(["cwe:616"])
+        self.assertTrue(any("uploaded file variables" in t for t in terms), terms)
+
+    def test_bac_no_longer_prefilters_on_a_bare_bypass(self):
+        """It was 52% of this class's prefilter passes, matching "bypass the
+        cache", "filter bypass" and every other unrelated use."""
+        keywords = cwe.KEYWORDS["bac"]
+        self.assertNotIn("bypass", keywords)
+        self.assertTrue([k for k in keywords if k.endswith("bypass")],
+                        "the specific bypass phrases must remain")
+
+    def test_the_specific_bypass_phrases_still_match(self):
+        keywords = cwe.KEYWORDS["bac"]
+        for text in ("authorization bypass in the admin api",
+                     "authentication bypass via crafted header",
+                     "access control bypass"):
+            with self.subTest(text=text):
+                self.assertTrue(any(k in text for k in keywords), text)
+
+    def test_an_unrelated_bypass_no_longer_matches(self):
+        keywords = cwe.KEYWORDS["bac"]
+        for text in ("allows an attacker to bypass the cache",
+                     "regex filter bypass leads to redos"):
+            with self.subTest(text=text):
+                self.assertFalse(any(k in text for k in keywords), text)
+
+
+class TestTheCuratedKeywordsAreNotSubstringTraps(unittest.TestCase):
+    """KEYWORDS are matched as bare substrings against advisory text on the
+    OSV-native path, at one paid AI call each. The derived side had a sweep
+    already; the curated side did not, and it held several terms that fire
+    on unrelated advisories.
+
+    "overflows" pulled every "buffer overflows" memory-safety advisory into
+    the integer class, "forbidden" matched any advisory mentioning a 403,
+    "panic" matched any Go panic, and "md5"/"sha1" matched a checksum or a
+    fingerprint being printed.
+    """
+
+    DECOYS = (
+        "returns 403 forbidden to the caller",
+        "a buffer overflows when the header is long",
+        "stack overflows in the recursive parser",
+        # A panic mentioned in passing, not a crash being reported. The
+        # first version of this decoy -- "the service panics on a nil
+        # pointer" -- is a real DoS advisory, so matching it was correct
+        # and the decoy was wrong.
+        "the stack trace from the panic is attached below",
+        "logs the md5 checksum of each artifact",
+        "prints the sha1 fingerprint of the key",
+        "renders an iframe for the preview pane",
+        "calls retrieval(x) on the cached entry",
+    )
+
+    def test_no_curated_keyword_matches_inside_an_unrelated_advisory(self):
+        hits = [(category, keyword, decoy)
+                for category, keywords in cwe.KEYWORDS.items()
+                for keyword in keywords
+                for decoy in self.DECOYS
+                if keyword in decoy]
+        # "buffer overflow" genuinely belongs to the memory class, so a
+        # memory-class hit on a buffer-overflow decoy is a true positive.
+        traps = [hit for hit in hits if hit[0] != "memory"]
+        self.assertEqual(traps, [], f"curated keyword traps: {traps}")
+
+    def test_the_classes_still_have_usable_prefilters(self):
+        """Removing a trap must not leave a class matching nothing -- an
+        empty prefilter means the OSV-native path finds no candidates."""
+        for category in ("bac", "intoverflow", "dos", "crypto",
+                         "clickjacking", "ssti"):
+            with self.subTest(category=category):
+                self.assertGreaterEqual(len(cwe.KEYWORDS[category]), 5)
+
+    def test_the_long_forms_survived(self):
+        joined = {category: " ".join(keywords)
+                  for category, keywords in cwe.KEYWORDS.items()}
+        self.assertIn("integer overflow", joined["intoverflow"])
+        self.assertIn("unauthorized", joined["bac"])
 
 
 if __name__ == "__main__":

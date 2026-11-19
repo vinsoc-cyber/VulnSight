@@ -1,0 +1,26 @@
+# Coverage is measured over the shipped code, not the tests that drive it.
+#
+# `source` names the packages and the one top-level module rather than ".",
+# so a stray script in the repo root cannot quietly drag the total down --
+# and so an omitted file still shows as 0% instead of vanishing.
+[run]
+source =
+    app
+    modules
+    tools
+branch = True
+omit =
+    # Both run unittest in a subprocess, which `coverage run` does not
+    # trace, so they would report 0% however thoroughly they are exercised.
+    # They are verification *of* the suite rather than part of it; run them
+    # directly (tools/revert_checks.py, tools/audit_tests.py --strict), and
+    # tests/test_cleanup_stays_clean.py drives both from the suite.
+    tools/revert_checks.py
+    tools/audit_tests.py
+
+[report]
+skip_covered = False
+exclude_also =
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:

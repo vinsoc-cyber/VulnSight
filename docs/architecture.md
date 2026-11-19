@@ -8,25 +8,39 @@ able to read end to end before pointing it at their credentials.
 ## Module map
 
 ```
-app.py                449   Flask routes, request guards, response headers. No logic.
+app.py                     632   Flask routes, request guards, response headers
 modules/
-  config.py            29   minimal .env loader; BASE_DIR / DATA_DIR
-  search_service.py   572   the pipeline: parse → fetch → merge → sort → enrich
-  cwe_categories.py   691   bug classes, labels, cwe:<id> ad-hoc classes, keywords
-  cwe_catalog.py     1123   GENERATED — full MITRE names/aliases (tools/)
-  ghsa_client.py      210   `gh api /advisories`, cursor pagination, normalize()
-  nvd_client.py       338   NVD API v2, 120-day windowing, rate-limit sleeps
-  osv_client.py       336   bulk export download, parse, CWE + keyword filters
-  epss_client.py      100   FIRST EPSS scores, batched
-  cvss.py             138   CVSS v3.0/3.1 base score from vector (spec rounding)
-  cache.py            244   SQLite: advisories + verdicts, schema migrations
-  ai_classifier.py    835   provider client, prompt, verdict cache, key rotation
-  security.py         320   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html  410   page shell — HTML and Jinja only
-static/app.js        1476   all UI logic; server data arrives via window.BOOT
-static/style.css     1733   design tokens + components, light and dark
-tools/                184   generate_cwe_catalog.py
-tests/                      291 tests (270 offline + 21 optional browser)
+  config.py                 69   minimal .env loader; BASE_DIR / DATA_DIR
+  search_service.py       1097   the pipeline: parse -> fetch -> merge -> sort -> enrich
+  query_filters.py         167   one filter vocabulary, applied after the merge
+  records.py                69   per-record normalize guard shared by the clients
+  http_retry.py            181   one retry/backoff policy for all four upstreams
+  cwe_categories.py        775   bug classes, labels, cwe:<id> ad-hoc classes, keywords
+  cwe_catalog.py          2206   GENERATED -- full MITRE names/aliases (tools/)
+  ghsa_client.py           369   `gh api /advisories`, cursor pagination, normalize()
+  nvd_client.py            501   NVD API v2, 120-day windowing, rate-limit sleeps
+  osv_client.py            584   bulk export download, parse, CWE + keyword filters
+  epss_client.py           159   FIRST EPSS scores, batched
+  cvss.py                  124   CVSS v3.0/3.1 base score from vector (spec rounding)
+  cache.py                 551   SQLite: advisories + verdicts, jobs, migrations
+  jobs.py                  304   submit/poll queue for searches too slow to hold open
+  ai_classifier.py        1239   provider client, prompt, verdict cache, key rotation
+  openapi.py               657   the OpenAPI description of /api/v1
+  security.py              467   bind/exposure checks, CSRF origin check, rate limiter
+templates/index.html       396   page shell -- HTML and Jinja only
+static/app.js             1980   all UI logic; server data arrives via window.BOOT
+static/style.css          2142   design tokens + components, light and dark
+tools/
+  checks/                        the revert checks, one module per area
+  audit_tests.py           365   finds tests that can no longer fail
+  design_audit.py          741   measures contrast/targets/focus in a real browser
+  generate_cwe_catalog.py  352   regenerates modules/cwe_catalog.py from MITRE XML
+  sync_check_counts.py     204   rewrites the revert-check figures and their index
+  sync_cwe_catalog_doc.py  147   rewrites the CWE catalog figures in three docs
+  revert_checks.py         273   reverts each fix, asserts the suite goes red
+  sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
+  sync_module_map.py       144   rewrites the line counts in this very table
+  sync_testing_doc.py      148   rewrites the per-file test counts in testing.md
 ```
 
 Every module is importable without Flask. `search_service.run_search()` is the
@@ -38,7 +52,8 @@ Guards run before every request, in this order:
 
 1. **CSRF** — mutating methods must look same-origin (`Origin` / `Referer` /
    `Sec-Fetch-Site`, plus `VULNSIGHT_PUBLIC_HOST` for proxies).
-2. **Rate limit** — per client address, per endpoint class.
+2. **Auth** — before the rate limiter on purpose: the other order let an
+   unauthenticated caller burn the operator's rate-limit bucket.
 3. **Auth** — `VULNSIGHT_API_TOKEN` on mutating `/api/*` when configured,
    compared with a constant-time check.
 4. **CSP nonce** — a fresh nonce per response for the one inline bootstrap script.
@@ -131,6 +146,6 @@ Written down rather than discovered later:
 - **The bug-class taxonomy is a judgement call.** Umbrella CWEs in `core` buy
   recall at the cost of precision; that trade is what the AI pass compensates
   for. See [Bug classes](bug-classes.md#reading-the-tables-honestly).
-- **`static/app.js` is 1476 lines with no module system.** It is covered by the
+- **`static/app.js` has no module system.** It is covered by the
   browser suite rather than unit tests, because its behaviour only exists in a
   document.

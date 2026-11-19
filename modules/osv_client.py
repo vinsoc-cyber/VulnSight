@@ -20,16 +20,18 @@ records (GO-..., RUSTSEC-..., PYSEC-..., etc.).
 
 from __future__ import annotations
 
-import io
+import contextlib
 import json
 import logging
 import os
 import re
 import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 
+from . import http_retry
 from .config import DATA_DIR
 from .cvss import base_score, is_v4_vector, severity_from_score
 from .cwe_categories import category_keywords, normalize_cwe_id
@@ -64,6 +66,13 @@ ECOSYSTEM_MAP: dict[str, str] = {
 _MEM: dict[str, tuple[float, list[dict]]] = {}
 _MEM_TTL = 3600   # seconds – evict cached records older than 1 hour
 _MEM_MAX = 5      # max ecosystems kept in memory at once
+# npm, the largest export, is ~220 MB. 512 MB leaves headroom while keeping
+# the damage from a runaway or hostile response bounded -- the cap is what
+# stops a response that never ends from filling the disk.
+MAX_BULK_BYTES = 512 << 20
+# Per-member inflated cap. One advisory JSON is kilobytes; 64 MB is four
+# orders of magnitude of headroom and still bounds a decompression bomb.
+MAX_MEMBER_BYTES = 64 << 20
 _DOWNLOAD_LOCK = threading.Lock()
 # _MEM is read and mutated from every request thread. It used to be touched
 # unguarded, which gave two real races: a check-then-get that could read an
@@ -72,6 +81,22 @@ _DOWNLOAD_LOCK = threading.Lock()
 # "dictionary changed size during iteration". Neither is an OsvError, so
 # neither was caught, and both surfaced as a 500 for the whole search.
 _MEM_LOCK = threading.Lock()
+
+# One load lock per ecosystem, held across download *and* parse. The memo read
+# was already guarded and the download was serialised, but the parse -- the
+# expensive part -- ran completely unlocked: on a cold cache N concurrent
+# requests for the same ecosystem each inflated and normalised the entire
+# archive, the last writer won, and the rest was garbage. npm's export is
+# 226,880 members and ~372 MB uncompressed, against a shipped config of
+# --workers 1 --threads 8, so eight simultaneous npm searches is a realistic
+# way to run the container out of memory.
+_LOAD_LOCKS: dict[str, threading.Lock] = {}
+_LOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _load_lock(ecosystem: str) -> threading.Lock:
+    with _LOAD_LOCKS_GUARD:
+        return _LOAD_LOCKS.setdefault(ecosystem, threading.Lock())
 
 
 class OsvError(RuntimeError):
@@ -86,41 +111,185 @@ def supported_ecosystem(ghsa_ecosystem: str) -> bool:
 # Download + cache the bulk zip
 # ---------------------------------------------------------------------------
 
+def _introduced_range(ranges: list) -> str | None:
+    """A readable ">= x, < y" from OSV's event list, or None.
+
+    `vulnerable_version_range` sat hard-coded None next to a raw copy of
+    `ranges` that nothing read. This is the part of it a reader wants.
+
+    OSV expresses several vulnerable branches as repeated
+    introduced/fixed pairs inside one range, and folding the whole event
+    list into a single pair kept only the last of each. Measured against
+    this repo's own osv_cache/Go.zip: 928 of 15,341 affected entries (6.0%)
+    carry more than one `introduced`, and 906 rendered a range that
+    contradicted the `first_patched_version` printed beside it.
+    GO-2021-0068 showed ">= 1.15.0-0, < 1.15.7" next to
+    "first_patched_version: 1.14.14" when the truth is
+    [0, 1.14.14) U [1.15.0-0, 1.15.7) -- so an operator on Go 1.13 read it
+    and concluded they were unaffected. That is an under-report, which is
+    the expensive direction for a triage tool.
+
+    Each introduced/fixed pair is now its own interval, joined with " or ".
+    """
+    parts: list[str] = []
+    for rng in ranges or []:
+        for introduced, fixed in _intervals(rng.get("events") or []):
+            # OSV writes introduced "0" for "since the beginning", which is
+            # not a bound worth rendering.
+            lower = None if introduced == "0" else introduced
+            if lower and fixed:
+                parts.append(f">= {lower}, < {fixed}")
+            elif lower:
+                parts.append(f">= {lower}")
+            elif fixed:
+                parts.append(f"< {fixed}")
+        if parts:
+            return " or ".join(parts)
+    return None
+
+
+def _intervals(events: list) -> list[tuple[str | None, str | None]]:
+    """OSV's flat event list, paired into (introduced, fixed) intervals.
+
+    Events are ordered; an `introduced` opens an interval and the next
+    `fixed` (or `last_affected`) closes it. An interval left open at the end
+    of the list is still vulnerable and is returned with no upper bound.
+    """
+    out: list[tuple[str | None, str | None]] = []
+    current: str | None = None
+    open_interval = False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("introduced") is not None:
+            if open_interval:
+                out.append((current, None))      # unbounded, still vulnerable
+            current = event.get("introduced")
+            open_interval = True
+        elif event.get("fixed") is not None:
+            out.append((current, event.get("fixed")))
+            current, open_interval = None, False
+        elif event.get("last_affected") is not None:
+            out.append((current, None))
+            current, open_interval = None, False
+    if open_interval:
+        out.append((current, None))
+    return out
+
+
+def _is_fresh(path: str, force: bool, max_age: int) -> bool:
+    """True when the cached zip exists, is non-empty and is young enough."""
+    if force:
+        return False
+    try:
+        return (os.path.getsize(path) > 0
+                and (time.time() - os.path.getmtime(path)) < max_age)
+    except OSError:
+        return False
+
+
 def _zip_path(osv_eco: str) -> str:
-    safe = osv_eco.replace("/", "_").replace(" ", "_")
-    return os.path.join(CACHE_DIR, f"{safe}.zip")
+    """Cache path for an ecosystem's bulk zip.
+
+    download_ecosystem is a public entry point taking an arbitrary string.
+    Every caller routes through ECOSYSTEM_MAP today, so this is hardening
+    rather than a live hole -- but "replace / and space" left ".." intact,
+    and the result is joined onto CACHE_DIR.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", osv_eco).strip(".")
+    if not safe:
+        raise OsvError(f"unusable OSV ecosystem name: {osv_eco!r}")
+    path = os.path.join(CACHE_DIR, f"{safe}.zip")
+    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(CACHE_DIR):
+        raise OsvError(f"refusing a cache path outside {CACHE_DIR}: {osv_eco!r}")
+    return path
 
 
 def download_ecosystem(osv_eco: str, force: bool = False,
                        max_age: int = DEFAULT_MAX_AGE, timeout: int = 120) -> str:
     """Ensure the ecosystem's all.zip is cached locally; return its path."""
+    path = _zip_path(osv_eco)
+
+    # Checked BEFORE the lock. _DOWNLOAD_LOCK is process-wide, not
+    # per-ecosystem, and taking it first meant a search for `go` -- whose
+    # zip was on disk and fresh -- blocked behind an in-flight 221 MB `npm`
+    # download (timeout=120, attempts=2, so up to ~240s) for a file it was
+    # never going to fetch, and then died at gunicorn's 180s.
+    if _is_fresh(path, force, max_age):
+        return path
+
     with _DOWNLOAD_LOCK:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        path = _zip_path(osv_eco)
-        if (not force and os.path.exists(path)
-                and (time.time() - os.path.getmtime(path)) < max_age
-                and os.path.getsize(path) > 0):
+        # Re-checked inside the lock: another thread may have downloaded it
+        # while this one waited, and paying for the same 221 MB twice is the
+        # thing the lock exists to prevent.
+        if _is_fresh(path, force, max_age):
             return path
 
-        url = f"{OSV_BASE}/{osv_eco}/all.zip"
+        # quote(): several OSV ecosystem names contain a space ("GitHub
+        # Actions", "Rocky Linux"). Interpolated raw, http.client rejects the
+        # path outright -- so the `actions` ecosystem, which the UI offers in
+        # its dropdown, could never be fetched at all. The broad handler below
+        # then reported it as a generic "OSV fetch failed".
+        url = f"{OSV_BASE}/{urllib.parse.quote(osv_eco)}/all.zip"
         req = urllib.request.Request(url, headers={"user-agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = resp.read()
-        except Exception as e:  # noqa: BLE001 - surface a clean message to the UI
-            raise OsvError(f"could not download OSV bulk for {osv_eco}: {e}") from e
-
-        if not zipfile.is_zipfile(io.BytesIO(data)):
-            raise OsvError(f"OSV bulk response for {osv_eco} is not a valid zip archive")
 
         tmp = path + ".tmp"
+
+        def _once() -> None:
+            # Streamed to disk in chunks, not read() into memory. npm's export
+            # is ~220 MB, and buffering it whole and then copying it into a
+            # BytesIO for the zip probe cost ~440 MB peak for a file that is
+            # only ever used from disk afterwards. The running cap also stops
+            # a hostile or broken upstream streaming until the process dies,
+            # which no Content-Length check would have caught.
+            written = 0
+            with urllib.request.urlopen(req, timeout=timeout) as resp, \
+                    open(tmp, "wb") as handle:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_BULK_BYTES:
+                        raise OsvError(
+                            f"OSV bulk for {osv_eco} exceeded "
+                            f"{MAX_BULK_BYTES // (1 << 20)} MB; refusing it")
+                    handle.write(chunk)
+
         try:
-            with open(tmp, "wb") as f:
-                f.write(data)
+            http_retry.with_retries(
+                _once, what=f"OSV bulk {osv_eco}", attempts=2)
+        except Exception as e:  # surface a clean message to the UI
+            _unlink_quietly(tmp)
+            # A stale export beats no export. The freshness check above only
+            # short-circuits on success, so once the zip was a day old a
+            # transient download failure dropped OSV from the search entirely
+            # -- while a perfectly usable copy sat on disk.
+            if not force and os.path.exists(path) and os.path.getsize(path) > 0:
+                age_hours = (time.time() - os.path.getmtime(path)) / 3600
+                logger.warning(
+                    "OSV refresh for %s failed (%s); using the cached copy, "
+                    "which is %.1f hours old", osv_eco, e, age_hours)
+                return path
+            raise OsvError(f"could not download OSV bulk for {osv_eco}: {e}") from e
+
+        # Validate the temp file, then publish it atomically: a half-written
+        # or non-zip download must never replace a cache that still works.
+        if not zipfile.is_zipfile(tmp):
+            _unlink_quietly(tmp)
+            raise OsvError(f"OSV bulk response for {osv_eco} is not a valid zip archive")
+        try:
             os.replace(tmp, path)
         except OSError as e:
+            _unlink_quietly(tmp)
             raise OsvError(f"could not cache OSV bulk for {osv_eco}: {e}") from e
         return path
+
+
+def _unlink_quietly(path: str) -> None:
+    with contextlib.suppress(OSError):
+        os.unlink(path)
 
 
 _QUAL_MAP = {"LOW": "low", "MODERATE": "medium", "MEDIUM": "medium",
@@ -179,23 +348,28 @@ def normalize_osv(rec: dict) -> dict:
         if not name:
             continue
         ranges = aff.get("ranges") or []
-        fixed_versions = []
-        for rng in ranges:
-            for ev in rng.get("events") or []:
-                if ev.get("fixed"):
-                    fixed_versions.append(ev["fixed"])
+        fixed_versions = [
+            ev["fixed"]
+            for rng in ranges
+            for ev in rng.get("events") or []
+            if ev.get("fixed")
+        ]
         eco = pkg.get("ecosystem")
         if eco:
             ecos.add(eco)
         packages.append({
             "ecosystem": eco,
             "name": name,
-            "purl": pkg.get("purl"),
-            "vulnerable_version_range": None,
+            # purl, ranges and versions are not kept: nothing reads
+            # them -- not the UI, not app.py, not search_service -- and they
+            # were ~8% of the cached payload by bytes and 13% of the memory
+            # retained for the Go export, persisted verbatim into SQLite.
+            # The one thing a reader wants out of `ranges` is the introduced
+            # version, which fills the field that sat hard-coded None beside
+            # the raw copy.
+            "vulnerable_version_range": _introduced_range(ranges),
             "first_patched_version": fixed_versions[0] if fixed_versions else None,
             "fixed_versions": fixed_versions,
-            "ranges": ranges,
-            "versions": aff.get("versions") or [],
         })
 
     return {
@@ -247,6 +421,19 @@ def _load_records(ghsa_ecosystem: str, force: bool = False) -> list[dict]:
         if entry is not None and (time.time() - entry[0]) < _MEM_TTL:
             return entry[1]
 
+    with _load_lock(ghsa_ecosystem):
+        # Re-check under the lock: while we waited, the thread that held it
+        # may have finished the very load we were about to repeat.
+        if not force:
+            with _MEM_LOCK:
+                entry = _MEM.get(ghsa_ecosystem)
+            if entry is not None and (time.time() - entry[0]) < _MEM_TTL:
+                return entry[1]
+        return _load_records_locked(ghsa_ecosystem, osv_eco, force)
+
+
+def _load_records_locked(ghsa_ecosystem: str, osv_eco: str, force: bool) -> list[dict]:
+    """Download and parse one ecosystem. Caller holds that ecosystem's lock."""
     path = download_ecosystem(osv_eco, force=force)
     records: list[dict] = []
     skipped = 0
@@ -256,6 +443,19 @@ def _load_records(ghsa_ecosystem: str, force: bool = False) -> list[dict]:
                 if not name.endswith(".json"):
                     continue
                 try:
+                    # Bounded on the INFLATED size. MAX_BULK_BYTES capped the
+                    # download, but zf.read() decompresses without a limit,
+                    # so a hostile or corrupt export could inflate one member
+                    # to arbitrary size in memory -- in a module whose own
+                    # header states a hostile-response threat model.
+                    info = zf.getinfo(name)
+                    if info.file_size > MAX_MEMBER_BYTES:
+                        logger.warning(
+                            "OSV: skipping %s, inflates to %d MB (cap %d MB)",
+                            name, info.file_size >> 20,
+                            MAX_MEMBER_BYTES >> 20)
+                        skipped += 1
+                        continue
                     rec = json.loads(zf.read(name))
                     records.append(normalize_osv(rec))
                 except Exception:
@@ -297,12 +497,15 @@ def fetch_osv(ecosystem: str, cwes: list[str], affects: str | None = None,
     """
     if ecosystem in (None, "", "any"):
         raise OsvError("OSV bulk mode needs a specific ecosystem (not 'any')")
-    want = {normalize_cwe_id(c) for c in cwes}
+    # str(): a non-string here raised out as an AttributeError, which is
+    # not an OsvError, so it escaped per-source degradation and 500'd the
+    # entire search instead of dropping OSV.
+    want = {normalize_cwe_id(str(c)) for c in cwes}
     records = _load_records(ecosystem, force=force_refresh)
 
     out = []
     for r in records:
-        rec_cwes = {normalize_cwe_id(c) for c in r.get("cwes") or []}
+        rec_cwes = {normalize_cwe_id(str(c)) for c in r.get("cwes") or []}
         if not (rec_cwes & want):
             continue
         if not matches_common_filters(
@@ -337,7 +540,12 @@ def fetch_osv_native(
 
     out = []
     for r in records:
-        if str(r.get("ghsa_id", "")).startswith("GHSA"):
+        # Case-insensitive, to match _GHSA_RE (re.I) which set the field.
+        # A lowercase "ghsa-..." id got ghsa_id populated by the regex and
+        # was then NOT excluded here, so it came back from fetch_osv_native
+        # as native=True *and* from fetch_osv -- and was queued for an AI
+        # classification it did not need.
+        if str(r.get("ghsa_id", "")).upper().startswith("GHSA"):
             continue  # GHSA-sourced -> already covered by the CWE path
         if r.get("cwes"):
             continue  # CWE-tagged -> already reachable via the CWE filter
@@ -360,10 +568,17 @@ def cache_status() -> list[dict]:
     status = []
     for ghsa_eco, osv_eco in ECOSYSTEM_MAP.items():
         p = _zip_path(osv_eco)
-        if os.path.exists(p):
-            status.append({
-                "ecosystem": ghsa_eco,
-                "size_mb": round(os.path.getsize(p) / 1e6, 1),
-                "age_hours": round((time.time() - os.path.getmtime(p)) / 3600, 1),
-            })
+        try:
+            size = os.path.getsize(p)
+            mtime = os.path.getmtime(p)
+        except OSError:
+            # Deleted between the check and the read, or never there.
+            # These caches are documented as safe to delete at any time,
+            # and this renders on every healthcheck.
+            continue
+        status.append({
+            "ecosystem": ghsa_eco,
+            "size_mb": round(size / 1e6, 1),
+            "age_hours": round((time.time() - mtime) / 3600, 1),
+        })
     return status

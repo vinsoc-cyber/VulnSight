@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 
 from .config import DATA_DIR
@@ -41,8 +42,11 @@ CREATE TABLE IF NOT EXISTS ai_classification (
     created_at  REAL NOT NULL,
     PRIMARY KEY (advisory_id, category)
 );
-CREATE INDEX IF NOT EXISTS idx_adv_cve ON advisories(cve_id);
 """
+# No index on advisories(cve_id): nothing filters, joins or orders by it. Every
+# read of this table is either `WHERE advisory_id = ?` (served by the primary
+# key) or `COUNT(*)`. The index only cost a write on every upsert. The column
+# stays -- docs/operations.md shows operators querying it by hand.
 
 # ---------------------------------------------------------------------------
 # Schema migrations — append-only list of (version, sql) tuples.
@@ -82,6 +86,13 @@ _MIGRATIONS = [
                finished_at REAL
            );
            CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)"""),
+    # v6: owner. jobs rows are shared process-wide; the worker pool is not.
+    # startup() issued an unqualified UPDATE over every queued/running row, so
+    # a second gunicorn worker booting ~200ms after the first marked the
+    # first's live job "failed -- server restarted", the poller resubmitted,
+    # and then the original worker's own finish_job flipped the same row to
+    # "done": one job reporting two terminal states. Same on every respawn.
+    (6, "ALTER TABLE jobs ADD COLUMN owner TEXT"),
 ]
 
 
@@ -109,6 +120,51 @@ def _db(path: str | None = None):
         conn.close()
 
 
+# Re-running a migration is expected (the version table can be behind while
+# the objects already exist), and SQLite reports those as OperationalError
+# just like a genuine failure. These are the messages that mean "already
+# done"; everything else is a real problem and must not be swallowed.
+_BENIGN_MIGRATION_ERRORS = (
+    "duplicate column name",        # ALTER TABLE ADD COLUMN, re-run
+    "already exists",               # CREATE TABLE/INDEX without IF NOT EXISTS
+    "no such column",               # RENAME COLUMN, re-run (old name is gone)
+)
+
+
+def _split_statements(sql: str) -> list[str]:
+    """Split a migration into statements, ignoring semicolons that are not
+    statement terminators.
+
+    `sql.split(";")` cut a statement in half the moment a migration carried
+    a semicolon inside a string literal or a `--` comment. No migration
+    does today, which is exactly why it would have been found at the worst
+    possible time: by whoever wrote the first one that did, against a
+    half-executed schema change.
+
+    sqlite3.complete_statement is SQLite's own answer to "is this a whole
+    statement yet", so the parsing matches what will execute it.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for line in sql.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                statements.append(statement)
+            buffer = ""
+    tail = buffer.strip()
+    if tail:
+        # No trailing semicolon on the last statement.
+        statements.append(tail)
+    return statements
+
+
+def _is_benign_migration_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _BENIGN_MIGRATION_ERRORS)
+
+
 def init_db(path: str | None = None) -> None:
     """Create / migrate the database to the latest schema version."""
     db_path = path or DB_PATH
@@ -129,15 +185,21 @@ def init_db(path: str | None = None) -> None:
         for version, sql in _MIGRATIONS:
             if version <= current:
                 continue
-            for stmt in sql.split(";"):
-                stmt = stmt.strip()
-                if not stmt:
-                    continue
+            for stmt in _split_statements(sql):
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    # e.g. ALTER TABLE ADD COLUMN when column already exists
-                    pass
+                except sqlite3.OperationalError as exc:
+                    # Only the re-run cases are benign, and they are named.
+                    # Catching every OperationalError and stamping the version
+                    # anyway meant a migration that failed for a *real* reason
+                    # was recorded as applied and never retried: on a SQLite
+                    # build without JSON1, v4's json_set() raises "no such
+                    # function", so the advisory_id backfill silently never
+                    # happened and the defect it exists to repair persisted
+                    # forever. app.py is still patching around that downstream.
+                    if not _is_benign_migration_error(str(exc)):
+                        raise
+            # Stamped only after every statement in the migration survived.
             conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (version,),
@@ -176,11 +238,52 @@ def upsert_advisories(records: list[dict], path: str | None = None) -> None:
 
 
 def get_advisory(advisory_id: str, path: str | None = None) -> dict | None:
+    """One row by id. **No production caller** -- use get_advisories.
+
+    classify_batch opened one connection per id through this until it moved
+    to the batched form, and nothing in app.py or search_service has called
+    it since. It stays because the tests use it as a single-row reader and
+    a revert check reintroduces the per-id loop through it; it is not a
+    path to wire new code onto.
+    """
     with _db(path) as conn:
         row = conn.execute(
             "SELECT data FROM advisories WHERE advisory_id=?", (advisory_id,)
         ).fetchone()
     return json.loads(row["data"]) if row else None
+
+
+def get_advisories(advisory_ids, path: str | None = None) -> dict[str, dict]:
+    """Read many advisories in one round trip.
+
+    The caller used to loop over get_advisory, which opens a connection and
+    issues `PRAGMA journal_mode=WAL` per id -- 100 connects, 100 pragmas and
+    100 single-row queries for one classify request, before a single model
+    call. The IN-clause is built from a placeholder count and every value is
+    bound, so no identifier reaches the SQL text.
+    """
+    ids = list(dict.fromkeys(advisory_ids))
+    if not ids:
+        return {}
+    found: dict[str, dict] = {}
+    with _db(path) as conn:
+        # Chunked so a large batch cannot trip SQLITE_LIMIT_VARIABLE_NUMBER.
+        # See _IN_CLAUSE_CHUNK.
+        for start in range(0, len(ids), _IN_CLAUSE_CHUNK):
+            chunk = ids[start:start + _IN_CLAUSE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                # Only placeholders are interpolated; every value is bound.
+                f"SELECT advisory_id, data FROM advisories "
+                f"WHERE advisory_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                try:
+                    found[row["advisory_id"]] = json.loads(row["data"])
+                except (TypeError, ValueError):
+                    continue          # one unreadable row must not sink the batch
+    return found
 
 
 def count_advisories(path: str | None = None) -> int:
@@ -234,7 +337,11 @@ def _job_row_to_dict(row: sqlite3.Row) -> dict:
         "job_id": row["job_id"],
         "kind": row["kind"],
         "status": row["status"],
-        "request": json.loads(row["request"]) if row["request"] else None,
+        # Not parsed. public_view discards it and nothing else reads it, so
+        # for a max_results=500 search this was a multi-megabyte json.loads
+        # on every poll for a field no response has ever contained. The raw
+        # text is still in the row for anyone who needs it.
+        "request": None,
         "result": json.loads(row["result"]) if row["result"] else None,
         "error": row["error"],
         "error_status": row["error_status"],
@@ -244,12 +351,56 @@ def _job_row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+# Identifies this process for its lifetime. Jobs execute in the worker that
+# accepted them, so a job is orphaned exactly when its owner is gone.
+PROCESS_ID = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+# A job whose owner still looks alive but which has been in flight far longer
+# than any search can take is reconciled anyway. This is the backstop for a
+# recycled PID -- in a container the next boot starts from low PIDs, so a dead
+# worker's id can be worn by a live process.
+STALE_JOB_SECONDS = 3 * 3600
+
+
+def _owner_is_alive(owner: str | None, created_at: float, now: float) -> bool:
+    """Is the process that accepted this job still running?
+
+    Unqualified reconciliation was the bug: startup() failed *every*
+    queued/running row, so a second gunicorn worker booting 200ms after the
+    first marked the first's live job "failed -- server restarted". The
+    poller resubmitted, then the original worker's own finish_job flipped the
+    same row to "done" -- one job, two terminal states, on every respawn.
+
+    Unsure counts as alive, because wrongly failing a running job is worse
+    than leaving a dead one for the staleness backstop to catch.
+    """
+    if now - (created_at or 0) > STALE_JOB_SECONDS:
+        return False
+    if not owner:
+        return False                      # written before v6: nobody owns it
+    if owner == PROCESS_ID:
+        return True                       # our own, from before this call
+    pid_text = owner.split("-", 1)[0]
+    if not pid_text.isdigit():
+        return False
+    try:
+        os.kill(int(pid_text), 0)         # signal 0: liveness probe only
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                       # exists, owned by someone else
+    except OSError:
+        return True
+    return True
+
+
 def create_job(job_id: str, kind: str, request: dict, path: str | None = None) -> None:
     with _db(path) as conn:
         conn.execute(
-            """INSERT INTO jobs (job_id, kind, status, request, created_at)
-               VALUES (?,?,'queued',?,?)""",
-            (job_id, kind, json.dumps(request, ensure_ascii=False), time.time()),
+            """INSERT INTO jobs (job_id, kind, status, request, created_at, owner)
+               VALUES (?,?,'queued',?,?,?)""",
+            (job_id, kind, json.dumps(request, ensure_ascii=False), time.time(),
+             PROCESS_ID),
         )
 
 
@@ -301,14 +452,41 @@ def fail_orphaned_jobs(message: str, path: str | None = None) -> int:
     that died — so leaving them `queued`/`running` would strand every poller
     forever on a job that can never finish.
     """
+    now = time.time()
     with _db(path) as conn:
+        rows = conn.execute(
+            "SELECT job_id, owner, created_at FROM jobs "
+            "WHERE status IN ('queued','running')"
+        ).fetchall()
+        orphans = [
+            row["job_id"] for row in rows
+            if not _owner_is_alive(row["owner"], row["created_at"], now)
+        ]
+        if not orphans:
+            return 0
+        placeholders = ",".join("?" * len(orphans))
+        # The status guard is not redundant with the SELECT above: the rows
+        # were read, then _owner_is_alive did work, and a live worker can
+        # finish a job in between. Without it this UPDATE could flip a row
+        # that had already reached `done` back to `failed` -- one job, two
+        # terminal states, which is the case migration v6 exists for.
         cursor = conn.execute(
-            """UPDATE jobs
-                  SET status='failed', error=?, error_status=503, finished_at=?
-                WHERE status IN ('queued','running')""",
-            (message, time.time()),
+            f"""UPDATE jobs
+                   SET status='failed', error=?, error_status=503, finished_at=?
+                 WHERE job_id IN ({placeholders})
+                   AND status IN ('queued','running')""",
+            (message, now, *orphans),
         )
         return cursor.rowcount or 0
+
+
+def count_unfinished_jobs(path: str | None = None) -> int:
+    """How many jobs are queued or running. Used for backpressure."""
+    with _db(path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running')"
+        ).fetchone()
+    return int(row["n"] if row else 0)
 
 
 def prune_jobs(max_age_seconds: float, path: str | None = None) -> int:
@@ -321,6 +499,16 @@ def prune_jobs(max_age_seconds: float, path: str | None = None) -> int:
         return cursor.rowcount or 0
 
 
+# How many bind parameters one IN clause may carry.
+#
+# SQLITE_LIMIT_VARIABLE_NUMBER was 999 until SQLite 3.32 (2020) and is
+# 32766 on anything current. An older comment said 999 flatly, which is the
+# number people then write tests against -- and a 1,500-id test "proving"
+# the chunking passed with the chunking removed. 500 because the floor is
+# what has to be safe: a build may still be compiled with the old limit.
+_IN_CLAUSE_CHUNK = 500
+
+
 def get_classifications(
     advisory_ids: list[str],
     category: str,
@@ -330,13 +518,22 @@ def get_classifications(
 ) -> dict[str, dict]:
     if not advisory_ids:
         return {}
-    placeholders = ",".join("?" * len(advisory_ids))
+    # Chunked, like get_advisories ten lines above, and for the same reason
+    # its comment gives. Bounded at 501 bind parameters today
+    # (MAX_AI_BATCH is 100, max_results caps at 500), so this could not
+    # fire -- but the two functions sat side by side doing the same thing
+    # two different ways, and only one of them was safe to call with a
+    # longer list.
+    rows = []
     with _db(path) as conn:
-        rows = conn.execute(
-            f"""SELECT * FROM ai_classification
-                WHERE category=? AND advisory_id IN ({placeholders})""",
-            [category, *advisory_ids],
-        ).fetchall()
+        for start in range(0, len(advisory_ids), _IN_CLAUSE_CHUNK):
+            chunk = advisory_ids[start:start + _IN_CLAUSE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows.extend(conn.execute(
+                f"""SELECT * FROM ai_classification
+                    WHERE category=? AND advisory_id IN ({placeholders})""",
+                [category, *chunk],
+            ).fetchall())
     out: dict[str, dict] = {}
     for r in rows:
         if expected_fingerprints is not None:

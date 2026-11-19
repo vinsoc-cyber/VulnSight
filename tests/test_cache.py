@@ -1,6 +1,7 @@
 """Tests for cache: SQLite persistence, upserts, classification storage and
 the connection-lifecycle fix (no leaked WAL/SHM sidecar files)."""
 
+import contextlib
 import os
 import sqlite3
 import sys
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import tempfile
 import unittest
+from unittest import mock
 
 from modules import cache
 from modules import ghsa_client as ghsa
@@ -31,7 +33,14 @@ class TestAdvisoryIdBackfill(unittest.TestCase):
         self.path = self.tmp.name
 
     def tearDown(self):
-        os.unlink(self.path)
+        # The -wal/-shm sidecars too: `with sqlite3.connect(...)` commits but
+        # does not close, so SQLite leaves them behind. Every other class in
+        # this file already removed them; this one leaked four per run.
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self.path + suffix)
+            except OSError:
+                pass
 
     def _rows_missing_id(self):
         with sqlite3.connect(self.path) as conn:
@@ -95,6 +104,7 @@ class TestCache(unittest.TestCase):
         cache.upsert_advisories([n], self.db)
         self.assertEqual(cache.count_advisories(self.db), 1)
         got = cache.get_advisory(n["advisory_id"], self.db)
+        assert got is not None, "the advisory just upserted must read back"
         self.assertEqual(got["cve_id"], "CVE-2026-57168")
         # upsert again -> still 1
         cache.upsert_advisories([n], self.db)
@@ -189,6 +199,179 @@ class TestCache(unittest.TestCase):
         for ext in ["-wal", "-shm"]:
             self.assertFalse(os.path.exists(self.db + ext),
                              msg=f"leaked SQLite sidecar file: {self.db + ext}")
+
+
+
+class TestBatchedAdvisoryReads(unittest.TestCase):
+    """The classify endpoint looped over get_advisory, which opens a
+    connection and issues PRAGMA journal_mode=WAL per id -- 100 connects for
+    one request, before a single model call."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+        cache.init_db(self.db)
+        self.records = [
+            {"advisory_id": f"GHSA-{i:05d}", "cve_id": f"CVE-2026-{i}",
+             "severity": "high", "summary": "s", "description": "d"}
+            for i in range(120)
+        ]
+        cache.upsert_advisories(self.records, path=self.db)
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def test_it_returns_the_same_rows_as_reading_one_at_a_time(self):
+        ids = [r["advisory_id"] for r in self.records]
+        one_by_one = {i: cache.get_advisory(i, path=self.db) for i in ids}
+        self.assertEqual(cache.get_advisories(ids, path=self.db),
+                         {k: v for k, v in one_by_one.items() if v})
+
+    def test_a_whole_batch_costs_one_connection_not_one_per_id(self):
+        """The loop opened a connection and issued PRAGMA journal_mode=WAL
+        per id -- 100 connects for one classify request, before a single
+        model call."""
+        ids = [r["advisory_id"] for r in self.records]
+        with mock.patch.object(cache, "_connect", wraps=cache._connect) as connect:
+            found = cache.get_advisories(ids, path=self.db)
+        self.assertEqual(len(found), len(ids))
+        self.assertEqual(connect.call_count, 1)
+
+    def test_unknown_ids_are_simply_absent(self):
+        found = cache.get_advisories(
+            ["GHSA-00001", "GHSA-does-not-exist"], path=self.db)
+        self.assertEqual(set(found), {"GHSA-00001"})
+
+    def test_an_empty_request_does_not_touch_the_database(self):
+        self.assertEqual(cache.get_advisories([], path=self.db), {})
+
+    def test_duplicate_ids_are_collapsed(self):
+        found = cache.get_advisories(["GHSA-00001"] * 5, path=self.db)
+        self.assertEqual(list(found), ["GHSA-00001"])
+
+    def test_a_batch_larger_than_the_sqlite_parameter_limit_works(self):
+        """The chunking itself, not just that a big batch returns.
+
+        The old version used 1,620 ids and asserted only the result. That
+        limit was 999 until SQLite 3.32 (2020) and is 32766 here, so the
+        whole batch fit in one statement and removing the chunk loop left
+        this green -- a test named for a limit it never reached.
+        """
+        ids = [f"GHSA-{i:05d}" for i in range(120)] + [f"missing-{i}" for i in range(1500)]
+
+        selects = []
+        real_db = cache._db
+
+        # set_trace_callback, not a patched Connection.execute:
+        # sqlite3.Connection is an immutable type and its methods cannot be
+        # replaced.
+        @contextlib.contextmanager
+        def tracing_db(path):
+            with real_db(path) as conn:
+                conn.set_trace_callback(
+                    lambda sql: selects.append(sql.count("?"))
+                    if "FROM advisories" in sql and " IN (" in sql else None)
+                try:
+                    yield conn
+                finally:
+                    conn.set_trace_callback(None)
+
+        with mock.patch.object(cache, "_db", tracing_db):
+            found = cache.get_advisories(ids, path=self.db)
+
+        self.assertEqual(len(found), 120)
+        self.assertGreater(len(selects), 1,
+                           "1620 ids were sent in one statement; the chunking is gone")
+        self.assertTrue(all(n <= 999 for n in selects),
+                        f"a chunk exceeded the oldest supported limit: {selects}")
+
+    def test_one_unreadable_row_does_not_sink_the_batch(self):
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("UPDATE advisories SET data='{not json' "
+                         "WHERE advisory_id='GHSA-00002'")
+        found = cache.get_advisories(
+            ["GHSA-00001", "GHSA-00002", "GHSA-00003"], path=self.db)
+        self.assertEqual(set(found), {"GHSA-00001", "GHSA-00003"})
+
+
+class TestMigrationsFailLoudly(unittest.TestCase):
+    """A migration that fails must not be recorded as applied.
+
+    Every OperationalError was swallowed and the version stamped anyway, so a
+    migration that failed for a real reason -- v4's json_set() on a SQLite
+    build without JSON1, say -- was marked done and never retried. The defect
+    it exists to repair then persisted forever, silently.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = self.tmp.name
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(self.db + suffix):
+                os.unlink(self.db + suffix)
+
+    def _versions(self):
+        with sqlite3.connect(self.db) as conn:
+            return [r[0] for r in conn.execute("SELECT version FROM schema_version")]
+
+    def test_a_clean_run_records_every_migration(self):
+        cache.init_db(self.db)
+        self.assertEqual(sorted(self._versions()),
+                         [v for v, _ in cache._MIGRATIONS])
+
+    def test_no_index_is_created_for_a_column_no_query_uses(self):
+        """Every read of advisories is `WHERE advisory_id = ?` (the primary
+        key) or COUNT(*). An index on cve_id served none of them and cost a
+        write on every upsert."""
+        cache.init_db(self.db)
+        indexed = set()
+        with sqlite3.connect(self.db) as conn:
+            for row in conn.execute("PRAGMA index_list('advisories')").fetchall():
+                for info in conn.execute(f"PRAGMA index_info('{row[1]}')"):
+                    indexed.add(info[2])
+        self.assertNotIn("cve_id", indexed)
+
+    def test_rerunning_is_idempotent(self):
+        cache.init_db(self.db)
+        before = sorted(self._versions())
+        cache.init_db(self.db)
+        self.assertEqual(sorted(self._versions()), before)
+
+    def test_a_real_failure_is_raised_and_the_version_is_not_stamped(self):
+        broken = [*cache._MIGRATIONS,
+                  (99, "UPDATE advisories SET data = no_such_function(data)")]
+        with mock.patch.object(cache, "_MIGRATIONS", broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                cache.init_db(self.db)
+        self.assertNotIn(99, self._versions())
+
+    def test_a_failed_migration_is_retried_on_the_next_start(self):
+        """The whole point: the version must stay un-stamped so a fixed
+        environment re-runs it."""
+        broken = [*cache._MIGRATIONS,
+                  (99, "UPDATE advisories SET data = no_such_function(data)")]
+        with mock.patch.object(cache, "_MIGRATIONS", broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                cache.init_db(self.db)
+        repaired = [*cache._MIGRATIONS,
+                    (99, "ALTER TABLE advisories ADD COLUMN repaired INTEGER")]
+        with mock.patch.object(cache, "_MIGRATIONS", repaired):
+            cache.init_db(self.db)
+        self.assertIn(99, self._versions())
+
+    def test_benign_rerun_errors_are_still_tolerated(self):
+        for message in ("duplicate column name: fingerprint",
+                        "table jobs already exists",
+                        "no such column: ghsa_id"):
+            self.assertTrue(cache._is_benign_migration_error(message), message)
+        self.assertFalse(
+            cache._is_benign_migration_error("no such function: json_set"))
 
 
 if __name__ == "__main__":

@@ -17,3 +17,20 @@ tests/
 Dockerfile
 docker-compose*.yml
 .dockerignore
+
+# Dev-only tooling. None of it is COPYed into the image, but everything
+# here is still uploaded to the daemon as build context on every build --
+# node_modules alone is 53 MB, which arrived unnoticed with package.json.
+node_modules/
+package.json
+package-lock.json
+jsconfig.json
+eslint.config.mjs
+.stylelintrc.json
+.coveragerc
+pyrightconfig.json
+ruff.toml
+tools/
+.coverage
+.coverage.*
+htmlcov/

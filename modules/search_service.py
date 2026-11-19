@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
+import re
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from . import ai_classifier
@@ -13,6 +16,7 @@ from . import epss_client
 from . import ghsa_client as ghsa
 from . import nvd_client
 from . import osv_client
+from . import records as records_mod
 from .cwe_categories import (
     ECOSYSTEMS,
     SEVERITIES,
@@ -22,22 +26,104 @@ from .cwe_categories import (
     normalize_cwe_id,
     resolve_cwes,
 )
-from .query_filters import matches_common_filters, valid_published_filter
+from .query_filters import (matches_common_filters, parse_timestamp,
+                            valid_published_filter)
 
 logger = logging.getLogger(__name__)
 
-VALID_SORTS = ("published", "updated", "cve_id", "epss_percentage", "epss_percentile")
+# Derived, not a second literal: the two had to be edited together and
+# nothing checked that they matched.
+# The request limits, named once. modules/openapi.py imports these rather
+# than restating them: it already imported MAX_CATEGORY_INPUTS and used it
+# correctly for classify, while 100/300/500 were retyped into the schema --
+# so raising one here left the published contract saying the old number and
+# no test failed.
+MAX_RESULTS_CAP = 500
+DEFAULT_MAX_RESULTS = 100
+MAX_AFFECTS_LENGTH = 300
+
+VALID_SORTS: tuple[str, ...]  # assigned below, once _SORT_FIELD exists
 VALID_DIRECTIONS = ("asc", "desc")
 VALID_SOURCES = ("ghsa", "nvd", "osv", "osv-native")
 VALID_TYPES = ("reviewed", "unreviewed", "malware")
 _SORT_FIELD = {
+    # "risk" has no single field behind it; _sort_key handles it.
+    "risk": "",
     "published": "published_at",
     "updated": "updated_at",
     "cve_id": "cve_id",
     "epss_percentage": "epss_percentage",
     "epss_percentile": "epss_percentile",
 }
+VALID_SORTS = tuple(_SORT_FIELD)
 MAX_CATEGORY_INPUTS = 100
+
+
+_CVE_ID_RE = re.compile(r"^CVE-(\d{4})-(\d+)$", re.I)
+
+# "What should I look at next?" as an ordering.
+#
+# Every other sort answers a different question -- when was it published,
+# what is its id -- and this tool's stated job is to decide what to read
+# next. Ordered by publication date, a LOW advisory at 1% EPSS sits above a
+# CRITICAL one that CISA lists as actively exploited, which is the opposite
+# of triage.
+#
+# The four terms, in order of how much they should move a decision:
+#   KEV         someone is being attacked with this right now
+#   severity    how bad it is if it lands
+#   EPSS        how likely it is to be exploited in the next 30 days
+#   CVSS        the score, as a tie-break within a severity band
+#
+# This is NOT the API default. `published` stays the default for
+# /api/v1/search so no existing client's results change; the UI asks for
+# `risk` explicitly, because a person opening the page is triaging and a
+# script calling the API has already decided what it wants.
+def _risk_sort_key(record: dict) -> tuple[int, int, float, float]:
+    severity = canonical_severity(record.get("severity"))
+    return (
+        1 if record.get("kev") else 0,
+        _SEVERITY_RANK.get(severity, 0),
+        _as_float(record.get("epss_percentage")),
+        _as_float(record.get("cvss_score")),
+    )
+
+
+def _as_float(value: object) -> float:
+    try:
+        return float(value)       # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cve_sort_key(value: object) -> tuple[int, int, str]:
+    """(year, sequence, raw) so CVE-2026-100 sorts above CVE-2026-9.
+
+    Anything that is not a CVE id sorts below every real one in ascending
+    order. That is only half the job: `direction` defaults to `desc`, which
+    reverses the whole key, so CVE-less records sorted to the *top* of the
+    default "newest CVE first" view. An osv-native search, where most
+    records have no CVE at all, opened on a page of nothing else.
+    `_cve_last` does the other half after the sort.
+    """
+    text = value if isinstance(value, str) else ""
+    match = _CVE_ID_RE.match(text.strip())
+    if not match:
+        return (-1, -1, text)
+    return (int(match.group(1)), int(match.group(2)), text)
+
+
+def _cve_last(records: list[dict]) -> list[dict]:
+    """Move records with no CVE id to the end, keeping their order.
+
+    Applied after the sort, because `reverse=` flips every component of a
+    sort key and "always last" is not a thing a reversible key can express.
+    """
+    with_cve, without = [], []
+    for record in records:
+        (with_cve if _CVE_ID_RE.match(str(record.get("cve_id") or "").strip())
+         else without).append(record)
+    return with_cve + without
 
 
 class SearchError(RuntimeError):
@@ -67,6 +153,11 @@ class SearchQuery:
     sources: list[str]
     refresh_osv: bool
     cwes: list[str]
+    #: Keep the per-source snapshots in the response. Off by default: they are
+    #: ~35% of the payload (measured over 500 cached rows: 2.91 MB -> 1.89 MB)
+    #: and nothing reads them -- not the UI, not app.py. They stay available
+    #: for anyone auditing how a row was merged.
+    include_source_records: bool
 
 
 @dataclass
@@ -166,16 +257,26 @@ def parse_search_query(body: dict) -> SearchQuery:
     severity = parse_text(body.get("severity"), "any", "severity")
     published = parse_text(body.get("published"), "", "published") or None
     adv_type = parse_text(body.get("type"), "reviewed", "type")
+    # Validated, not coerced. Every other invalid field raises a 400 while
+    # these two were silently replaced with the default, so {"sort":
+    # "severity"} returned published-sorted results with nothing saying so.
     sort = parse_text(body.get("sort"), "published", "sort")
     if sort not in VALID_SORTS:
-        sort = "published"
+        raise SearchError(
+            f"Unsupported sort: {sort}. One of: {', '.join(VALID_SORTS)}.", 400)
     direction = parse_text(body.get("direction"), "desc", "direction")
     if direction not in VALID_DIRECTIONS:
-        direction = "desc"
+        raise SearchError(
+            f"Unsupported direction: {direction}. "
+            f"One of: {', '.join(VALID_DIRECTIONS)}.", 400)
     try:
-        max_results = max(1, min(500, int(body.get("max_results", 100))))
+        max_results = max(1, min(MAX_RESULTS_CAP,
+                                 int(body.get("max_results", DEFAULT_MAX_RESULTS))))
     except (TypeError, ValueError):
-        max_results = 100
+        # Clamped rather than rejected on purpose: a number out of range is
+        # a request for "as many as you can", and the cap is documented.
+        # A non-numeric value is the typo case and takes the default.
+        max_results = DEFAULT_MAX_RESULTS
 
     # A category is either a curated bug class ("bac") or a single CWE picked
     # from the full MITRE catalog ("cwe:1321").
@@ -197,8 +298,9 @@ def parse_search_query(body: dict) -> SearchQuery:
         raise SearchError(f"Unsupported advisory type: {adv_type}", 400)
     if not valid_published_filter(published):
         raise SearchError(f"Invalid published filter: {published}", 400)
-    if affects and len(affects) > 300:
-        raise SearchError("affects is too long (maximum 300 characters).", 400)
+    if affects and len(affects) > MAX_AFFECTS_LENGTH:
+        raise SearchError(
+            f"affects is too long (maximum {MAX_AFFECTS_LENGTH} characters).", 400)
 
     sources = parse_str_list(
         body.get("sources"),
@@ -211,6 +313,7 @@ def parse_search_query(body: dict) -> SearchQuery:
     if invalid_sources:
         raise SearchError(f"Unsupported data source(s): {', '.join(invalid_sources)}", 400)
     refresh_osv = parse_bool(body.get("refresh_osv"), False)
+    include_source_records = parse_bool(body.get("include_source_records"), False)
 
     return SearchQuery(
         categories=categories,
@@ -225,12 +328,69 @@ def parse_search_query(body: dict) -> SearchQuery:
         max_results=max_results,
         sources=sources,
         refresh_osv=refresh_osv,
+        include_source_records=include_source_records,
         cwes=cwes,
     )
 
 
-_SOURCE_PRIORITY = {"ghsa": 0, "osv": 1, "nvd": 2}
+# Base-record precedence, explicit for every valid source. osv-native
+# used to fall to the default 99 and tie with a record whose `source`
+# was missing or misspelt, leaving fetch order to break the tie.
+# Base-record priority, keyed by a record's own `source`.
+#
+# "osv-native" is here and no record currently carries it: normalize_osv
+# hard-codes "source": "osv" and fetch_osv_native only adds native=True. It
+# stays deliberately. The entry costs nothing, and the day a record IS
+# stamped that way the alternative is a silent fall to the default 99,
+# where it ties with a record whose source is missing or misspelt and fetch
+# order breaks the tie -- which is the defect
+# `test_every_valid_source_has_an_explicit_base_priority` was written for.
+# Every selectable source has an explicit rank, whether or not a record
+# carries it today.
+#
+# The real inconsistency is elsewhere and is reported, not papered over: a
+# row's `sources` says ["osv"] while `per_source` names "osv-native"
+# separately, because one is record provenance and the other is a fetch
+# mode. See docs/open-findings.md.
+_SOURCE_PRIORITY = {name: index for index, name in
+                    enumerate(("ghsa", "osv", "osv-native", "nvd"))}
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# Vocabularies the sources actually use that are not our four words. Without
+# these an unrecognised word scored 0, below "low", so merging a MODERATE
+# advisory with a low one silently reported "low" -- a downgrade, which is
+# the worst direction for a triage tool to fail in.
+_SEVERITY_SYNONYMS = {
+    "moderate": "medium",
+    "important": "high",
+    "severe": "high",
+    "none": "unknown",
+    "informational": "low",
+    "info": "low",
+}
+_severity_warned: set[str] = set()
+
+
+def canonical_severity(value: object) -> str:
+    """One of our four words, folding known synonyms and logging the rest.
+
+    The *value* is normalised, not just its rank: static/app.js whitelists
+    the severity for the badge class, so an un-folded "MODERATE" rendered as
+    `unknown` even once it ranked correctly.
+    """
+    text = str(value or "").strip().lower()
+    if text in _SEVERITY_RANK:
+        return text
+    mapped = _SEVERITY_SYNONYMS.get(text)
+    if mapped:
+        return mapped
+    if text and text not in _severity_warned:
+        _severity_warned.add(text)
+        logger.warning("Unknown severity vocabulary %r; treating it as unknown", text)
+    return "unknown"
+
+
+def _severity_rank(value: object) -> int:
+    return _SEVERITY_RANK[canonical_severity(value)]
 
 
 def _record_identifier_values(record: dict) -> list[str]:
@@ -254,8 +414,79 @@ def _unique_dicts(items: list[dict]) -> list[dict]:
     return out
 
 
+def _instant(value: str) -> datetime:
+    """The parsed timestamp. Only called on values _by_instant kept, so the
+    None branch is unreachable -- stated rather than assumed, because a
+    sort key that can return None raises inside min()/max() with a message
+    naming neither the field nor the record."""
+    parsed = parse_timestamp(value)
+    if parsed is None:                                  # pragma: no cover
+        raise ValueError(f"unparseable timestamp reached _instant: {value!r}")
+    return parsed
+
+
+def _by_instant(values: list[str]) -> list[str]:
+    """Only the values that parse as timestamps.
+
+    A single sort key cannot put unparseable values last under both min()
+    and max() -- whichever end it pushes them to, the other end pulls them
+    back. So they are excluded from the comparison instead: a value nobody
+    can read does not get to decide which date is the earliest.
+    """
+    return [value for value in values if parse_timestamp(value) is not None]
+
+
+def _earliest(values: list[str]) -> str | None:
+    usable = _by_instant(values)
+    if usable:
+        return min(usable, key=_instant)
+    return values[0] if values else None
+
+
+def _latest(values: list[str]) -> str | None:
+    usable = _by_instant(values)
+    if usable:
+        return max(usable, key=_instant)
+    return values[0] if values else None
+
+
+def _vector_for_score(records: list[dict], score: float | None) -> str | None:
+    """The CVSS vector belonging to the source that supplied *score*.
+
+    Falls back to any vector when no source matches, because a vector with
+    no score beside it is still better than nothing -- but it never pairs a
+    vector with a score it does not describe.
+    """
+    if score is not None:
+        for record in records:
+            vector = record.get("cvss_vector")
+            if not vector:
+                continue
+            candidate = record.get("cvss_score")
+            if candidate is None:
+                continue
+            try:
+                if abs(float(candidate) - float(score)) < 1e-9:
+                    return vector
+            except (TypeError, ValueError):
+                continue
+    return next((record.get("cvss_vector") for record in records
+                 if record.get("cvss_vector")), None)
+
+
 def _merge_group(records: list[dict]) -> dict:
-    base = min(records, key=lambda item: _SOURCE_PRIORITY.get(item.get("source"), 99))
+    # A total order, so the base is the same record whichever order the
+    # upstream APIs paginated in. `min` returns the FIRST minimum, and two
+    # records of one source in a group is the case this function exists for
+    # -- GitHub's own "Duplicate Advisory" pairs share a CVE. The base
+    # decided advisory_id, published_at, html_url, summary and description,
+    # so `direction=desc` and `direction=asc` produced two different primary
+    # keys for one advisory, cache.upsert_advisories stored both, and a
+    # classify call on the second was a cache miss that re-spent tokens.
+    base = min(records,
+               key=lambda item: (_SOURCE_PRIORITY.get(item.get("source") or "", 99),
+                                 str(item.get("advisory_id") or ""),
+                                 str(item.get("cve_id") or "")))
     merged = copy.deepcopy(base)
     sources = sorted({record.get("source", "?") for record in records})
     merged["sources"] = sources
@@ -293,12 +524,29 @@ def _merge_group(records: list[dict]) -> dict:
     if ghsa_ids:
         base_id = str(base.get("ghsa_id") or "")
         merged["ghsa_id"] = base_id if base_id.upper().startswith("GHSA-") else ghsa_ids[0]
-    elif cve_ids:
-        merged["ghsa_id"] = cve_ids[0]
-    # advisory_id: prefer the base record's advisory_id; fall back to best
+    else:
+        # A CVE id is not a GHSA id. Filling this field with one put a CVE
+        # under a column named `ghsa_id` in the CSV export and in the
+        # documented API shape; the UI already falls back to advisory_id.
+        merged["ghsa_id"] = None
+    # advisory_id: prefer the base record's advisory_id; fall back to the best
     # GHSA or CVE identifier so the merged record always has a stable key.
     if not merged.get("advisory_id"):
         merged["advisory_id"] = merged.get("ghsa_id") or (cve_ids[0] if cve_ids else "")
+    if not merged.get("advisory_id"):
+        # Every record in this group lacks an identifier. They used to all
+        # collapse onto "": cache.upsert_advisories skips those rows, but the
+        # AI block keys its verdicts by advisory_id, so two such rows shared
+        # one verdict and one overwrote the other. A content hash keeps them
+        # distinct and is stable across runs, so a cached verdict still
+        # matches on the next search.
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                [base.get("summary"), base.get("description"), sources],
+                sort_keys=True, ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        merged["advisory_id"] = f"anon-{fingerprint}"
     if cve_ids:
         base_cve = str(base.get("cve_id") or "")
         merged["cve_id"] = base_cve if base_cve.upper().startswith("CVE-") else cve_ids[0]
@@ -330,48 +578,87 @@ def _merge_group(records: list[dict]) -> dict:
         if ecosystem
     })
 
+    # Derive these from source_records, not from `records` keyed by source
+    # name. One source can contribute several advisories to a group -- two
+    # GHSA records sharing a CVE is the case merge_advisories exists for -- and
+    # a comprehension keyed by source silently kept only the last of them, so
+    # the max() below ran over one value per source instead of all of them.
+    # A medium+low GHSA pair therefore merged to "low", and reversing the page
+    # order merged the same advisory to "medium".
     severity_by_source = {
-        record.get("source", "?"): record.get("severity", "unknown")
-        for record in records
+        source: canonical_severity(max(
+            (record.get("severity") or "unknown" for record in group),
+            key=_severity_rank,
+        ))
+        for source, group in source_records.items()
     }
-    cvss_by_source = {
-        record.get("source", "?"): record.get("cvss_score")
-        for record in records
-        if record.get("cvss_score") is not None
-    }
+    cvss_by_source = {}
+    for source, group in source_records.items():
+        scores = [
+            record["cvss_score"] for record in group
+            if isinstance(record.get("cvss_score"), (int, float))
+        ]
+        if scores:
+            cvss_by_source[source] = max(scores)
     merged["severity_by_source"] = severity_by_source
     merged["cvss_by_source"] = cvss_by_source
-    merged["severity"] = max(
-        severity_by_source.values(), key=lambda value: _SEVERITY_RANK.get(value, 0)
-    )
+    # severity and cvss_score are each the worst across sources, and are
+    # deliberately independent: a source can state a severity with no score,
+    # or a score with no severity, and a triage queue wants the worst of both
+    # rather than whichever one source happened to supply both. That is why a
+    # row can read "HIGH / 5.8"; severity_by_source and cvss_by_source carry
+    # the attribution for anyone auditing it.
+    merged["severity"] = max(severity_by_source.values(), key=_severity_rank)
     if cvss_by_source:
         merged["cvss_score"] = max(cvss_by_source.values())
 
-    published = [record.get("published_at") for record in records if record.get("published_at")]
-    updated = [record.get("updated_at") for record in records if record.get("updated_at")]
-    withdrawn = [record.get("withdrawn_at") for record in records if record.get("withdrawn_at")]
+    published = [value for record in records
+                 if (value := record.get("published_at"))]
+    updated = [value for record in records
+               if (value := record.get("updated_at"))]
+    withdrawn = [value for record in records
+                 if (value := record.get("withdrawn_at"))]
     # Keep the base advisory's own publication date.  min() across sources
     # backdates a 2025 GHSA advisory to its 2019 CVE, which then sorts and
     # displays under a year in which that advisory did not yet exist.  Every
     # source's own date stays available under source_records.
-    merged["published_at"] = base.get("published_at") or (min(published) if published else None)
-    merged["updated_at"] = max(updated) if updated else None
-    merged["withdrawn_at"] = max(withdrawn) if withdrawn else None
+    # Keyed on the parsed instant, not the raw string. GHSA and OSV send
+    # "...Z" and NVD sends a naive "...253", so a byte comparison is right
+    # to the second for UTC values and wrong on sub-second ties and on any
+    # non-UTC offset. query_filters.parse_timestamp exists for exactly this
+    # and was not used. The stored value stays the original string, so
+    # nothing downstream sees a reformatted date.
+    merged["published_at"] = base.get("published_at") or _earliest(published)
+    merged["updated_at"] = _latest(updated)
+    merged["withdrawn_at"] = _latest(withdrawn)
     merged["kev"] = any(bool(record.get("kev")) for record in records)
     merged["native"] = any(bool(record.get("native")) for record in records)
-    for field in ("nvd_status", "osv_id"):
-        value = next((record.get(field) for record in records if record.get(field)), None)
+    for key in ("nvd_status", "osv_id"):
+        value = next((record.get(key) for record in records if record.get(key)), None)
         if value is not None:
-            merged[field] = value
+            merged[key] = value
     # cvss_vector is set unconditionally, not through the loop above: only OSV
     # produces it, and GHSA always wins as the base record, so a merged
     # GHSA+OSV row inherited a base that has no such key and silently dropped
     # the vector. That is the one field a v4-only advisory has instead of a
     # score, so losing it left `cvss_score: null` with nothing to look up.
-    merged["cvss_vector"] = next(
-        (record.get("cvss_vector") for record in records if record.get("cvss_vector")),
-        None,
-    )
+    # From whichever source supplied the winning score, not first-wins. The
+    # score is the max across sources and the vector was the first one
+    # found, so a row could ship cvss_score 9.8 beside a vector that
+    # recomputes to 5.5 -- and unlike severity there is no
+    # cvss_vector_by_source for an auditor to fall back on.
+    merged["cvss_vector"] = _vector_for_score(records, merged.get("cvss_score"))
+    # The descriptive fields are not in the merge whitelist above, so they
+    # came from the base record even when the base's copy was empty: a GHSA
+    # base with description "" merged with an NVD record carrying a full one
+    # produced "", and the text sat unreachable under source_records. Base
+    # first, then the first source that actually has something.
+    for key in ("summary", "description", "html_url"):
+        if not merged.get(key):
+            merged[key] = next(
+                (record.get(key) for record in records if record.get(key)),
+                merged.get(key),
+            )
     return merged
 
 
@@ -464,6 +751,17 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     """Fetch from each requested source, then merge, sort, cache and enrich."""
     warnings: list[str] = []
     per_source: dict[str, int] = {}
+    # Which requested sources returned nothing because they failed, as
+    # opposed to having nothing to return. A partial failure is reported here
+    # and in `warnings`; a total one is a 502 (see below).
+    failed_sources: list[str] = []
+    # Which sources were actually tried. A source that is skipped -- OSV
+    # with ecosystem="any", say -- is neither a success nor a failure, and
+    # comparing failures against the *requested* set meant that if every
+    # source that ran had failed but one had been skipped, the response was
+    # 200 with count: 0 instead of the 502 docs/api.md documents.
+    attempted_sources: list[str] = []
+    first_error: Exception | None = None
     collected: list[dict] = []
     # 'osv' and 'osv-native' read the same bulk export. Honour the refresh
     # request once so selecting both does not download and re-parse ~10 MB twice.
@@ -471,7 +769,21 @@ def run_search(q: SearchQuery) -> SearchOutcome:
 
     # --- GHSA (server-side CWE filter) ---
     if "ghsa" in q.sources:
-        ghsa_sort = q.sort if q.sort in ("published", "updated") else "published"
+        attempted_sources.append('ghsa')
+        # GHSA sorts by cve_id natively (see ghsa_client.SearchParams), and
+        # throwing that away meant the pool was cut to max_results by
+        # *published* and only then re-sorted by the field asked for.
+        ghsa_sort = q.sort if q.sort in ("published", "updated", "cve_id") else "published"
+        if ghsa_sort != q.sort:
+            # The remaining case is the EPSS sorts, which no source can
+            # order upstream. The candidate set is therefore the newest N by
+            # publication, re-ranked locally -- so a 2021 CVE with EPSS 0.97
+            # is never a candidate. Saying so is the honest minimum; the
+            # alternative is fetching the whole corpus.
+            warnings.append(
+                f"GHSA cannot sort by {q.sort}, so these results are the "
+                f"newest {q.max_results} by publication, re-ranked locally. "
+                f"An older advisory with a higher score may be missing.")
         params = ghsa.SearchParams(
             ecosystem=q.ecosystem, cwes=q.cwes, affects=q.affects, severity=q.severity,
             type=q.adv_type, published=q.published, sort=ghsa_sort, direction=q.direction,
@@ -479,14 +791,27 @@ def run_search(q: SearchQuery) -> SearchOutcome:
         )
         try:
             raw = ghsa.fetch_advisories(params)
-            g = [ghsa.normalize(a) for a in raw]
+            # Per record: ghsa.normalize dereferences identifiers[].value,
+            # cwes[].cwe_id and severity.lower(), none of which the API
+            # guarantees. One advisory with "identifiers": [None] used to
+            # raise AttributeError -- not a GhCliError, so it bypassed the
+            # degradation below and 500'd the whole search, discarding the
+            # results already fetched from the other three sources.
+            g, skipped = records_mod.normalize_all(
+                raw, ghsa.normalize, source="GHSA",
+                identify=lambda a: records_mod.identify(a, "ghsa_id"),
+            )
             collected += g
             per_source["ghsa"] = len(g)
+            if skipped:
+                warnings.append(
+                    f"GHSA: skipped {skipped} advisory record(s) that could not be read."
+                )
         except ghsa.GhCliError as e:
             logger.warning("GHSA fetch failed: %s", e)
-            if q.sources == ["ghsa"]:
-                raise SearchError("GHSA fetch failed.", 502)
+            failed_sources.append("ghsa")
             warnings.append("GHSA fetch failed.")
+            first_error = first_error or e
 
     # --- OSV (local CWE filter over the bulk export) ---
     if "osv" in q.sources:
@@ -496,6 +821,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 f"'{q.ecosystem}' skipped. Supported: {', '.join(osv_client.ECOSYSTEM_MAP)}."
             )
         else:
+            attempted_sources.append("osv")
             refresh, osv_refresh_pending = osv_refresh_pending, False
             try:
                 o = osv_client.fetch_osv(q.ecosystem, q.cwes, affects=q.affects,
@@ -506,10 +832,13 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 per_source["osv"] = len(o)
             except osv_client.OsvError as e:
                 logger.warning("OSV fetch failed: %s", e)
+                failed_sources.append("osv")
                 warnings.append("OSV fetch failed.")
+                first_error = first_error or e
 
     # --- NVD (server-side CWE filter via NIST API v2) ---
     if "nvd" in q.sources:
+        attempted_sources.append('nvd')
         nvd_params = nvd_client.NvdSearchParams(
             cwes=q.cwes,
             keyword=q.affects,
@@ -517,15 +846,40 @@ def run_search(q: SearchQuery) -> SearchOutcome:
             published_range=q.published,
             max_results=q.max_results,
         )
+        # The UI offers "Advisory type" and "Ecosystem" as global scope
+        # controls, and docs/usage.md lists them with the rest -- but only
+        # GHSA is given either one, and the post-merge re-filter re-checks
+        # neither. A `type: malware` search therefore returned Log4Shell from
+        # NVD with nothing on screen saying the filter had been ignored.
+        # Honouring them for NVD is not possible as the records stand (its
+        # `type` holds the source name and every package is stamped
+        # ecosystem "nvd"), so say so rather than quietly widening the query.
+        if q.adv_type and q.adv_type != "reviewed":
+            warnings.append(
+                f"NVD does not support the '{q.adv_type}' advisory-type "
+                "filter; its rows are unfiltered by type."
+            )
+        if q.ecosystem and q.ecosystem != "any":
+            warnings.append(
+                f"NVD is not indexed by ecosystem; its rows are not limited "
+                f"to '{q.ecosystem}'."
+            )
+        nvd_report: dict = {}
         try:
-            n = nvd_client.fetch_nvd(nvd_params)
+            n = nvd_client.fetch_nvd(nvd_params, report=nvd_report)
             collected += n
             per_source["nvd"] = len(n)
+            failed = nvd_report.get("failed_cwes", 0)
+            if failed:
+                warnings.append(
+                    f"NVD: {failed} of {nvd_report.get('total_cwes', failed)} "
+                    "CWE queries failed; its results are incomplete."
+                )
         except nvd_client.NvdError as e:
             logger.warning("NVD fetch failed: %s", e)
-            if q.sources == ["nvd"]:
-                raise SearchError("NVD fetch failed.", 502)
+            failed_sources.append("nvd")
             warnings.append("NVD fetch failed.")
+            first_error = first_error or e
 
     # --- OSV native (no CWE) — needs the AI pass to be useful ---
     if "osv-native" in q.sources:
@@ -535,6 +889,7 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 f"'{q.ecosystem}' skipped."
             )
         else:
+            attempted_sources.append("osv-native")
             refresh, osv_refresh_pending = osv_refresh_pending, False
             try:
                 on = osv_client.fetch_osv_native(q.ecosystem, q.categories,
@@ -552,9 +907,25 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                     )
             except osv_client.OsvError as e:
                 logger.warning("OSV native fetch failed: %s", e)
+                failed_sources.append("osv-native")
                 warnings.append("OSV native fetch failed.")
+                first_error = first_error or e
 
     fetched_total = len(collected)
+    # Every requested source failed. GHSA and NVD already answered 502 when
+    # they were the only source; OSV returned 200 + a warning for the same
+    # failure, so a script could rely on neither. The rule is the same for
+    # all four now, and it also covers the multi-source case, where 200 with
+    # count: 0 could not be told apart from "nothing matched".
+    if (failed_sources and attempted_sources
+            and set(failed_sources) >= set(attempted_sources)):
+        # One failed source keeps its own message, which docs/api.md
+        # documents verbatim; several are joined.
+        failures = [w for w in warnings if w.endswith("fetch failed.")]
+        message = (failures[0] if len(failures) == 1
+                   else "Every selected source failed: " + " ".join(failures))
+        raise SearchError(message, 502) from first_error
+
     results = merge_advisories(collected)
     merged_total = len(results)
     results = [
@@ -576,36 +947,89 @@ def run_search(q: SearchQuery) -> SearchOutcome:
     def _sort_key(record: dict):
         value = record.get(sort_field)
         if numeric:
+            # JSON gives str/int/float/bool here, or None, or -- from a
+            # malformed upstream record -- a list or dict. Only the first
+            # group converts; everything else sorts as 0.0.
+            if not isinstance(value, (int, float, str)):
+                return 0.0
             try:
                 return float(value)
-            except (TypeError, ValueError):
+            except ValueError:
                 return 0.0
+        if q.sort == "risk":
+            return _risk_sort_key(record)
+        if sort_field == "cve_id":
+            # A CVE id is a year and a sequence number, not a word. Sorted as
+            # text, "newest CVE first" silently meant "highest ASCII first" --
+            # CVE-2026-9 outranked CVE-2026-100, and the sequence is not
+            # zero-padded, so this is wrong for most real result sets.
+            return _cve_sort_key(value)
         return value or ""
 
-    def _enrich_epss(records: list[dict]) -> None:
+    def _enrich_epss(records: list[dict]) -> int:
+        """Attach EPSS scores. Returns how many records got one."""
         cve_ids = [r["cve_id"] for r in records if r.get("cve_id")]
         if not cve_ids:
-            return
+            return 0
         epss_scores = epss_client.fetch_epss(cve_ids)
+        enriched = 0
         for rec in records:
-            score = epss_scores.get(rec.get("cve_id", ""))
+            # Upper-cased to match: fetch_epss normalises its keys, and
+            # _merge_group preserves whatever casing the publisher used.
+            score = epss_scores.get(str(rec.get("cve_id") or "").upper())
             if score:
                 rec["epss_percentage"] = score["epss"]
                 rec["epss_percentile"] = score["percentile"]
+                enriched += 1
+        return enriched
 
     # Sorting by EPSS needs every candidate scored first; every other sort mode
     # can truncate first, which keeps EPSS to one batched request instead of one
     # per 100 merged records (up to 4x max_results before truncation).
-    if numeric:
-        _enrich_epss(results)
+    if numeric or q.sort == "risk":
+        enriched = _enrich_epss(results)
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
+        if sort_field == "cve_id":
+            results = _cve_last(results)
         results = results[:q.max_results]
+        # fetch_epss swallows every failure and returns {}, and _sort_key maps
+        # a missing score to 0.0 -- so an EPSS outage silently handed the user
+        # merge order presented as an exploit-probability ranking.
+        # docs/data-sources.md promises a missing score is never rendered as a
+        # measured zero; the ordering has to keep the same promise.
+        if results and not enriched:
+            warnings.append(
+                "EPSS scores are unavailable, so these results are ordered "
+                "by KEV, severity and CVSS only."
+                if q.sort == "risk" else
+                "EPSS scores are unavailable, so these results are in merge "
+                "order, not EPSS order."
+            )
     else:
         results.sort(key=_sort_key, reverse=(q.direction != "asc"))
+        if sort_field == "cve_id":
+            results = _cve_last(results)
         results = results[:q.max_results]
         _enrich_epss(results)
 
-    cache.upsert_advisories(results)
+    # Strip before caching and before the response. source_records is built
+    # for the merge and for _group_matches_filters, both of which have already
+    # run by here. Persisting it doubled advisories.db for data no reader ever
+    # asked for, and shipping it doubled the JSON the browser has to parse.
+    if not q.include_source_records:
+        for rec in results:
+            rec.pop("source_records", None)
+
+    # The cache is optional -- modules/cache.py says so in its own docstring
+    # -- but this call was unguarded, so a database locked past the busy
+    # timeout by a concurrent classify, a full volume, or a read-only
+    # VULNSIGHT_DATA_DIR turned a completed multi-source search into a 500.
+    # Minutes of rate-limited NVD fetching, discarded at the last step.
+    try:
+        cache.upsert_advisories(results)
+    except Exception:
+        logger.warning("cache write failed; returning results uncached",
+                       exc_info=True)
 
     # Attach CWE labels for the UI.
     for rec in results:
@@ -625,11 +1049,19 @@ def run_search(q: SearchQuery) -> SearchOutcome:
                 )
                 for rec in results
             }
-            cached_by_category[category] = cache.get_classifications(
-                list(fingerprints),
-                category,
-                expected_fingerprints=fingerprints,
-            )
+            # Same reasoning as the write above: a cached verdict is an
+            # optimisation, and failing to read one must cost the verdict,
+            # not the search that has already been paid for.
+            try:
+                cached_by_category[category] = cache.get_classifications(
+                    list(fingerprints),
+                    category,
+                    expected_fingerprints=fingerprints,
+                )
+            except Exception:
+                logger.warning("cache read failed for %s; results will show "
+                               "no cached verdict", category, exc_info=True)
+                cached_by_category[category] = {}
         for rec in results:
             aid = rec["advisory_id"]
             category_verdicts = {
@@ -656,5 +1088,10 @@ def run_search(q: SearchQuery) -> SearchOutcome:
             # the signal a paging client needs and could not previously derive:
             # a smaller `returned` might equally have meant de-duplication.
             "truncated": filtered_total > len(results),
+            # Sources that failed outright. `count: 0` with every requested
+            # source in here means "everything is down", not "nothing matched"
+            # -- the distinction docs/automation.md warns scripts about and
+            # previously left them to infer from warning text.
+            "failed_sources": sorted(set(failed_sources)),
         },
     )

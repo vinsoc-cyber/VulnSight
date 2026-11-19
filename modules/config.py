@@ -16,13 +16,20 @@ def load_dotenv(path: str | None = None) -> None:
         path = os.path.join(BASE_DIR, ".env")
     if not os.path.exists(path):
         return
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
+            # A .env written to be `source`d often has `export FOO=bar`. Taken
+            # literally that sets a variable named "export FOO", which nothing
+            # reads -- the setting silently does not apply.
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if not key.isidentifier():
+                continue
             val = val.strip().strip('"').strip("'")
             # Do not clobber values already set in the real environment.
             os.environ.setdefault(key, val)
@@ -48,3 +55,15 @@ def load_dotenv(path: str | None = None) -> None:
 load_dotenv()
 
 DATA_DIR = os.path.abspath(os.environ.get("VULNSIGHT_DATA_DIR") or BASE_DIR)
+
+
+# --- AI cost limits -------------------------------------------------------
+# Here rather than in app.py so modules/openapi.py can state them instead of
+# copying the numbers: the spec had them hand-written in four places, and
+# app.py imports openapi, so openapi cannot import app.
+MAX_AI_BATCH = 100
+
+# One classify request fans out to len(categories) x len(advisory_ids) model
+# calls. Capping the product keeps a single request from turning into
+# thousands of paid calls; the UI sizes its batches from the same number.
+MAX_AI_CALLS_PER_REQUEST = 500

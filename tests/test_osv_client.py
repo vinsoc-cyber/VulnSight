@@ -9,9 +9,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from unittest import mock
@@ -56,8 +59,12 @@ class TestFetchOsv(unittest.TestCase):
             good = make_osv_zip([OSV_NATIVE])
             with open(path, "wb") as handle:
                 handle.write(good)
+            # A real response is a stream: read(n) returns b"" at EOF. A
+            # MagicMock whose read() always returns the same bytes never ends,
+            # which is not how any HTTP response behaves.
             response = mock.MagicMock()
-            response.read.return_value = b"not-a-zip"
+            body = io.BytesIO(b"not-a-zip")
+            response.read.side_effect = body.read
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             urlopen.return_value = response
@@ -66,7 +73,42 @@ class TestFetchOsv(unittest.TestCase):
             with open(path, "rb") as handle:
                 self.assertEqual(handle.read(), good)
 
-    def test_zip_records_and_cwe_filter(self):
+    def test_an_endless_response_is_cut_off_at_the_cap(self):
+        """The cap is what stops a response that never ends from filling the
+        disk. Writing this test is how the streaming loop was found to run
+        away against a mock whose read() never returns b"" -- it wrote 119 MB
+        before it was killed."""
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client, "MAX_BULK_BYTES", 1 << 20), \
+             mock.patch("modules.osv_client.urllib.request.urlopen") as urlopen:
+            response = mock.MagicMock()
+            response.read.return_value = b"x" * 65536      # never ends
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            urlopen.return_value = response
+            with self.assertRaises(osv_client.OsvError) as caught:
+                osv_client.download_ecosystem("Go", force=True)
+            self.assertIn("exceeded", str(caught.exception))
+            # The partial file must not be left behind.
+            self.assertFalse(
+                os.path.exists(osv_client._zip_path("Go") + ".tmp"))
+
+    def test_a_failed_download_leaves_no_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go", force=True)
+            self.assertFalse(
+                os.path.exists(osv_client._zip_path("Go") + ".tmp"))
+
+    def test_the_cwe_filter_keeps_only_matching_records(self):
+        """Named for what it does. It was `test_zip_records_and_cwe_filter`,
+        but it unzips and normalises inline and then patches `_load_records`
+        away, so no zip is parsed by the code under test -- the archive path
+        is reached only by TestOneBadRecordDoesNotKillTheSearch."""
         # Build an in-memory bulk zip (samples.make_osv_zip replaces the removed
         # osv_client.bytes_to_records), unzip+normalize it ourselves, and drive
         # fetch_osv via a patched loader.
@@ -222,6 +264,426 @@ class TestOneBadRecordDoesNotKillTheSearch(unittest.TestCase):
             })
         self.assertTrue(any("Skipped 1 unusable" in line for line in logs.output),
                         logs.output)
+
+
+
+class TestNormalisedPackagesCarryOnlyWhatIsRead(unittest.TestCase):
+    """purl, ranges and versions were written into every package and read
+    nowhere -- not by the UI, not by app.py, not by search_service -- while
+    being ~49% of the package payload and persisted verbatim into SQLite.
+    The one thing a reader wants out of `ranges` is the version window, which
+    sat hard-coded None right beside the raw copy."""
+
+    def _normalise(self, ranges=None, versions=None):
+        record = {
+            "id": "GHSA-x", "summary": "s", "details": "d",
+            "affected": [{
+                "package": {"ecosystem": "Go", "name": "example.com/p",
+                            "purl": "pkg:golang/example.com/p"},
+                "ranges": ranges if ranges is not None else [],
+                "versions": versions if versions is not None else [],
+            }],
+        }
+        return osv_client.normalize_osv(record)["packages"][0]
+
+    def test_the_unread_fields_are_gone(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}],
+            versions=["1.0.0", "1.1.0"])
+        for dropped in ("purl", "ranges", "versions"):
+            self.assertNotIn(dropped, pkg, dropped)
+
+    def test_what_is_read_is_still_there(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}])
+        self.assertEqual(pkg["ecosystem"], "Go")
+        self.assertEqual(pkg["name"], "example.com/p")
+        self.assertEqual(pkg["first_patched_version"], "1.2.3")
+        self.assertEqual(pkg["fixed_versions"], ["1.2.3"])
+
+    def test_the_version_range_is_populated_not_hard_coded_none(self):
+        pkg = self._normalise(
+            ranges=[{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}])
+        self.assertEqual(pkg["vulnerable_version_range"], ">= 1.0.0, < 1.2.3")
+
+    def test_range_shapes(self):
+        for ranges, expected in (
+            ([{"events": [{"introduced": "1.0.0"}, {"fixed": "1.2.3"}]}],
+             ">= 1.0.0, < 1.2.3"),
+            # OSV writes "0" for "since the beginning"; not a bound worth showing.
+            ([{"events": [{"introduced": "0"}, {"fixed": "2.0.0"}]}], "< 2.0.0"),
+            ([{"events": [{"introduced": "1.5"}]}], ">= 1.5"),
+            ([{"events": [{"introduced": "0"}]}], None),
+            ([], None),
+        ):
+            with self.subTest(ranges=ranges):
+                self.assertEqual(osv_client._introduced_range(ranges), expected)
+
+
+class TestCachePathCannotEscapeTheCacheDir(unittest.TestCase):
+    """download_ecosystem is a public entry point taking an arbitrary string.
+    Every caller routes through ECOSYSTEM_MAP today, so this is hardening --
+    but "replace / and space" left ".." intact and the result is joined onto
+    CACHE_DIR."""
+
+    def test_traversal_attempts_stay_inside_the_cache_dir(self):
+        for hostile in ("../../etc/passwd", "../outside", "a/../../b"):
+            with self.subTest(name=hostile):
+                path = osv_client._zip_path(hostile)
+                self.assertEqual(
+                    os.path.dirname(os.path.abspath(path)),
+                    os.path.abspath(osv_client.CACHE_DIR))
+
+    def test_a_name_that_reduces_to_nothing_is_refused(self):
+        for hostile in ("..", "", "...", "."):
+            with self.subTest(name=hostile):
+                with self.assertRaises(osv_client.OsvError):
+                    osv_client._zip_path(hostile)
+
+    def test_a_real_ecosystem_name_still_works(self):
+        self.assertTrue(
+            osv_client._zip_path("GitHub Actions").endswith("GitHub_Actions.zip"))
+        self.assertTrue(osv_client._zip_path("Go").endswith("Go.zip"))
+
+
+class TestConcurrentLoadsParseOnce(unittest.TestCase):
+    """The memo read was guarded and the download serialised, but the parse
+    -- the expensive part -- ran unlocked.
+
+    On a cold cache N concurrent requests for the same ecosystem each
+    inflated and normalised the whole archive, the last writer won, and the
+    rest was garbage. npm's export is 226,880 members and ~372 MB
+    uncompressed, against a shipped config of --workers 1 --threads 8.
+    """
+
+    def setUp(self):
+        osv_client._MEM.clear()
+
+    def tearDown(self):
+        osv_client._MEM.clear()
+
+    def test_eight_concurrent_cold_loads_parse_once(self):
+        parses = []
+        barrier = threading.Barrier(8)
+
+        def fake_load(ghsa_ecosystem, osv_eco, force):
+            parses.append(ghsa_ecosystem)
+            time.sleep(0.05)
+            records = [{"advisory_id": "OSV-1"}]
+            with osv_client._MEM_LOCK:
+                osv_client._MEM[ghsa_ecosystem] = (time.time(), records)
+            return records
+
+        def worker():
+            barrier.wait()
+            osv_client._load_records("maven")
+
+        with mock.patch.object(osv_client, "_load_records_locked", fake_load):
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(parses), 1, f"archive parsed {len(parses)} times")
+
+    def test_different_ecosystems_do_not_block_each_other(self):
+        order = []
+
+        def fake_load(ghsa_ecosystem, osv_eco, force):
+            order.append(("start", ghsa_ecosystem))
+            time.sleep(0.05)
+            with osv_client._MEM_LOCK:
+                osv_client._MEM[ghsa_ecosystem] = (time.time(), [])
+            order.append(("end", ghsa_ecosystem))
+            return []
+
+        with mock.patch.object(osv_client, "_load_records_locked", fake_load):
+            threads = [threading.Thread(target=osv_client._load_records, args=(eco,))
+                       for eco in ("maven", "npm", "go")]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        starts = [e for e in order[:3] if e[0] == "start"]
+        self.assertEqual(len(starts), 3, "ecosystems serialised against each other")
+
+    def test_a_warm_memo_skips_the_loader_entirely(self):
+        with osv_client._MEM_LOCK:
+            osv_client._MEM["maven"] = (time.time(), [{"advisory_id": "cached"}])
+        with mock.patch.object(osv_client, "_load_records_locked") as loader:
+            records = osv_client._load_records("maven")
+        loader.assert_not_called()
+        self.assertEqual(records[0]["advisory_id"], "cached")
+
+
+def _no_sleep_retries(call, **kwargs):
+    """http_retry.with_retries with the backoff sleep stubbed out.
+
+    `sleep` is a default argument bound at import, so patching
+    http_retry.time.sleep does not reach it.
+    """
+    kwargs.setdefault("sleep", lambda _seconds: None)
+    return _REAL_WITH_RETRIES(call, **kwargs)
+
+
+_REAL_WITH_RETRIES = osv_client.http_retry.with_retries
+
+
+class TestAFailedRefreshKeepsAUsableCache(unittest.TestCase):
+    """The freshness check only short-circuits on success, so once the zip was
+    a day old a transient download failure dropped OSV from the search
+    entirely -- while a perfectly usable copy sat on disk."""
+
+    def _stale_cache(self, directory):
+        path = osv_client._zip_path("Go")
+        with open(path, "wb") as handle:
+            handle.write(make_osv_zip([OSV_NATIVE]))
+        os.utime(path, (0, 0))          # far older than DEFAULT_MAX_AGE
+        return path
+
+    def test_a_stale_cache_is_used_when_the_refresh_fails(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            path = self._stale_cache(directory)
+            with self.assertLogs("modules.osv_client", level="WARNING") as logs:
+                self.assertEqual(osv_client.download_ecosystem("Go"), path)
+            with open(path, "rb") as handle:
+                self.assertTrue(handle.read())
+        self.assertTrue(any("using the cached copy" in line for line in logs.output),
+                        logs.output)
+
+    def test_an_explicit_refresh_still_reports_the_failure(self):
+        """force=True is the user asking for fresh data; handing back the old
+        copy silently would be the same silence in a different place."""
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            self._stale_cache(directory)
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go", force=True)
+
+    def test_no_cache_at_all_still_reports_the_failure(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch.object(osv_client.http_retry, "with_retries",
+                               _no_sleep_retries), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=OSError("connection reset")):
+            with self.assertRaises(osv_client.OsvError):
+                osv_client.download_ecosystem("Go")
+
+
+class TestAnEcosystemNameWithASpaceIsFetchable(unittest.TestCase):
+    """Several OSV ecosystem names contain a space ("GitHub Actions").
+
+    Interpolated raw, http.client rejects the request path outright -- so the
+    `actions` ecosystem the UI offers in its dropdown could never be fetched
+    at all, and the broad handler reported it as a generic "OSV fetch failed".
+    """
+
+    def test_the_url_percent_encodes_the_name(self):
+        seen = {}
+        payload = make_osv_zip([OSV_NATIVE])
+
+        def capture(req, timeout=None):
+            seen["url"] = req.full_url
+            response = mock.MagicMock()
+            body = io.BytesIO(payload)
+            response.read.side_effect = body.read
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            return response
+
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory), \
+             mock.patch("modules.osv_client.urllib.request.urlopen",
+                        side_effect=capture):
+            osv_client.download_ecosystem(
+                osv_client.ECOSYSTEM_MAP["actions"], force=True)
+        self.assertIn("GitHub%20Actions", seen["url"])
+        self.assertNotIn(" ", seen["url"])
+
+
+class TestCacheStatusSurvivesAVanishingFile(unittest.TestCase):
+    """These caches are documented as safe to delete at any time, and this
+    renders on every healthcheck: a file removed between the existence check
+    and the read must not take /api/meta down."""
+
+    def test_a_file_removed_mid_read_is_skipped(self):
+        def vanishing(path):
+            raise OSError(2, "No such file or directory", path)
+
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory):
+            with open(osv_client._zip_path("Go"), "wb") as handle:
+                handle.write(b"x" * 10)
+            with mock.patch("modules.osv_client.os.path.getsize", vanishing):
+                self.assertEqual(osv_client.cache_status(), [])
+
+    def test_a_present_cache_is_still_reported(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(osv_client, "CACHE_DIR", directory):
+            with open(osv_client._zip_path("Go"), "wb") as handle:
+                handle.write(b"x" * 10)
+            status = osv_client.cache_status()
+        self.assertEqual([entry["ecosystem"] for entry in status], ["go"])
+
+
+class TestEveryVulnerableBranchIsRendered(unittest.TestCase):
+    """OSV expresses several vulnerable branches as repeated
+    introduced/fixed pairs inside one range. Folding the event list into a
+    single pair kept only the last of each, so everything but the final
+    branch vanished.
+
+    Measured against this repo's own osv_cache/Go.zip: 928 of 15,341
+    affected entries carry more than one `introduced`, and 906 rendered a
+    range that contradicted the `first_patched_version` printed beside it.
+    An operator on Go 1.13 read GO-2021-0068 as ">= 1.15.0-0, < 1.15.7" and
+    concluded they were unaffected -- an under-report, which is the
+    expensive direction for a triage tool.
+    """
+
+    GO_2021_0068 = [{"events": [{"introduced": "0"}, {"fixed": "1.14.14"},
+                                {"introduced": "1.15.0-0"}, {"fixed": "1.15.7"}]}]
+
+    def _rendered(self, ranges):
+        out = osv_client._introduced_range(ranges)
+        self.assertIsNotNone(out, "no range was rendered at all")
+        assert out is not None
+        return out
+
+    def test_both_branches_survive(self):
+        rendered = self._rendered(self.GO_2021_0068)
+        self.assertIn("1.14.14", rendered)
+        self.assertIn("1.15.7", rendered)
+        self.assertIn("1.15.0-0", rendered)
+
+    def test_the_range_does_not_contradict_the_first_patched_version(self):
+        """These two fields sit next to each other in the same dict."""
+        rendered = self._rendered(self.GO_2021_0068)
+        first_patched = "1.14.14"
+        self.assertIn(
+            first_patched, rendered,
+            f"the range {rendered!r} omits the version it was patched in")
+
+    def test_a_single_branch_is_unchanged(self):
+        self.assertEqual(
+            osv_client._introduced_range(
+                [{"events": [{"introduced": "1.0"}, {"fixed": "2.0"}]}]),
+            ">= 1.0, < 2.0")
+
+    def test_introduced_zero_is_still_not_rendered_as_a_bound(self):
+        self.assertEqual(
+            osv_client._introduced_range(
+                [{"events": [{"introduced": "0"}, {"fixed": "2.0"}]}]),
+            "< 2.0")
+
+    def test_a_branch_left_open_is_still_reported(self):
+        """No `fixed` event means it is still vulnerable, which must not
+        read as "not affected"."""
+        self.assertEqual(
+            osv_client._introduced_range([{"events": [{"introduced": "3.0"}]}]),
+            ">= 3.0")
+
+    def test_last_affected_closes_a_branch(self):
+        rendered = self._rendered(
+            [{"events": [{"introduced": "1.0"}, {"last_affected": "1.9"}]}])
+        self.assertEqual(rendered, ">= 1.0")
+
+
+class TestAWarmCacheDoesNotWaitForSomeoneElsesDownload(unittest.TestCase):
+    """_DOWNLOAD_LOCK is process-wide, not per-ecosystem, and it was taken
+    before the "already cached and fresh?" check -- so a search for `go`,
+    whose zip was on disk, blocked behind an in-flight 221 MB `npm`
+    download (timeout=120, attempts=2, so up to ~240s) for a file it was
+    never going to fetch, and then died at gunicorn's 180s."""
+
+    def test_a_fresh_cache_returns_without_taking_the_lock(self):
+        """A sentinel that refuses to be entered, not a held lock.
+
+        Holding a real lock reproduces the bug exactly -- and the reverted
+        code then deadlocks for the module's whole timeout instead of
+        failing, which makes the revert check unusable. This fails in
+        milliseconds and says why.
+        """
+        class NeverEnter:
+            def __enter__(self):
+                raise AssertionError(
+                    "download_ecosystem took the process-wide download lock "
+                    "for a cache entry that was already fresh, so a search "
+                    "for one ecosystem waits on another's 221 MB download")
+
+            def __exit__(self, *a):
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Go.zip")
+            with open(path, "wb") as fh:
+                fh.write(b"not really a zip, but non-empty")
+            with mock.patch.object(osv_client, "CACHE_DIR", tmp), \
+                 mock.patch.object(osv_client, "_DOWNLOAD_LOCK", NeverEnter()):
+                got = osv_client.download_ecosystem("Go")
+            self.assertEqual(got, path)
+
+    def test_a_cold_cache_still_takes_the_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = {"n": 0}
+
+            class CountingLock:
+                def __enter__(self):
+                    calls["n"] += 1
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+            with mock.patch.object(osv_client, "CACHE_DIR", tmp), \
+                 mock.patch.object(osv_client, "_DOWNLOAD_LOCK", CountingLock()), \
+                 mock.patch.object(osv_client.http_retry, "with_retries",
+                                   lambda fn, **k: fn()), \
+                 mock.patch.object(osv_client.urllib.request, "urlopen",
+                                   side_effect=OSError("no network")):
+                with contextlib.suppress(Exception):
+                    osv_client.download_ecosystem("Go")
+            self.assertEqual(calls["n"], 1, "a cold fetch skipped the lock")
+
+
+class TestADecompressionBombIsBounded(unittest.TestCase):
+    """MAX_BULK_BYTES capped the download; zf.read() decompresses without a
+    limit, so one hostile member could inflate to arbitrary size in memory
+    -- in a module whose own header states a hostile-response threat
+    model."""
+
+    def test_an_oversized_member_is_skipped_not_inflated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Bomb.zip")
+            # Both members are VALID advisories. If the only difference
+            # were that one is malformed, the per-record handler would skip
+            # it anyway and this test would pass with the bound removed.
+            small = dict(OSV_GHSA, id="GHSA-small", summary="small")
+            huge = dict(OSV_GHSA, id="GHSA-huge",
+                        summary="x" * 4096, details="y" * 4096)
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("huge.json", json.dumps(huge))
+                zf.writestr("fine.json", json.dumps(small))
+
+            # A member whose declared inflated size is over the cap.
+            with mock.patch.object(osv_client, "MAX_MEMBER_BYTES", 1024), \
+                 mock.patch.object(osv_client, "download_ecosystem",
+                                   lambda eco, force=False: path):
+                records = osv_client._load_records_locked("maven", "Maven", False)
+        ids = [r.get("advisory_id") or r.get("ghsa_id") for r in records]
+        self.assertIn("GHSA-small", ids, "the legitimate record was lost too")
+        self.assertNotIn("GHSA-huge", ids,
+                         "the oversized member was inflated and parsed")
+        self.assertEqual(len(records), 1)
 
 
 if __name__ == "__main__":
