@@ -238,6 +238,15 @@ class UITestCase(unittest.TestCase):
         self.page.wait_for_selector(selector, state="visible")
         self.page.select_option(selector, value)
 
+    def open_classes(self):
+        """Unfold the rail's bug-class list.
+
+        It ships shut: the workspace map is the taxonomy, and a second copy
+        of it in a 320px column is what this fold took off the page. A test
+        that needs the checkboxes gets at them the way an operator does."""
+        self.page.eval_on_selector(".class-fold", "el => { el.open = true; }")
+        self.page.wait_for_selector("#class-search", state="visible")
+
 
 class TestCweFinder(UITestCase):
     def test_community_alias_finds_the_cwe_with_its_full_name(self):
@@ -423,6 +432,14 @@ class TestToastsShareOneLiveRegion(UITestCase):
 
 
 class TestClassFilter(UITestCase):
+    """The filter box lives inside the bug-class fold now, so each of these
+    opens it first -- the way an operator reaches it."""
+
+    def open(self, records=None, max_results=100, classify=True, is_match=True):
+        super().open(records=records, max_results=max_results,
+                     classify=classify, is_match=is_match)
+        self.open_classes()
+
     def test_filter_hides_rows_on_screen_not_just_in_the_dom(self):
         self.open()
         before = self.visible_classes()
@@ -1132,7 +1149,9 @@ class TestTheOpeningScreenIsTheTaxonomy(UITestCase):
         self.assertIn("xss", self._map()["boxes"])
 
     def test_each_class_states_how_many_cwes_it_covers(self):
-        """The number is the reason to pick one class over another."""
+        """How wide a net the class casts, once you have found the one you
+        mean. It is the entry's second and last fact: the track that drew
+        the same number as a length is gone."""
         self.open()
         counts = self.page.evaluate(
             "() => [...document.querySelectorAll('.map-count')].map(e => e.textContent.trim())")
@@ -1157,69 +1176,125 @@ class TestTheOpeningScreenIsTheTaxonomy(UITestCase):
         self.page.wait_for_timeout(150)
 
 
-class TestTheClassMeasureIsReal(UITestCase):
-    """Each class entry carries a track whose filled length is its CWE count
-    against the widest class, because "17 CWEs" and "1 CWE" set in identical
-    boxes cannot be compared without reading all twenty-nine of them.
+class TestTheTaxonomyIsOnScreenOnce(UITestCase):
+    """At rest the page printed all twenty-nine bug classes twice: once as
+    the workspace map, and again as a rail list carrying a description
+    under every label.
 
-    The width is assigned through CSSOM rather than a style attribute: the
-    CSP is `style-src 'self'` with no unsafe-inline, so a style attribute is
-    dropped and every track renders empty -- which looks like a deliberately
-    plain design rather than a broken one. These fail if that happens."""
+    Measured on the landing page before this changed: every class name
+    rendered twice over, fourteen family headings for seven families, 444
+    painted elements, 200 of which carried text and 188 of those at 13px
+    or smaller -- and 5542 characters of it inside a 320px rail, against
+    1415 in the workspace, which has five times the width to spend.
 
-    def _tracks(self):
+    A second copy of the taxonomy is not a second way in; it is the same
+    way in, printed twice. So the map is the taxonomy and the rail list is
+    the control that edits it, shipped shut. The fold hides controls and
+    not state: what is ticked is named directly above it, as Query-target
+    chips."""
+
+    def _painted_class_names(self):
+        """Count the nodes whose own text is exactly a bug-class name.
+
+        checkVisibility, not a bounding box: a closed <details> hides its
+        content with content-visibility, under which descendants go on
+        reporting the box they last had -- so a rect-based probe counts a
+        folded list as painted and measures nothing at all."""
         return self.page.evaluate("""() => {
-          const widest = Math.max(...window.BOOT.CLASSES.map(c => (c.cwes || []).length));
-          return [...document.querySelectorAll('.map-class')].map(el => {
-            const cls = window.BOOT.CLASSES.find(c => c.key === el.dataset.class);
-            const fill = el.querySelector('.map-track > i');
-            return {
-              key: el.dataset.class,
-              cwes: cls ? (cls.cwes || []).length : 0,
-              widest,
-              px: fill ? fill.getBoundingClientRect().width : 0,
-              track: el.querySelector('.map-track')
-                ? el.querySelector('.map-track').getBoundingClientRect().width : 0,
-            };
-          });
+          const labels = new Set(window.BOOT.CLASSES.map(c => c.label));
+          const own = el => [...el.childNodes].filter(n => n.nodeType === 3)
+            .map(n => n.textContent.trim()).join(' ').trim();
+          return [...document.querySelectorAll('body *')].filter(el =>
+            labels.has(own(el)) && el.checkVisibility({
+              checkVisibilityCSS: true, contentVisibilityAuto: true,
+              opacityProperty: true, visibilityProperty: true})).length;
         }""")
 
-    def test_every_class_has_a_track_with_a_painted_width(self):
+    def test_a_class_name_is_painted_once_per_place_it_means_something(self):
         self.open()
-        rows = self._tracks()
-        self.assertTrue(rows, "no class entries rendered")
-        for row in rows:
-            with self.subTest(cls=row["key"]):
-                self.assertGreater(row["track"], 0, "the track itself has no width")
-                self.assertGreater(
-                    row["px"], 0,
-                    "the fill is zero-width -- a style attribute blocked by the "
-                    "CSP, or the CSSOM pass never ran")
+        total = self.page.evaluate("() => window.BOOT.CLASSES.length")
+        chips = self.page.evaluate(
+            "() => document.querySelectorAll('#selected-chips .chip-class').length")
+        self.assertGreater(chips, 0, "the fixture starts with nothing selected")
+        self.assertEqual(
+            self._painted_class_names(), total + chips,
+            "the taxonomy is on screen more than once: a class name belongs "
+            "to the map, and a selected one also to its Query-target chip")
 
-    def test_a_wider_class_gets_a_longer_track(self):
-        """Without this the bars could all render the same and still pass
-        the test above, which would be decoration rather than a measure."""
+    def test_the_rail_list_is_not_painted_until_it_is_asked_for(self):
         self.open()
-        rows = [r for r in self._tracks() if r["track"] > 0]
-        widest = max(rows, key=lambda r: r["cwes"])
-        narrowest = min(rows, key=lambda r: r["cwes"])
-        self.assertGreater(widest["cwes"], narrowest["cwes"],
-                           "the fixture has no spread to measure")
-        # Same column width, so the painted lengths are directly comparable.
-        same_width = [r for r in rows
-                      if abs(r["track"] - widest["track"]) < 1]
-        narrowest = min(same_width, key=lambda r: r["cwes"])
-        self.assertGreater(
-            widest["px"], narrowest["px"] * 1.5,
-            f'{widest["key"]} ({widest["cwes"]} CWEs) must read as clearly '
-            f'wider than {narrowest["key"]} ({narrowest["cwes"]})')
+        self.assertFalse(
+            self.page.eval_on_selector("#taxonomy-list", "el => el.checkVisibility()"),
+            "the rail's copy of the taxonomy is on screen at rest")
+        self.open_classes()
+        self.assertTrue(
+            self.page.eval_on_selector("#taxonomy-list", "el => el.checkVisibility()"),
+            "opening the fold does not reveal the list")
 
-    def test_the_widest_class_fills_its_track(self):
+    def test_the_folded_list_still_drives_the_query(self):
+        """A fold that quietly stopped working would look identical."""
         self.open()
-        rows = [r for r in self._tracks() if r["track"] > 0]
-        widest = max(rows, key=lambda r: r["cwes"])
-        self.assertGreater(widest["px"], widest["track"] * 0.95,
-                           "the scale is not anchored to the widest class")
+        self.open_classes()
+        self.page.eval_on_selector(
+            'input[name=category][value="xss"]',
+            "el => { el.checked = true;"
+            "        el.dispatchEvent(new Event('change', {bubbles: true})); }")
+        self.page.wait_for_timeout(150)
+        self.assertTrue(
+            self.page.evaluate(
+                "() => !!document.querySelector("
+                "'.map-class[data-class=\"xss\"].is-picked')"),
+            "ticking in the rail did not reach the map")
+
+    def test_the_rail_list_carries_one_line_per_class(self):
+        """The description under every label -- up to five lines at 11px,
+        twenty-nine times -- was the largest block of small grey text on
+        the page. It is on `title`, on the map entry beside it, and in
+        docs/bug-classes.md, which has the width for a sentence."""
+        self.open()
+        self.open_classes()
+        state = self.page.evaluate("""() => ({
+          items: document.querySelectorAll('#taxonomy-list .taxonomy-item').length,
+          descriptions: document.querySelectorAll(
+            '#taxonomy-list .taxonomy-item .c-desc').length,
+          titled: [...document.querySelectorAll('#taxonomy-list .taxonomy-item')]
+            .filter(el => (el.getAttribute('title') || '').length > 20).length,
+        })""")
+        self.assertGreater(state["items"], 20)
+        self.assertEqual(state["descriptions"], 0,
+                         "the description block is back in the rail")
+        self.assertEqual(state["titled"], state["items"],
+                         "a class lost its description without gaining a title")
+
+    def test_labels_start_and_counts_end_on_the_same_line_in_a_row(self):
+        """The rhythm the tracks used to break.
+
+        Labels wrap to one line or two, so any single alignment leaves the
+        other end of the entry ragged: top-align and the counts scatter,
+        centre and both scatter by half a line. Pushed to the two edges,
+        every label in a row starts on one line and every count ends on
+        another -- which is what makes four columns read as a grid rather
+        than as 29 loose scraps."""
+        self.open()
+        rows = self.page.evaluate("""() => {
+          const rows = {};
+          document.querySelectorAll('.map-class').forEach(el => {
+            const box = el.getBoundingClientRect();
+            const key = `${el.closest('.map-grid').className}@${Math.round(box.top)}`;
+            const label = el.querySelector('.map-label').getBoundingClientRect();
+            const count = el.querySelector('.map-count').getBoundingClientRect();
+            (rows[key] = rows[key] || []).push(
+              {key: el.dataset.class, label: label.top, count: count.bottom});
+          });
+          return Object.values(rows).filter(r => r.length > 1);
+        }""")
+        self.assertTrue(rows, "no row holds more than one class to compare")
+        wrapped = [r for r in rows
+                   if max(e["count"] for e in r) - min(e["count"] for e in r) > 0.5
+                   or max(e["label"] for e in r) - min(e["label"] for e in r) > 0.5]
+        self.assertEqual(
+            [[e["key"] for e in r] for r in wrapped], [],
+            "a row's labels or counts sit on different lines")
 
 
 class TestTheFilterDrawerIsOpaque(UITestCase):
@@ -1325,10 +1400,36 @@ class TestAFoldedSectionStillStatesItsValue(UITestCase):
         self.open()
         folded = self.page.eval_on_selector_all(
             ".control-fold", "els => els.map(e => e.open)")
-        self.assertEqual(folded, [False, False],
+        self.assertEqual(folded, [False, False, False],
                          "the folding sections did not ship shut")
         self.assertEqual(self._fold_value("#sources-value"), "GHSA")
         self.assertIn("100 results", self._fold_value("#options-value"))
+
+    def test_the_fold_with_no_value_has_its_setting_on_screen_anyway(self):
+        """Three sections fold and only two carry a value, which looks like
+        the rule above being broken once. The rule is that a fold may hide
+        controls and never state -- and the bug-class fold's state is named
+        directly above it, as Query-target chips. A value on that heading
+        would be the third printing of one selection, which is the thing
+        this pass took off the page rather than added to it."""
+        self.open()
+        state = self.page.evaluate("""() => ({
+          has_value: !!document.querySelector('.class-fold .fold-value'),
+          chips: [...document.querySelectorAll('#selected-chips .chip-class')]
+            .map(c => c.textContent.replace(/\u00d7/g, '').trim())
+            .filter(Boolean),
+          ticked: [...document.querySelectorAll('input[name=category]:checked')]
+            .map(c => c.value),
+          labels: window.BOOT.CLASSES.reduce(
+            (m, c) => (m[c.key] = c.label, m), {}),
+        })""")
+        self.assertFalse(state["has_value"],
+                         "the bug-class fold grew a value its chips already say")
+        self.assertEqual(len(state["chips"]), len(state["ticked"]),
+                         "a ticked class has no chip naming it")
+        for key in state["ticked"]:
+            self.assertIn(state["labels"][key], state["chips"],
+                          f"{key} is ticked behind a shut fold and named nowhere")
 
     def test_ticking_a_source_updates_the_heading(self):
         self.open()

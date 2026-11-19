@@ -538,76 +538,68 @@ class TestTheAuditLooksAtTheSurfacesPeopleUse(unittest.TestCase):
                          "the sample verdicts are all one class")
 
 
-class TestTheClassMapBarCanBeSeen(unittest.TestCase):
-    """Each bug class in the picker carries a 2px bar whose length is its
-    share of the widest class -- a real ramp, 100% down to 6% across the
-    29 classes, and the only way to compare them without reading 29
-    numbers.
+class TestTheMapEntrySaysTwoThings(unittest.TestCase):
+    """A class-map entry carries a name and a CWE count. Nothing else.
 
-    It was drawn in --line-bright on a --line ground: 1.73:1. WCAG 1.4.11
-    asks 3:1 of a graphic that carries meaning, and the ramp was both
-    illegal and, more to the point, invisible. The count in text beside it
-    is what kept this passing the audit, which measures text only -- so
-    this measures the colours instead of asserting a token name."""
+    It carried four. A mono code in a left gutter -- BAC, CSRF, SSTI --
+    spelt the name beside it a second time in the API's internal spelling,
+    and a 2px track encoded, as a length, the count printed directly above
+    it. Both were argued for in this repo, and both are reversed: the
+    comparison the bar enabled is one nobody makes, because you pick the
+    bug you are hunting rather than the class with the widest CWE set, and
+    29 tracks ending at 29 different x positions under labels that wrap to
+    one line or two is most of why four tidy columns read as a jumble.
 
-    def _tokens(self):
-        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
-            css = fh.read()
-        found = {}
-        for name, light, dark in re.findall(
-                r"(--[a-z0-9-]+):\s*light-dark\(\s*(#[0-9a-fA-F]{6})\s*,"
-                r"\s*(#[0-9a-fA-F]{6})\s*\)", css):
-            found[name] = (light, dark)
-        return found
+    The arguments are still in the sheet, marked reversed. This is what
+    stops the parts coming back by accident: they are named here, so
+    adding one is a decision rather than a diff."""
+
+    STRUCTURE = ["map-group", "map-group-name", "map-grid", "map-class"]
+    ENTRY = ["map-label", "map-count"]
 
     @staticmethod
-    def _luminance(hexcolour):
-        channels = [int(hexcolour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
-        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-                  for c in channels]
-        return (0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2])
+    def _read(name):
+        with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as fh:
+            return fh.read()
 
-    @classmethod
-    def _ratio(cls, a, b):
-        la, lb = cls._luminance(a), cls._luminance(b)
-        hi, lo = max(la, lb), min(la, lb)
-        return (hi + 0.05) / (lo + 0.05)
+    def test_the_renderer_emits_exactly_these_parts(self):
+        js = self._read("app.js")
+        block = js[js.index("function renderClassMap"):
+                   js.index("function renderSelection")]
+        found = re.findall(r'class="(map-[a-z-]+)', block)
+        self.assertEqual(
+            found, self.STRUCTURE + self.ENTRY,
+            "renderClassMap emits a part this test does not know about, or "
+            "has stopped emitting one it does")
 
-    def _fill_token(self):
-        with open(os.path.join(STATIC_DIR, "style.css"), encoding="utf-8") as fh:
-            css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.S)
-        rule = re.search(r"\.map-track\s*>\s*i\s*\{([^}]*)\}", css)
-        self.assertIsNotNone(rule, "no .map-track fill rule")
-        assert rule is not None
-        token = re.search(r"background:\s*var\((--[a-z0-9-]+)\)",
-                          rule.group(1))
-        self.assertIsNotNone(token, "the fill is not a token")
-        assert token is not None
-        return token.group(1)
+    def test_the_sheet_has_no_rule_for_a_part_that_is_gone(self):
+        css = re.sub(r"/\*.*?\*/", "", self._read("style.css"), flags=re.S)
+        styled = set(re.findall(r"\.(map-[a-z-]+)", css))
+        emitted = set(self.STRUCTURE + self.ENTRY)
+        self.assertEqual(
+            sorted(styled - emitted), [],
+            "a .map-* rule outlived the markup it styled")
+        # One direction only: .map-group is the grid item the container's
+        # own gap spaces, so it carries no rule and needs none. A part that
+        # paints text is a different matter -- an unstyled one would fall
+        # back to the browser's 16px serif in the middle of the picker.
+        self.assertEqual(
+            sorted(set(self.ENTRY) - styled), [],
+            "an entry part is rendered with no rule at all")
 
-    def test_the_bar_clears_three_to_one_against_its_own_track(self):
-        tokens = self._tokens()
-        fill = self._fill_token()
-        self.assertIn(fill, tokens, f"{fill} is not a light-dark token")
-        for index, theme in ((0, "light"), (1, "dark")):
-            with self.subTest(theme=theme):
-                ratio = self._ratio(tokens[fill][index], tokens["--line"][index])
-                self.assertGreaterEqual(
-                    round(ratio, 2), 3.0,
-                    f"the class-map bar is {ratio:.2f}:1 on its track in "
-                    f"{theme}; a graphic that carries meaning needs 3:1")
-
-    def test_the_bar_still_encodes_a_spread_worth_drawing(self):
-        """If every class held about the same number of CWEs the bar would
-        be decoration, and the right fix would be deleting it rather than
-        darkening it."""
-        sys.path.insert(0, os.path.dirname(STATIC_DIR))
-        from modules.cwe_categories import CATEGORIES
-        counts = [len(v.get("core", [])) + len(v.get("extended", []))
-                  for v in CATEGORIES.values()]
-        self.assertGreaterEqual(
-            max(counts) / min(counts), 4.0,
-            "the classes are too alike for a bar to say anything")
+    def test_the_removed_parts_are_gone_from_every_file(self):
+        template = os.path.join(os.path.dirname(STATIC_DIR),
+                                "templates", "index.html")
+        with open(template, encoding="utf-8") as fh:
+            files = {"index.html": fh.read()}
+        files["app.js"] = self._read("app.js")
+        files["style.css"] = self._read("style.css")
+        for name, text in files.items():
+            stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+            stripped = re.sub(r"<!--.*?-->", "", stripped, flags=re.S)
+            for part in ("map-code", "map-track"):
+                with self.subTest(file=name, part=part):
+                    self.assertNotIn(part, stripped)
 
 
 class TestMonoMeansThisIsACode(unittest.TestCase):
@@ -634,7 +626,6 @@ class TestMonoMeansThisIsACode(unittest.TestCase):
         "kbd": "keyboard keys, where mono is the convention",
         ".source-code": "GHSA / NVD / OSV",
         ".chip-code": "the class code on a chip",
-        ".map-code": "the class code in the picker",
         ".combo-code": "a CWE id in the finder",
         ".combo-in": "the code of the class that already covers it",
         ".combo-note": "a CWE count, or the abstraction level",

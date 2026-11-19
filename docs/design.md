@@ -144,26 +144,43 @@ was empty, and the card's whole job was to point at a control somewhere
 else.
 
 It opens on the taxonomy now. All 29 bug classes, under their families,
-each with its code and the size of its CWE set, and picking one is a click
-rather than a hunt. The hero is the most characteristic thing in this
-subject's world — the set of weakness classes — rendered as the real thing
-rather than described.
+each with the size of its CWE set, and picking one is a click rather than
+a hunt. The hero is the most characteristic thing in this subject's world
+— the set of weakness classes — rendered as the real thing rather than
+described.
 
 ```
  Search by how the bug
  works, not by the title.          ← the claim, at display size
- Pick a class to start — or type a CWE id…
+ Pick a class to start, or search by CWE id…
 
  Access control & auth ─────────────────────────────────────────
- ┌──────────────────┬──────────────────┬──────────────────┐
- ┃BAC Broken Access │CSRF Cross-Site   │CORS CORS / Origin│   ┃ = the spine,
- ┃    Control       │     Request…     │     Validation   │       filled when
- ┃    17 CWEs       │     2 CWEs       │     3 CWEs       │       picked
- └──────────────────┴──────────────────┴──────────────────┘
+ ┃ Broken Access      Cross-Site Request   CORS / Origin      ┃ = the spine,
+ ┃ Control (BAC…)     Forgery (CSRF)       Validation Failure     filled when
+ ┃ 17 CWEs            2 CWEs               3 CWEs                 picked
  Injection ─────────────────────────────────────────────────────
- ┌──────────────────┬──────────────────┬──────────────────┐
- │SQLI SQL Injection│XSS  Cross-Site…  │SSTI Server-Side… │
+   SQL Injection      Cross-Site           Server-Side Template
+                      Scripting (XSS)      Injection / Code…
+   3 CWEs             5 CWEs               6 CWEs
 ```
+
+An entry says two things: which bug it is, and how wide a net the class
+casts. It said four. A mono code sat in a left gutter — `BAC`, `CSRF`,
+`SSTI` — spelling the name beside it a second time in the API's internal
+spelling, which is something to look up in `/api/docs` rather than to read
+29 times on the way to picking one. And a 2px track under each entry drew,
+as a length, the count printed directly above it.
+
+**Reversed, later.** The track was argued for on this page as 29 classes
+made comparable at a glance, and the argument does not survive asking who
+makes that comparison. Nobody picks a bug class by the size of its CWE
+set; you pick the bug you are hunting and then read what it covers. What
+the track did do was end at a different x under every entry — labels wrap
+to one line or two and the track sat below whatever they did — and 29
+ragged underlines is most of the reason four tidy columns read as a
+jumble. The label and the count are pushed to the two edges of the entry
+instead, so every label in a row starts on one line and every count ends
+on another.
 
 Two structural devices, both carrying information rather than decorating:
 the hairline that runs out from each family name, so a family reads as a
@@ -174,7 +191,9 @@ that does not exist.
 
 The map and the rail's checkbox list are two views of the same checkboxes,
 so they cannot disagree; a browser test asserts exactly that, because if
-they ever drift the page shows one selection and searches another. Clicking
+they ever drift the page shows one selection and searches another. They
+are not, however, two views that belong on screen at once — see
+[One taxonomy, not two](#one-taxonomy-not-two). Clicking
 a picked class removes it, so the map is a toggle rather than a one-way
 door. Focus stays on the tile you clicked: the shared `pickEntry()` hands
 focus to the rail's search box, which is right when you arrived by typing
@@ -284,6 +303,64 @@ cannot drift.
 text anywhere: this is a scanning surface, and a centred left edge destroys
 scanning. The one right-aligned thing is a folded section's value, which
 sits against the rail's right edge so the chevrons line up down the column.
+
+### One taxonomy, not two
+
+The pass above quietened the chrome, and the page was still reported as
+busy to look at. Measuring the landing screen said why: it was printing
+the taxonomy twice.
+
+| On the landing screen | Before | After |
+|---|---:|---:|
+| Painted elements | 444 | 202 |
+| Of those, carrying text | 200 | 105 |
+| …at 13px or smaller | 188 | 94 |
+| Bug-class names on screen | 59 | 30 |
+| Family headings, for 7 families | 14 | 7 |
+| Characters of text in the 320px rail | 5542 | 408 |
+| Characters of text in the workspace | 1415 | 1296 |
+
+Every class was on screen twice at rest: once as the workspace map, and
+again as a rail list with a description under every label. A second copy
+of the taxonomy is not a second way in — it is the same way in, printed
+twice, in two visual languages, and the reader has to work out that they
+are the same 29 things before either is useful. 94% of the page's text
+sat in the two smallest steps of the scale, with nothing between 13px and
+the 28px of the heading.
+
+So the map is the taxonomy, and the rail list is the control that edits
+it. It folds, like Sources and Options, and ships shut. The rule those
+two established — a fold may hide controls and never state — is why it
+needs no value on its heading: what is ticked is named directly above it,
+as Query-target chips, and a value there would be the same selection
+printed a third time. Two browser tests hold the pair of claims: that a
+class name is painted once per place it means something, and that the one
+fold without a value has its setting on screen anyway.
+
+The description under each label went with it — up to five lines at 11px,
+29 times, the largest block of small grey text the page had. It is on the
+row's `title`, on the map entry beside it, and in
+[Bug classes](bug-classes.md), which has the width for a sentence.
+
+```
+ before                              after
+ ┌─────────────────────────┐         ┌─────────────────────────┐
+ │ Bug classes 29 available│         │ Bug classes 29 available ⌄
+ │ [Filter these 29 classes]         │ ☑ Include extended CWEs │
+ │ ┌─────────────────────┐ │         │                         │
+ │ │ Access control & auth│ │        │ Sources          GHSA ⌄ │
+ │ │ ☑ Broken Access Cont…│ │        │                         │
+ │ │   Authorization and  │ │  ~1900 │ Scope                   │
+ │ │   access-control fla…│ │   px   │ [maven ▾] [Any ▾]       │
+ │ │   object-level (BOLA │ │   of   │                         │
+ │ │   /IDOR), function-l…│ │  list  │ Options  100 results, ⌄ │
+ │ │ ☐ Cross-Site Request…│ │        │                         │
+ │ │   A state-changing r…│ │        └─────────────────────────┘
+ │ │   …27 more           │ │
+ │ └─────────────────────┘ │          the same 29 classes are in
+ └─────────────────────────┘          the workspace, with the room
+                                      to show them
+```
 
 ## The second page
 
@@ -454,7 +531,8 @@ not a better answer than "this part was already right".
 | Severity badge | **Reworked.** Was a saturated fill duplicating the spine; now the word on a 16% tint of its own band, with text tokens that clear AA as ink rather than behind it. |
 | AI verdict panel | **Redesigned.** A bordered box nested inside a borderless entry was the one place the rebuild contradicted itself. Same device as the entry: a coloured edge and space. |
 | Onboarding panel | **Redesigned.** Removed. A border around the whole opening screen is a border around the page. |
-| Class field | **Redesigned.** Twenty-nine equal boxes said these are twenty-nine equal things; the CWE count is a length now, and the track doubles as the entry's baseline. |
+| Class map entry | **Redesigned twice.** Twenty-nine equal boxes said these are twenty-nine equal things, so the box went and the CWE count became a length. Reversed: nobody picks a bug class by the size of its CWE set, so the comparison the track enabled is one no operator makes — and 29 tracks ending at 29 different x positions, under labels that wrap to one line or two, is most of why four tidy columns read as a jumble. The mono code went with it: `BAC` beside "Broken Access Control" is the API's spelling of the name already there. An entry is a name and a count, pushed to the two edges so a row's labels start on one line and its counts end on another. |
+| Rail class list | **Folded.** It was the second printing of the taxonomy the workspace map already shows — 29 names and 7 family headings rendered twice over, with a five-line description under every label. It is the control that edits the map now, shut by default, and the one fold with no value on its heading: what is ticked is named directly above it as Query-target chips. |
 | Status pills | **Reworked.** Mono was set on the whole pill, putting a monospace face on "Connected" and "cached"; the state words were shouted caps, and `AUTHED` was `gh auth status` vocabulary. |
 | Status dots | **Reworked.** Filled vs ring, not red vs green alone — below 480px the word beside the dot is clipped, so hue was carrying the state by itself. |
 | Result summary | **Reworked.** An empty CWE list rendered a stray `<code>` box; the active order is stated here now. |
@@ -472,7 +550,7 @@ not a better answer than "this part was already right".
 | Run buttons | **Kept.** One filled control — the one that spends money — and a disabled action is grey, never a dimmed accent. |
 | Toolbar actions | **Kept.** "Refine with AI" is the filled one; it is the control that spends. |
 | Package range | **Kept.** `lodash → 4.17.21`: the arrow carries meaning, which is the brief's own exception to the appended-arrow tell. |
-| EPSS meter | **Kept.** A quantity as a length beside the figure — the same device as the class measure, which is what makes them one system. |
+| EPSS meter | **Kept.** A quantity as a length beside the figure, and now the only one on the page: a percentile is a position in a distribution, which is what a length is for, where a CWE-set size was only ever a number that happened to be drawable. |
 | Export popover | **Kept.** A `<details>` popover genuinely needs an edge: it floats over content. |
 | Auth gate | **Kept.** A modal that traps focus and inerts the page, with one input and one action. |
 | Toasts | **Kept.** Transient messages stay transient; only the persistent warnings moved into the flow. |

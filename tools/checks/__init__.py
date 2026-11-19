@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from . import cleanup
 from . import core
+from . import declutter
 from . import frontend
 from . import hardening
 from . import hardening2
@@ -39,6 +40,7 @@ GROUPS: dict[str, list[Check]] = {
     "hardening2": hardening2.CHECKS,
     "redesign": redesign.CHECKS,
     "simplify": simplify.CHECKS,
+    "declutter": declutter.CHECKS,
 }
 
 

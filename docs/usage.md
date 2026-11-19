@@ -4,8 +4,8 @@ The left rail builds a query; the right column is the result queue. Nothing is
 fetched until you press one of the two buttons at the bottom of the rail.
 
 The right column has two states. Before a search it is the bug-class map —
-every class, with its CWE count as a comparable length — and picking one is a
-click. After a search it is the queue, with the result controls (Refine with
+every class under its family, with the size of its CWE set — and picking one
+is a click. After a search it is the queue, with the result controls (Refine with
 AI, Retry failed, Confirmed only, Export) in a bar that sticks to the top.
 Those controls do not exist before a search, because none of them can do
 anything until there is a result to act on.
@@ -47,13 +47,23 @@ so three targets over 100 advisories is 300 model calls. See
 
 ## 3 · Bug classes
 
-29 classes in 7 groups, `Broken Access Control` preselected. The **filter box**
-narrows the list by label, description, group name **or** community term — so
-`toctou`, `__proto__`, `md5`, `dll hijack` and `webshell` all find their class.
+**Pick classes in the map on the right.** 29 classes in 7 groups, each with
+what it covers, one click to add or remove. The rail's **Bug classes** section
+is the same 29 classes as a checkbox list, and it ships **folded** — it is
+there to change the selection once results have replaced the map, not to show
+you the taxonomy twice. Click the heading to open it.
+
+What is selected is always visible either way, as **Query targets** chips
+above, so nothing a search will do is hidden behind the shut fold.
+
+Inside it, the **filter box** narrows the list by label, description, group
+name **or** community term — so `toctou`, `__proto__`, `md5`, `dll hijack` and
+`webshell` all find their class.
 
 A class you have already selected is **never hidden by the filter**: it is part
 of your query, so it stays visible (with a thin accent bar marking that it was
-kept rather than matched).
+kept rather than matched). Each row carries its full description as a tooltip;
+the table in [Bug classes](bug-classes.md) has all 29 at a readable width.
 
 **Include extended CWEs** — on gives higher recall with more noise, off keeps
 only the high-precision *core* set. It only affects curated classes; a CWE you
@@ -66,7 +76,9 @@ Full table: [Bug classes](bug-classes.md).
 **Sources** and **Options** ship folded — the defaults suit almost every
 query — so click the heading to open either. A folded heading states what
 the section is currently set to (`GHSA + NVD`, `100 results, last 30 days`),
-so nothing a search will do is hidden behind a shut section.
+so nothing a search will do is hidden behind a shut section. (Bug classes
+folds too, and is the one heading with no value on it: the Query-target
+chips above already name what is ticked.)
 
 Tick any combination of GHSA, NVD, OSV and OSV-native. The NVD hint below the
 checkbox computes the real cost of your current selection

@@ -24,12 +24,12 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 923 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 927 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **217/217 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **223/223 caught** |
 
 The `caught` figure is read from `docs/revert-results.json`, which
 `tools/revert_checks.py` writes when it runs the whole battery.
@@ -46,7 +46,7 @@ module unpatched first now and reports `BASELINE RED` instead.
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 217 named bugs in the working tree, runs the test module that is
+each of 223 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -295,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 217 checks, by area
+## The 223 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -335,7 +335,7 @@ codebase and the test module that now refuses to let it back in.
 | app.js loses its scope wrapper | `tests/test_frontend_js.py` |
 | module-map drift test stops deriving | `tests/test_docs.py` |
 
-### HTTP layer, jobs, cache, config, AI classifier (44)
+### HTTP layer, jobs, cache, config, AI classifier (43)
 
 | Reverting this | is caught by |
 |---|---|
@@ -380,7 +380,6 @@ codebase and the test module that now refuses to let it back in.
 | the revert harness stops checking a green baseline | `tests/test_cleanup_stays_clean.py` |
 | the sandbox copies the operator's .env into /tmp again | `tests/test_cleanup_stays_clean.py` |
 | the caught figure goes back to being asserted, not measured | `tests/test_cleanup_stays_clean.py` |
-| the class measure stops being proportional | `tests/test_ui_e2e.py` |
 | the status pill state is unannounced at 480px again | `tests/test_frontend_js.py` |
 | the unreachable-source dot differs only by colour again | `tests/test_frontend_js.py` |
 
@@ -525,7 +524,7 @@ codebase and the test module that now refuses to let it back in.
 | the forbidden keyword trap comes back | `tests/test_cwe_categories.py` |
 | the overflows keyword trap comes back | `tests/test_cwe_categories.py` |
 
-### The redesign, and the review that read it back (20)
+### The redesign, and the review that read it back (19)
 
 | Reverting this | is caught by |
 |---|---|
@@ -537,7 +536,6 @@ codebase and the test module that now refuses to let it back in.
 | the result summary goes back to one string joined by middle dots | `tests/test_frontend_js.py` |
 | the design audit never opens the surfaces that float above the page | `tests/test_frontend_js.py` |
 | the audit fixture stops at the advisory, so no verdict is measured | `tests/test_frontend_js.py` |
-| the class-map bar goes back to 1.7:1 against its own track | `tests/test_frontend_js.py` |
 | the taxonomy group headings go back to the monospace face | `tests/test_frontend_js.py` |
 | the skip link goes back to the monospace face | `tests/test_frontend_js.py` |
 | the API reference shouts its section headings again | `tests/test_frontend_js.py` |
@@ -562,5 +560,18 @@ codebase and the test module that now refuses to let it back in.
 | replaying a saved search leaves the headings on the query it replaced | `tests/test_ui_e2e.py` |
 | the phone filter drawer is transparent and the page reads through it | `tests/test_ui_e2e.py` |
 | a type step is declared with nothing on the page using it | `tests/test_frontend_js.py` |
+
+### One taxonomy, not two: the map, the fold, the entry (8)
+
+| Reverting this | is caught by |
+|---|---|
+| the rail prints the whole taxonomy a second time, at rest | `tests/test_ui_e2e.py` |
+| the description block comes back under all twenty-nine labels | `tests/test_ui_e2e.py` |
+| a class loses its description without gaining a title | `tests/test_ui_e2e.py` |
+| the bug-class fold grows a value its own chips already say | `tests/test_ui_e2e.py` |
+| the mono code comes back to every map entry | `tests/test_frontend_js.py` |
+| the comparison bar comes back under every map entry | `tests/test_frontend_js.py` |
+| a .map-* rule outlives the markup it styled | `tests/test_frontend_js.py` |
+| the map entry hangs its label and its count from one edge | `tests/test_ui_e2e.py` |
 
 <!-- end generated check index -->
