@@ -145,12 +145,13 @@
   --text-base:    14px;     /* body, inputs, buttons */
   --text-lg:      17px;     /* card and panel titles */
   --text-xl:      22px;     /* section and dialog headings */
-  --text-display: clamp(28px, 3.4vw, 40px);   /* the page heading, once */
-  /* A seventh step, used by exactly one thing: the funnel figures. It
-     exists because the funnel is the page's single loud element, and at
-     --text-display it would be two things claiming the same rank. If
-     anything else ever uses it, it has stopped being the loud thing. */
-  --text-figure:  clamp(30px, 4.2vw, 52px);
+  /* The page heading, once. It now has exactly one user — the line that
+     tells you how to start — and that line leaves the page as soon as
+     there are results, so nothing on the results view competes with an
+     advisory title. A seventh step above this one used to carry the
+     funnel figures at 52px; the funnel is gone, and a step with no user
+     is a decision nobody made. */
+  --text-display: clamp(28px, 3.4vw, 40px);
 
   --weight-normal: 400;
   --weight-medium: 500;
@@ -496,6 +497,60 @@ button.pill-action:hover { background: var(--accent-2); border-color: var(--acce
 }
 .section-heading h3 { margin: 0; font-size: var(--text-base); }
 .section-note { color: var(--meta-dim); font: var(--weight-medium) var(--text-sm) var(--mono); letter-spacing: var(--tracking-code); }
+
+/* A folding section. The heading is the control, so it needs the whole
+   row as a hit area -- and 44px of it, because below 1180px this rail is
+   a slide-over and these are the first things a thumb reaches for. */
+summary.section-heading {
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 0;
+  padding-right: 22px;
+  cursor: pointer;
+  list-style: none;
+}
+summary.section-heading::-webkit-details-marker { display: none; }
+.control-fold[open] > summary.section-heading { margin-bottom: 12px; }
+/* The chevron is drawn rather than typed: a "+"/"−" or a "▸" in the markup
+   is a glyph in the accessibility tree that reads out after the heading,
+   and <details> already announces its own state. */
+.control-fold > summary.section-heading::after {
+  position: absolute;
+  right: 20px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--faint);
+  border-bottom: 1.5px solid var(--faint);
+  content: "";
+  transform: translateY(-2px) rotate(45deg);
+}
+.control-fold[open] > summary.section-heading::after {
+  transform: translateY(2px) rotate(225deg);
+}
+.control-fold { position: relative; }
+.control-fold:hover > summary.section-heading::after { border-color: var(--ink); }
+/* No :focus-visible rule here on purpose. `:where(a, button, select,
+   input, summary):focus-visible` at the top of this sheet already rings
+   every summary, and the override written here first asked for an
+   undefined var(--focus): an outline shorthand whose colour is invalid at
+   computed-value time resolves to outline-style: none, so a more specific
+   rule silently removed the ring the base rule was drawing. The design
+   audit failed seven states on it. */
+/* What the section is set to, while it is shut. Folding a control away is
+   only safe if the setting stays visible; otherwise the rail hides state
+   rather than clutter, and a query runs with sources the reader cannot
+   see. Truncated rather than wrapped: the heading row stays one line. */
+.fold-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.control-fold[open] > summary.section-heading .fold-value { display: none; }
 
 .field { min-width: 0; margin: 0 0 12px; }
 .field-last { margin-bottom: 0; }
@@ -1096,114 +1151,15 @@ kbd {
 
 .workspace { min-width: 0; padding: 0 clamp(18px, 2.5vw, 40px) 48px; }
 
-/* One column, not two. The funnel was forced into a 240px cell beside the
-   severity key, so it wrapped and orphaned its last figure on a line of
-   its own while the key floated at a different baseline. The key belongs
-   with the thing it explains -- the coloured edge on each entry -- so it
-   sits at the end of the funnel row, bottom-aligned. */
-.workspace-intro {
-  display: grid;
-  gap: 4px;
-  padding: 28px 0 22px;
-  border-bottom: 1px solid var(--line);
-}
-.workspace-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: clamp(18px, 4vw, 48px);
-  margin-top: 18px;
-}
-.workspace-heading h2 {
-  margin: 8px 0 8px;
-  font-size: var(--text-display);
-  line-height: 1.05;
-  letter-spacing: -.04em;
-}
-.workspace-heading p { max-width: 520px; margin: 0; color: var(--muted); font-size: var(--text-base); }
+/* The browse view holds one thing: the bug-class map. The command bar is
+   display:none rather than disabled-but-visible, because a row of four
+   greyed controls is a page that looks broken, not a page that is waiting.
+   It arrives with the first search and then stays for the session.
 
-/* The funnel: 944 CWEs -> 29 classes -> what you picked -> what came back.
-   No box, no border, no fill — the moment it gets one it becomes the
-   three-stat card row this design deleted from the rail, which is the
-   brief's named default hero treatment. It earns its size by being
-   derived from the live query and by being the only loud thing here. */
-.funnel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px clamp(20px, 4vw, 44px);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.funnel li {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.funnel b {
-  color: var(--ink);
-  font-size: var(--text-figure);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -.045em;
-  font-variant-numeric: tabular-nums;
-}
-.funnel span {
-  color: var(--faint);
-  font-size: var(--text-sm);
-}
-/* The stage you are at. Not a colour change -- the accent is spoken for by
-   focus and the primary action -- but weight: the figure that is still
-   waiting is quiet until it has an answer. */
-/* A figure that has no answer yet is quieter AND smaller. An em dash set
-   at 52px bold is a horizontal rule, not a placeholder -- it read as a
-   divider under the figures beside it. --meta-dim rather than
-   --line-bright because the first attempt measured 2.04:1 against the
-   ground, under the 3:1 floor for large text: a figure nobody can read is
-   not a quiet figure, it is a missing one. */
-/* Full size, so it keeps the row's baseline, and a middot rather than an
-   em dash. At 52px an em dash is a horizontal rule -- it read as a divider
-   under the figures beside it -- and shrinking it instead pushed its label
-   off the shared baseline. A dot is obviously a placeholder at any size.
-   --meta-dim rather than --line-bright: the first attempt measured 2.04:1
-   against the ground, under the 3:1 floor for large text, which the design
-   audit caught. A figure nobody can read is not a quiet figure. */
-.funnel li.is-pending b { color: var(--meta-dim); }
-
-.threat-key { min-width: 0; }
-.threat-key-head, .threat-key-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--faint);
-  font: 650 var(--text-xs) var(--mono);
-  letter-spacing: .08em;
-}
-.threat-key-head { padding-bottom: 8px; }
-/* A key, not a panel. These were four more bordered cards in a page already
-   built out of them, and a legend has no business carrying the same visual
-   weight as the thing it explains. The swatch and the words are all a key
-   needs; the boxes were holding nothing. */
-.threat-scale { display: flex; flex-wrap: wrap; gap: 7px 13px; }
-.threat-level {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0;
-  background: none;
-  border: 0;
-  border-radius: 0;
-}
-.threat-level i { flex: 0 0 3px; width: 3px; height: 14px; border-radius: var(--radius-pill); background: var(--signal); }
-.threat-level b { font: 700 var(--text-xs)/1.2 var(--sans); }
-.threat-level small { color: var(--faint); font: 500 var(--text-xs) var(--mono); }
-.threat-level.critical { --signal: var(--sev-critical); }
-.threat-level.high { --signal: var(--sev-high); }
-.threat-level.medium { --signal: var(--sev-medium); }
-.threat-level.low { --signal: var(--sev-low); }
-.threat-key-foot { padding-top: 8px; justify-content: flex-start; gap: 12px; }
+   `display: none` and not `visibility: hidden`: the bar is sticky and 64px
+   tall, so a hidden-but-present one would push the class map down the
+   screen by the height of controls nobody can use. */
+.workspace[data-view="browse"] .result-command { display: none; }
 
 .result-command {
   position: sticky;
@@ -1520,6 +1476,26 @@ button.warn-btn:disabled {
 }
 .badge.pkg { font-weight: 500; }
 .badge.eco { letter-spacing: var(--tracking-code); }
+
+/* The three ranks below the title.
+
+   The flags row is the exceptional one, and its members are already loud
+   on their own terms -- a fill, a strike-through, a warning hue -- so the
+   hairline the generic badge row draws between items would be a separator
+   between three things that are each other's opposite. Space instead. */
+.card-flags { gap: 10px; }
+.card-flags > .badge + .badge::before { content: none; }
+
+/* "lodash -> 4.17.21" is the one fact on an entry that is an instruction,
+   and it spent this page's life at the same 11px grey as the provenance
+   codes beside it. One step up the scale and the full ink: a reader
+   scanning a column for "does this touch me" lands here, not on GHSA+NVD. */
+.card-affected { margin-top: 12px; }
+.card-affected > .badge.pkg {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semi);
+}
 .badge.src { color: var(--ink); border-color: var(--line-bright); font-weight: var(--weight-semi); }
 .badge--native { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
 .badge--withdrawn { color: var(--bad); text-decoration: line-through; }
@@ -1575,6 +1551,15 @@ button.warn-btn:disabled {
    stay -- but as quiet sentence case, not tracked-out caps competing with
    the data beside them. */
 .meta-label { margin-right: 5px; color: var(--meta-dim); font-size: var(--text-xs); letter-spacing: var(--tracking-flat); }
+/* The provenance codes moved down into this row, and a row is only quiet
+   if all of it is: .badge.src carried --ink to stand out of the badge row
+   it used to lead, which here would have made the data source the darkest
+   thing under the verdict. One ink for the whole row. */
+.meta .badge { color: var(--faint); }
+/* 52ch is the cap for a badge leading its own row. In the receipts row the
+   CWE name is one of eight facts, and at full length it pushed the advisory
+   id and the CVE -- the two links out of this page -- onto a second line. */
+.meta .badge.cwe { max-width: min(100%, 32ch); }
 
 .epss-meter {
   display: inline-flex;
@@ -1850,6 +1835,15 @@ code {
     width: min(400px, 92vw);
     height: auto;
     overflow: hidden;
+    /* The base rail is deliberately unfilled: on a desktop it shares the
+       page's surface and one vertical rule is the whole separation. A
+       slide-over is not that -- it is a panel over the page -- and this
+       rule set position/z-index/shadow and never a background, so on every
+       phone the filter drawer was transparent and the class map read
+       straight through the controls on top of it. --rail-bg was declared
+       in all four theme blocks and referenced nowhere; this is the user it
+       was written for. */
+    background: var(--rail-bg);
     box-shadow: var(--shadow);
     transform: translateX(-105%);
     visibility: hidden;
@@ -1916,8 +1910,6 @@ code {
 
 @media (max-width: 700px) {
   .topbar { grid-template-columns: minmax(0, 1fr) auto auto; padding-inline: 12px; }
-  .workspace-intro { display: block; padding: 22px 0 18px; }
-  .threat-key { margin-top: 18px; }
   .result-command { position: static; }
   .toolbar-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar-actions > button, .match-filter, .export-menu, .export-menu > summary { width: 100%; }
@@ -1958,7 +1950,12 @@ code {
      the source order is the right tab order. */
   .match-filter { order: 1; grid-column: 1 / -1; }
   .card-top { flex-direction: column; gap: 8px; }
-  .meta { grid-template-columns: 1fr; }
+  /* Back to the wrapping row the base rule uses. One column per fact was
+     three rows when this held five facts; it holds eight now -- the source,
+     the ecosystem and the CWE moved down into it -- and eight stacked lines
+     of grey is the texture this row exists to avoid. Flowing lets the short
+     codes share a line and only the labelled pairs take one each. */
+  .meta { display: flex; gap: 4px 14px; }
   .verdict-head { flex-wrap: wrap; }
   .verdict-score { width: 100%; margin-left: 14px; }
   .toast { right: 10px; bottom: 10px; width: calc(100vw - 20px); }

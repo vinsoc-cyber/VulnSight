@@ -254,6 +254,21 @@ def _open_overlay(page, kind: str) -> None:
     else:
         page.click("#filters-toggle")
     page.wait_for_selector(wanted, state="visible", timeout=8000)
+    if kind == "drawer":
+        # Sources and Options ship folded, and a <details> that is shut
+        # renders nothing to measure -- so folding them would have quietly
+        # dropped every control inside from the contrast and tap-target
+        # counts, and this state is the only one that opens the rail at all.
+        # Expanding here keeps the drawer measuring the whole rail.
+        page.evaluate(
+            "() => document.querySelectorAll('.control-rail details')"
+            ".forEach(el => { el.open = true; })")
+        # A control from inside a fold, not the heading: the heading is
+        # visible whether the section is open or shut, so waiting on it
+        # would pass over a rail that never expanded -- and this state is
+        # the only one that opens the rail at all, so everything inside
+        # both folds would silently leave the counts.
+        page.wait_for_selector("#max_results", state="visible", timeout=8000)
 
 
 MEASURE = r"""

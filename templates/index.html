@@ -148,10 +148,19 @@
         </div>
       </section>
 
-      <section class="control-section" aria-labelledby="sources-heading">
-        <div class="section-heading">
-          <h3 id="sources-heading">Sources</h3>
-        </div>
+      <!-- Sources and Options fold. The rail held seven sections, all open,
+           all the time: about 1400px of scroll behind a 320px column, so
+           opening the page put you in the middle of a checkbox list with no
+           visible beginning. These two are the ones a search rarely needs --
+           the defaults are right for almost every query -- and each keeps a
+           value beside its name while shut, so folding hides the controls
+           and never the setting. Scope stays open: ecosystem is the filter
+           people actually change between searches. -->
+      <details class="control-section control-fold">
+        <summary class="section-heading">
+          <h3>Sources</h3>
+          <span class="fold-value" id="sources-value"></span>
+        </summary>
         <fieldset class="field field-last">
           <legend class="sr-only">Choose data sources</legend>
           <div class="cats">
@@ -178,7 +187,7 @@
             <span><span class="check-title">Force-refresh OSV cache</span><span class="hint">~10 MB for maven/go, ~220 MB for npm</span></span>
           </label>
         </fieldset>
-      </section>
+      </details>
 
       <section class="control-section" aria-labelledby="scope-heading">
         <div class="section-heading">
@@ -206,10 +215,11 @@
         </div>
       </section>
 
-      <section class="control-section" aria-labelledby="query-heading">
-        <div class="section-heading">
-          <h3 id="query-heading">Options</h3>
-        </div>
+      <details class="control-section control-fold">
+        <summary class="section-heading">
+          <h3>Options</h3>
+          <span class="fold-value" id="options-value"></span>
+        </summary>
         <div class="row">
           <div class="field">
             <label for="published">Published</label>
@@ -271,7 +281,7 @@
             <option value="malware">Malware</option>
           </select>
         </div>
-      </section>
+      </details>
 
       </div><!-- /.rail-scroll -->
 
@@ -286,47 +296,23 @@
       </div>
     </aside>
 
-    <main class="workspace" id="workspace">
-      <section class="workspace-intro" aria-labelledby="workspace-title">
-        <div class="workspace-heading">
-          <h2 id="workspace-title">Advisory queue</h2>
-          <p>Merged records from GHSA, NVD and OSV, deduplicated across sources. Confirm with AI when CWE tags are too broad.</p>
-        </div>
-        <!-- The funnel and the severity key share one baseline.
+    <!-- Two views of one page, switched by data-view.
 
-             The funnel exists because this page's job is narrowing — 944
-             weaknesses down to the handful worth reading — and nothing on
-             it showed the narrowing. All four figures come from the live
-             query and the last is blank until a search runs: the moment
-             they become decoration, or acquire a box, they are the
-             three-stat card row this design deleted from the rail.
+         At rest the workspace is the bug-class map and nothing else. What
+         used to sit above it — "Advisory queue" at display size, a
+         paragraph, four figures at 52px and a severity key — was roughly
+         290px of chrome that never changed and never left, so the page
+         carried two display headings fighting for the top and a legend for
+         badges that were not on screen yet. Three of the four figures were
+         constants (the catalog size, the number of classes); the rail says
+         both in one line, and the live two are in the summary below.
 
-             The key sits here rather than beside the heading because it
-             explains the coloured edge on each entry below, and because
-             in its own grid cell it floated at a different baseline while
-             the funnel wrapped. -->
-        <div class="workspace-foot">
-          <ol class="funnel" id="funnel" aria-label="Where this query stands">
-            <li><b id="funnel-cwes">{{ cwe_count }}</b><span>CWEs</span></li>
-            <li><b>{{ categories|length }}</b><span>classes</span></li>
-            <li><b id="funnel-selected">0</b><span>selected</span></li>
-            <li><b id="funnel-found">—</b><span>advisories</span></li>
-          </ol>
-          <div class="threat-key" role="group" aria-label="Severity key">
-            <div class="threat-key-head"><span>Severity</span><span>CVSS</span></div>
-            <div class="threat-scale">
-              <span class="threat-level critical"><i aria-hidden="true"></i><b>Critical</b><small>9.0–10</small></span>
-              <span class="threat-level high"><i aria-hidden="true"></i><b>High</b><small>7.0–8.9</small></span>
-              <span class="threat-level medium"><i aria-hidden="true"></i><b>Medium</b><small>4.0–6.9</small></span>
-              <span class="threat-level low"><i aria-hidden="true"></i><b>Low</b><small>0.1–3.9</small></span>
-            </div>
-            <div class="threat-key-foot" role="group" aria-label="Signals shown on each advisory">
-              <span>GHSA</span><span>NVD</span><span>OSV</span><span>EPSS</span><span>AI</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
+         The command bar appears with the first search, because every
+         control on it — Refine with AI, Retry failed, Confirmed only,
+         Export — is dead until there is a result to act on, and four dead
+         controls above the fold read as a broken page rather than an
+         early one. -->
+    <main class="workspace" id="workspace" data-view="browse">
       <section class="result-command" aria-label="Result controls">
         <div class="result-summary">
           <div class="summary" id="summary" role="status" aria-live="polite">Select a bug class, then run a search.</div>

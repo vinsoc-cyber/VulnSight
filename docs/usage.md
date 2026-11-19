@@ -3,6 +3,13 @@
 The left rail builds a query; the right column is the result queue. Nothing is
 fetched until you press one of the two buttons at the bottom of the rail.
 
+The right column has two states. Before a search it is the bug-class map —
+every class, with its CWE count as a comparable length — and picking one is a
+click. After a search it is the queue, with the result controls (Refine with
+AI, Retry failed, Confirmed only, Export) in a bar that sticks to the top.
+Those controls do not exist before a search, because none of them can do
+anything until there is a result to act on.
+
 ## 1 · Find a bug
 
 The search box at the top of the rail matches **both** the 29 curated bug
@@ -55,6 +62,11 @@ picked yourself is always used exactly as-is.
 Full table: [Bug classes](bug-classes.md).
 
 ## 4 · Sources
+
+**Sources** and **Options** ship folded — the defaults suit almost every
+query — so click the heading to open either. A folded heading states what
+the section is currently set to (`GHSA + NVD`, `100 results, last 30 days`),
+so nothing a search will do is hidden behind a shut section.
 
 Tick any combination of GHSA, NVD, OSV and OSV-native. The NVD hint below the
 checkbox computes the real cost of your current selection

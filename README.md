@@ -83,7 +83,7 @@ Needs Python 3.9+ and the [`gh` CLI](https://cli.github.com/) authenticated
 .venv/bin/python -m unittest discover -s tests    # 543 tests; 517 need no credentials
 ```
 
-The 51 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
+The 59 browser tests in `tests/test_ui_e2e.py` skip themselves unless Playwright
 and a browser are installed — see [Testing](docs/testing.md).
 
 ## Status and limits

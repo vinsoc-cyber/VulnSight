@@ -1,7 +1,7 @@
 # Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests        # 915 tests: 864 offline + 51 browser
+.venv/bin/python -m unittest discover -s tests        # 923 tests: 864 offline + 59 browser
 .venv/bin/python -m unittest discover -s tests -v     # with names
 .venv/bin/python tests/test_app.py                    # a single file
 ```
@@ -21,7 +21,7 @@ OSV and the AI provider are all mocked.
 | `test_nvd_client.py` | 48 | date windowing, normalisation, rate-limit and 403 handling |
 | `test_http_retry.py` | 32 | the one retry policy: backoff, `Retry-After`, deadlines, what retries |
 | `test_osv_client.py` | 41 | zip parsing, CWE and keyword filters, load lock, cache-path validation |
-| `test_ui_e2e.py` | 51 | the real UI in a browser — *optional*, see below |
+| `test_ui_e2e.py` | 59 | the real UI in a browser — *optional*, see below |
 | `test_cache.py` | 22 | SQLite lifecycle, migrations, the v4 id backfill |
 | `test_doc_sync_tools.py` | 34 | the two doc generators: rewrite, `--check`, alignment, failure paths |
 | `test_jobs.py` | 31 | job lifecycle, orphan recovery, owner liveness, error redaction, pruning |
@@ -60,11 +60,11 @@ a third-party dependency and it **skips itself** unless both pieces are present:
 ```bash
 pip install -r requirements-dev.txt
 playwright install chromium          # or rely on a system Chrome
-.venv/bin/python -m unittest discover -s tests    # the 51 e2e tests join in
+.venv/bin/python -m unittest discover -s tests    # the 59 e2e tests join in
 ```
 
 Verified by hiding the import: `unittest discover` reports
-`Ran 915 tests` / `OK (skipped=48)`, and every other test still runs.
+`Ran 923 tests` / `OK (skipped=48)`, and every other test still runs.
 
 It exists because `static/app.js` decides what the user *believes* — which
 advisories are hidden, which verdict belongs to which advisory, and when real
@@ -86,6 +86,9 @@ test corresponds to a defect that actually shipped:
 | `TestToastsShareOneLiveRegion` | every toast lands in one named live region, so two at once do not compete |
 | `TestTheOpeningScreenIsTheTaxonomy` | every class is offered, the map and the rail cannot disagree, and picking one keeps focus on the tile |
 | `TestTheClassMeasureIsReal` | each class entry's track is painted, is proportional to its CWE count, and the widest class fills it — a style attribute would be dropped by the CSP and render every one of them empty |
+| `TestTheFilterDrawerIsOpaque` | the phone slide-over actually paints a background, and the desktop rail still does not — the drawer rule set position and a shadow but no fill, so the page read straight through the controls |
+| `TestTheCommandBarArrivesWithTheData` | the four result controls are absent until a search has run, arrive with it, and a query refused for having no source leaves the page browsing |
+| `TestAFoldedSectionStillStatesItsValue` | a shut section names its current setting, a ticked source updates it, and replaying a saved search rewrites it — `applyState()` writes `.value` directly and fires no change event |
 
 ### Assert on what is rendered
 
@@ -218,7 +221,7 @@ not test the broken behaviour.
 .venv/bin/python tools/revert_checks.py cooldown   # one, by label
 ```
 
-For each of 209 named bugs it re-introduces the bug in the working tree, runs the
+For each of 217 named bugs it re-introduces the bug in the working tree, runs the
 test module that should notice, and requires the suite to go **red**, then
 restores the file. A revert that leaves the suite green means that fix is not
 covered, whatever any summary claims. It runs in a disposable copy of the tree, so your checkout is never

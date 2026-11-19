@@ -48,6 +48,7 @@ TITLES = {
     "hardening": "Availability, cost and correctness from the whole-tree review",
     "hardening2": "Deployment, the published contract, and tools that could not fail",
     "redesign": "The redesign, and the review that read it back",
+    "simplify": "Taking the chrome off the workspace: views, folds, ranks",
 }
 
 # A group with no title would be headed by its bare dict key. Caught here

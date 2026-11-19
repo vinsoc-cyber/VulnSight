@@ -24,6 +24,7 @@ from . import hardening2
 from . import redesign
 from . import runtime
 from . import search
+from . import simplify
 
 Edit = tuple[str, str, str]
 Check = tuple[str, list[Edit], str]
@@ -37,6 +38,7 @@ GROUPS: dict[str, list[Check]] = {
     "hardening": hardening.CHECKS,
     "hardening2": hardening2.CHECKS,
     "redesign": redesign.CHECKS,
+    "simplify": simplify.CHECKS,
 }
 
 

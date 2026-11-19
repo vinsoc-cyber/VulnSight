@@ -644,8 +644,6 @@ class TestMonoMeansThisIsACode(unittest.TestCase):
         ".section-note": "the CWE catalog release, e.g. CWE 5.0",
         ".history-count": "a hit count",
         ".history-matches": "a confirmed-match count",
-        ".threat-key-head, .threat-key-foot": "CVSS and the source codes",
-        ".threat-level small": "CVSS bands, e.g. 7.0-8.9",
         ".verdict-score": "a confidence percentage",
     }
 

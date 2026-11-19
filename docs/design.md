@@ -101,17 +101,18 @@ sizes, and `tests/test_frontend_js.py` fails if one appears.
 | `--text-lg` | 17px | card and panel titles | 1.21 |
 | `--text-xl` | 22px | section and dialog headings | 1.29 |
 | `--text-display` | `clamp(28px, 3.4vw, 40px)` | the page heading, once | ~1.36 |
-| `--text-figure` | `clamp(30px, 4.2vw, 52px)` | the funnel figures, once | ~1.30 |
 
 Ratios widen as they climb, so a step up is legible as a change of **rank**
 rather than merely a change of size. The scale is also enforced to keep
 steps at least 1.10× apart.
 
-`--text-figure` is the seventh step and has exactly one user: the funnel.
-It exists because the funnel is the page's single loud element, and at
-`--text-display` the masthead and the figures would be two things claiming
-the same rank. If anything else ever takes this step, the funnel has
-stopped being the loud thing and the step should go.
+`--text-display` has exactly one user: the line that tells you how to
+start, on the browse view. That line leaves the page as soon as a search
+returns, so nothing on the results view competes with an advisory title.
+
+A seventh step, `--text-figure` at up to 52px, used to carry the funnel
+figures. The funnel is gone (see **Two views, one page** below) and a step
+with no user is a decision nobody made, so the step went with it.
 
 This replaced a genuine defect rather than a matter of taste. The sheet used
 to declare nine tokens, reference three of them, and then set **14
@@ -186,31 +187,79 @@ rail is where you *build* a query; the workspace is where you *read* the
 answer. Nothing that changes the query lives in the workspace, and nothing
 that reports results lives in the rail.
 
+### Two views, one page
+
+The workspace carries `data-view`, and it has two values. Everything that
+is dead in one of them is absent rather than greyed.
+
 ```
- ┌────────────────────────────────────────────────────────────────────────┐
- │ VS  VulnSight     ●GH Connected ○AI Not configured [Test AI] 1059 cached │  topbar, sticky
- ├──────────────────────┬─────────────────────────────────────────────────┤
- │ Build a search       │  Advisory queue                 Severity   CVSS │  display heading
- │  ┌────┬────┬────┐    │  Merged records from GHSA,     ┌────┬────┐      │  + severity key,
- │  │  4 │ 29 │944 │    │  NVD and OSV, ranked for       │Crit│High│      │    right-aligned
- │  └────┴────┴────┘    │  triage.                       └────┴────┘      │
- │                      │ ─────────────────────────────────────────────── │
- │ Bug class   CWE 4.20 │  Select a bug class.   [Refine AI][Retry][Exp↓] │  toolbar: the
- │ ┌──────────────────┐ │                                                 │    money actions
- │ │ 639 · IDOR …     │ │  ┌───────────────────────────────────────────┐  │
- │ └──────────────────┘ │  │  Search by how the bug works,             │  │  hero: the claim,
- │ [Broken Access ✕]    │  │  not by the title.                        │  │    not a stat
- │ ┌──────────────────┐ │  │                                           │  │
- │ │ ☑ Broken Access  │ │  │  ① Search   ② Refine   ③ Isolate          │  │  a real sequence,
- │ │ ☐ CSRF           │ │  └───────────────────────────────────────────┘  │    so numbered
+ data-view="browse"                       data-view="results"
+ ┌────────────────────────────┐           ┌────────────────────────────┐
+ │ Search by how the bug      │  display  │ 6 advisories, most urgent  │  the live count,
+ │ works, not by the title.   │   step    │ CWEs 639   6 AI-scored     │    at body size
+ │ Pick a class to start …    │           │        [Refine][Retry][Exp]│  commands arrive
+ │                            │           │ ────────────────────────── │    with the data
+ │ Access control & auth      │           │ ▌Improper access control…  │
+ │  BAC  Broken Access  17    │  the      │   Exploited (KEV)          │
+ │  CSRF Cross-Site Req  2    │  class    │   lodash → 4.17.21         │
+ │  ───────────────────────   │  map is   │   ● Confirmed match   94%  │
+ │ Injection                  │  the      │   GHSA+NVD npm CWE-639 …   │
+ │  SQLI SQL Injection   3    │  hero     │ ▌Prototype pollution in …  │
+ └────────────────────────────┘           └────────────────────────────┘
+```
+
+What used to sit above both: `Advisory queue` at display size, a
+paragraph, four figures at 52px and a severity key — roughly **290px of
+chrome that never changed and never left**. It gave the page two display
+headings fighting for the top, and a legend for badges that were not on
+screen yet. Three of the four figures were constants; the rail states both
+in one line, and the two live ones are in the summary.
+
+The command bar goes with it. Every control on it — Refine with AI, Retry
+failed, Confirmed only, Export — is dead until a result exists, and four
+greyed controls above the fold read as a broken page rather than an early
+one. It is `display: none` and not `visibility: hidden`, because the bar
+is sticky and 64px tall: hidden-but-present would push the class map down
+the screen by the height of controls nobody can use.
+
+The switch is one-way and fires when the search *starts*, after the
+validation bail-outs. A spinner, an empty result set and an error all
+belong to the results view, because each is an answer to a question that
+was asked; a rejected query never ran, so the page is still browsing.
+
+```
+ ┌──────────────────────┬─────────────────────────────────────────────────┐
+ │ Build a search       │  (workspace: one of the two views above)        │
+ │ 29 classes over 956  │                                                 │
+ │ CWEs, four sources   │                                                 │
+ │                      │                                                 │
+ │ Bug class   CWE 5.0  │                                                 │
+ │ ┌──────────────────┐ │                                                 │
+ │ │ 639 · IDOR …     │ │                                                 │
  │ └──────────────────┘ │                                                 │
- │ Sources / Scope …    │                                                 │
+ │ [Broken Access ✕]    │                                                 │
+ │ ┌──────────────────┐ │                                                 │
+ │ │ ☑ Broken Access  │ │                                                 │
+ │ │ ☐ CSRF           │ │                                                 │
+ │ └──────────────────┘ │                                                 │
+ │ Sources      GHSA ⌄  │  ← folded, value kept on the heading            │
+ │ Scope                │  ← open: ecosystem is changed between searches  │
+ │ Options  100 rows ⌄  │  ← folded                                       │
  │ ┌──────────────────┐ │                                                 │
  │ │ Run intelligent  │ │                                                 │  the only filled
  │ │       scan       │ │                                                 │    control
  │ └──────────────────┘ │                                                 │
  └──────────────────────┴─────────────────────────────────────────────────┘
 ```
+
+**The rail folds two of its seven sections.** It held all seven open at
+once — about 1400px of scroll behind a 320px column, so opening the page
+put you in the middle of a checkbox list with no visible beginning.
+Sources and Options are the two a search rarely needs, and each keeps its
+current value on the heading while shut, so folding hides the controls and
+never the setting: with Sources shut and no value there, a query could run
+against OSV's ~220MB npm export with nothing in the rail saying so. Scope
+stays open, because ecosystem is the filter people change between searches.
 
 Below `900px` the rail becomes a modal slide-over reached from a **Filters**
 button, and the workspace takes the full width. The breakpoint is declared
@@ -221,22 +270,20 @@ cannot drift.
  ┌───────────────────────────┐
  │ VS   ●GH ●AI [Test] ◐  ☰  │   below 460px the wordmark and the two
  ├───────────────────────────┤   status indicators are clipped out of
- │ Advisory queue            │   view (not removed — still announced),
- │ Merged records from …     │   because at 320px they were competing
- │ ┌─────────┬─────────┐     │   with the controls you came for
- │ │Critical │ High    │     │
- │ └─────────┴─────────┘     │
- │ [Refine with AI        ]  │   actions stack full-width; a disabled
- │ [Retry failed          ]  │   one is grey, never accent-coloured
- │ [Export               ↓]  │
+ │ [Refine with AI        ]  │   view (not removed — still announced),
+ │ [Retry failed          ]  │   because at 320px they were competing
+ │ [Export               ↓]  │   with the controls you came for
+ ├───────────────────────────┤
+ │ ▌Improper access control… │   actions stack full-width; a disabled
+ │   Exploited (KEV)         │   one is grey, never accent-coloured
+ │   lodash → 4.17.21        │
  └───────────────────────────┘
 ```
 
-**Alignment.** Everything is left-aligned and ragged-right. The one
-exception is the severity key, which is right-aligned under its `CVSS`
-label so the four bands line up with the numbers they describe. No centred
+**Alignment.** Everything is left-aligned and ragged-right. No centred
 text anywhere: this is a scanning surface, and a centred left edge destroys
-scanning.
+scanning. The one right-aligned thing is a folded section's value, which
+sits against the rail's right edge so the chevrons line up down the column.
 
 ## The second page
 
@@ -343,6 +390,15 @@ So, against each free axis:
   search runs, and there is no card, border or gradient behind them — the
   moment they get a box they become the stat row and must go.
 
+  **Reversed, later.** The test above was the wrong test. The figures never
+  acquired a box, so by its own terms the funnel passed — and it still had
+  to go, because only one of the four ever moved. "Derived from the live
+  query" was true of `944` and `29` in the sense that the template read
+  them from the catalog, not in the sense that a reader would ever see them
+  change. Two constants and a selection counter at 52px, kept because a
+  rule written in advance said boxes were the danger. The rule was about
+  the wrong property.
+
 - **Removing borders.** The risk is landing on the broadsheet tell —
   hairlines, zero radius, dense columns. **Revised:** radii stay on the
   things that remain boxes (inputs, modals, badges), entry density goes
@@ -361,6 +417,11 @@ So, against each free axis:
   Justified only if the funnel is genuinely the page's one loud thing — and
   if it is, 40px display type next to 40px figures would be two things
   claiming the same rank. It earns the step by being the only user of it.
+
+  **Reversed, later.** "Two things claiming the same rank" was the right
+  worry and the wrong conclusion: the answer was to have one of them, not
+  to give the second its own step. The masthead and the funnel both went,
+  `--text-display` now has a single user, and the scale is back to six.
 
 ## Every region, after the rebuild
 
@@ -382,11 +443,13 @@ not a better answer than "this part was already right".
 | Rail sections | **Redesigned.** Six stacked bordered blocks gave the rail one flat rhythm in which nothing outranked anything. Space and headings carry it now. |
 | Class list rows | **Redesigned.** Twenty-nine filled rows made the checked state fight the fill it sat on. Unfilled, a selection is simply the one that is coloured. |
 | Source rows | **Redesigned.** Same change; the dashed "advanced" box became a dashed rule. |
-| Masthead | **Redesigned.** A title and a paragraph became a masthead with the funnel beneath it. "Advisory queue" said where you were, not where the query was. |
-| The funnel | **New.** 944 CWEs → 29 classes → selected → found, at `--text-figure`. The page's job is narrowing and nothing showed the narrowing. |
-| Severity key | **Redesigned twice.** Four bordered cards → four marks; then moved from its own grid cell to the end of the funnel row, where it shares a baseline and sits beside the edges it explains. |
+| Masthead | **Removed.** It became a masthead with the funnel beneath it, and then went entirely: title, paragraph, figures and key were ~290px of chrome that never changed and never left, above a page whose own hero sat below them. Two display headings were fighting for the top. |
+| The funnel | **Removed.** Added as 944 CWEs → 29 classes → selected → found at `--text-figure`, then taken out: three of the four figures were constants, and 52px is a lot of page to spend on a number that cannot change. The rail states the catalog size in one line; the two live figures are in the result summary. |
+| Severity key | **Removed.** Four bordered cards → four marks → gone. It was a legend, in 11px mono, for badges that are not on screen until a search returns — and when they are, each one carries its band as a word. |
+| Workspace views | **New.** `data-view` is `browse` or `results`; the command bar exists only in the second. Four permanently-greyed controls above the fold read as a broken page rather than an early one. |
+| Rail folding | **New.** Sources and Options fold, each keeping its current value on the heading. Seven sections open at once was ~1400px of scroll behind a 320px column, so the page opened mid-list with no visible beginning. |
 | Result card | **Redesigned.** Became an entry: the severity edge runs the full height and is the only container. A triage queue is scanned down a column, and a box makes the eye re-enter at every row. |
-| Entry badges | **Redesigned.** Once the entry lost its border, ~30 outline badges across six entries were the loudest texture on the surface. They are codes separated by hairlines now. |
+| Entry badges | **Redesigned twice.** Once the entry lost its border, ~30 outline badges across six entries were the loudest texture on the surface; they became codes separated by hairlines. That left three rows of 11px grey between the title and the verdict — provenance, packages, ids — all at one rank, which is what made a column of entries unscannable. They are ranked now: a flag row that renders only when something exceptional applies, the package and its fix at `--text-sm` in full ink, and everything true of every row in the set demoted into one quiet receipts line below the verdict. |
 | `Exploited (KEV)` | **Kept, and now alone.** The one filled badge on an entry, on the one fact most likely to change what the reader does next. |
 | Severity badge | **Reworked.** Was a saturated fill duplicating the spine; now the word on a 16% tint of its own band, with text tokens that clear AA as ink rather than behind it. |
 | AI verdict panel | **Redesigned.** A bordered box nested inside a borderless entry was the one place the rebuild contradicted itself. Same device as the entry: a coloured edge and space. |
@@ -413,7 +476,7 @@ not a better answer than "this part was already right".
 | Export popover | **Kept.** A `<details>` popover genuinely needs an edge: it floats over content. |
 | Auth gate | **Kept.** A modal that traps focus and inerts the page, with one input and one action. |
 | Toasts | **Kept.** Transient messages stay transient; only the persistent warnings moved into the flow. |
-| Mobile slide-over | **Kept.** Below 900px the rail becomes a panel from one button, at a breakpoint declared once and read from CSS by `app.js`. |
+| Mobile slide-over | **Reworked.** Below 900px the rail becomes a panel from one button, at a breakpoint declared once and read from CSS by `app.js` — but the rule that made it a panel set position, z-index and a shadow and never a background, so it inherited the base rail's deliberate `background: none` and the drawer was transparent on every phone. `--rail-bg` had been declared in all four theme blocks and referenced nowhere; nothing looks at a colour token with no users, which is how it survived two design passes. |
 
 Of 36 regions: 11 redesigned, 1 new, 7 reworked earlier in the review, and 17 kept.
 The kept ones are mostly controls and overlays — the places where a border is doing real

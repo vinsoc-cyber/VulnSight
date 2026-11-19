@@ -24,12 +24,12 @@ checkout; the numbers are from the last run.
 
 | What | Command | Result |
 |---|---|---|
-| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 915 pass |
+| Tests | `python -m unittest discover -s tests -p "test_*.py"` | 923 pass |
 | Frontend | `node tests/test_frontend_security.js && node tests/test_frontend_finder.js` | pass |
 | Lint | `ruff check .` | clean |
 | Types | `pyright` | 0 errors |
 | Coverage | `python -m coverage run -m unittest discover -s tests && python -m coverage report` | 91% (branch) |
-| **Fixes are really locked** | `python tools/revert_checks.py` | **209/209 caught** |
+| **Fixes are really locked** | `python tools/revert_checks.py` | **217/217 caught** |
 
 The `caught` figure is read from `docs/revert-results.json`, which
 `tools/revert_checks.py` writes when it runs the whole battery.
@@ -46,7 +46,7 @@ module unpatched first now and reports `BASELINE RED` instead.
 The last row is the one that matters. A green suite says nothing about
 *which* fixes it defends: the suite was green before these fixes too, because
 it did not test the broken behaviour. `tools/revert_checks.py` re-introduces
-each of 209 named bugs in the working tree, runs the test module that is
+each of 217 named bugs in the working tree, runs the test module that is
 supposed to notice, and requires it to go **red**. A fix whose revert leaves
 the suite green is not covered, whatever this table says — that check found
 three such gaps on its first run, and they were closed rather than argued
@@ -295,7 +295,7 @@ must report all of them caught.
 
 <!-- begin generated check index -->
 
-## The 209 checks, by area
+## The 217 checks, by area
 
 Generated from `tools/checks/` by `tools/sync_check_counts.py`; a
 test fails if it drifts. Each line is a bug that was really in this
@@ -549,5 +549,18 @@ codebase and the test module that now refuses to let it back in.
 | a state that measures the page twice is counted as coverage | `tests/test_frontend_js.py` |
 | a revert that undoes one of three copies is scored as a full revert | `tests/test_cleanup_stays_clean.py` |
 | a shutdown request can never be withdrawn by the inline search path | `tests/test_jobs.py` |
+
+### Taking the chrome off the workspace: views, folds, ranks (8)
+
+| Reverting this | is caught by |
+|---|---|
+| the command bar is painted before anything has been searched for | `tests/test_ui_e2e.py` |
+| the view never switches, so the results arrive with no controls | `tests/test_ui_e2e.py` |
+| a query refused for having no source switches the page to results | `tests/test_ui_e2e.py` |
+| a folded section hides the setting along with the controls | `tests/test_ui_e2e.py` |
+| ticking a source leaves the folded heading describing the old query | `tests/test_ui_e2e.py` |
+| replaying a saved search leaves the headings on the query it replaced | `tests/test_ui_e2e.py` |
+| the phone filter drawer is transparent and the page reads through it | `tests/test_ui_e2e.py` |
+| a type step is declared with nothing on the page using it | `tests/test_frontend_js.py` |
 
 <!-- end generated check index -->

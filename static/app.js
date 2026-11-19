@@ -231,6 +231,10 @@
         toast('“Force-refresh OSV cache” left off for this replay', 'ok');
       }
       renderSelection();
+      // Writing .value and .checked fires no change event, so the folded
+      // headings would still describe the query this one just replaced.
+      renderFoldValues();
+      updateNvdHint();
     }
 
     // localStorage is user-writable, so a restored query is re-validated here
@@ -768,7 +772,6 @@
             aria-label="Remove CWE-${safeAttr(id)}">×</button>
         </span>`;
       }));
-      renderFunnel();
       $('#selected-chips').innerHTML = chips.length
         ? chips.join('')
         : '<span class="chips-empty">Nothing selected — search above or tick a class.</span>';
@@ -791,6 +794,27 @@
       hint.textContent = $('input[name=source][value=nvd]').checked && cwes > 1
         ? `NVD: ~${cwes} CWEs × ~7s ≈ ${seconds}s without NVD_API_KEY. Free key at nvd.nist.gov`
         : 'Without NVD_API_KEY, queries take ~7s per CWE. Free key at nvd.nist.gov';
+    }
+
+    // What a folded section is currently set to, written onto its own
+    // heading. Folding a control away is only honest if the setting stays
+    // on screen: with Sources shut and no value here, a query could run
+    // against OSV's 220MB npm export with nothing in the rail saying so.
+    function renderFoldValues() {
+      const sourceSlot = $('#sources-value');
+      if (sourceSlot) {
+        const picked = $$('input[name=source]:checked')
+          .map(box => box.value === 'osv-native'
+            ? 'OSV native' : box.value.toUpperCase());
+        sourceSlot.textContent = picked.length
+          ? picked.join(' + ') : 'none selected';
+      }
+      const optionSlot = $('#options-value');
+      if (optionSlot) {
+        const chosen = $('#published').selectedOptions[0];
+        const when = (chosen ? chosen.textContent : '').trim().toLowerCase();
+        optionSlot.textContent = `${$('#max_results').value} results, ${when}`;
+      }
     }
 
     // Exactly what resolve_cwes() will produce server-side for this selection.
@@ -1025,25 +1049,47 @@
             ${(epssPct * 100).toFixed(2)}%${hasPercentile ? ' (p' + Math.round(Number(a.epss_percentile) * 100) + ')' : ''}
           </span>`
         : '';
+      // Three rows of 11px grey used to sit between the title and the
+      // verdict -- provenance, then packages, then ids -- all at one rank,
+      // which is what made a column of these unscannable: nothing told the
+      // eye which row to read. They are ranked now.
+      //
+      // The flag row carries only what is exceptional. KEV, withdrawn and
+      // "no CWE tag" are true of a few rows in a result set, so each one
+      // earns a line of its own; the row is omitted entirely when none
+      // applies, rather than rendering an empty flex box with a margin.
+      const flags = `${nativeBadge}${kevBadge}${withdrawnBadge}`;
+      const flagRow = flags ? `<div class="badges card-flags">${flags}</div>` : '';
+      // The package and the version that fixes it: the one fact on the card
+      // that is an instruction. It is the only secondary row at --text-sm.
+      const affected = `${pkgs}${morePkgs}`;
+      const affectedRow = affected
+        ? `<div class="badges card-affected">${affected}</div>` : '';
+      // Everything that is true of every row in the result set -- the
+      // source, the ecosystem, the CWE you searched by -- joins the ids and
+      // the dates in one quiet row. Per-row they carry almost no signal; it
+      // is the set they belong to that was already chosen in the rail.
+      //
+      // Below the verdict, not above it. The verdict answers the question
+      // the page exists to ask, and it used to sit under a wall of ids.
       return `<article class="card ${sevbar} ${dimClass}" data-id="${esc(a.advisory_id)}">
         <div class="card-top">
           <h3 class="title">${esc(a.summary)}</h3>
           <span class="badge sev ${safeSeverity}">${esc(a.severity)}</span>
         </div>
-        <div class="badges">
-          ${srcBadge}${nativeBadge}${kevBadge}${withdrawnBadge}
+        ${flagRow}
+        ${affectedRow}
+        ${aiHtml}
+        <div class="meta">
+          ${srcBadge}
           ${ecoNames.length ? `<span class="badge eco">${esc(ecoNames.join(', '))}</span>` : ''}
           ${cwes}
-        </div>
-        <div class="badges">${pkgs}${morePkgs}</div>
-        <div class="meta">
           <span><span class="meta-label">Advisory</span><a href="${safeUrl(a.html_url)}" target="_blank" rel="noopener noreferrer">${esc(a.ghsa_id || a.advisory_id)}</a></span>
           <span><span class="meta-label">CVE</span>${cve}</span>
           <span><span class="meta-label">Published</span><time datetime="${esc((a.published_at||'').slice(0,10))}">${esc((a.published_at||'').slice(0,10))}</time></span>
           ${a.cvss_score ? '<span><span class="meta-label">CVSS</span>'+esc(a.cvss_score)+'</span>' : ''}
           ${epssMeta}
         </div>
-        ${aiHtml}
       </article>`;
     }
 
@@ -1230,7 +1276,6 @@
       const head = shown === m.count
         ? `<b>${m.count}</b> advisories`
         : `<b>${shown}</b> of ${m.count} shown`;
-      renderFunnel();
       $('#summary').innerHTML =
         `<p class="summary-head">${head}, `
         + `<span class="summary-order">${esc(currentOrderWords().toLowerCase())}</span></p>`
@@ -1264,22 +1309,14 @@
       }
     }
 
-    // The funnel's live half. "selected" follows the rail; "advisories"
-    // stays an em dash until a search has run, because 0 and "not asked
-    // yet" are different answers and a triage tool must not render the
-    // second as the first.
-    function renderFunnel() {
-      const selected = $$('input[name=category]:checked').length + PICKED.size;
-      const found = SEARCH_META ? SEARCH_META.count : null;
-      const set = (id, value, pending) => {
-        const slot = $('#' + id);
-        if (!slot) return;
-        slot.textContent = value;
-        const item = slot.closest('li');
-        if (item) item.classList.toggle('is-pending', Boolean(pending));
-      };
-      set('funnel-selected', String(selected), selected === 0);
-      set('funnel-found', found === null ? '\u2014' : String(found), found === null);
+    // The workspace has two views. "browse" is the bug-class map on its own;
+    // "results" adds the command bar, whose every control is dead until a
+    // search has run. One way only, and set when the search *starts*: the
+    // spinner, an empty result set and an error all belong to the results
+    // view, because each of them is an answer to a question that was asked.
+    function setView(view) {
+      const workspace = $('#workspace');
+      if (workspace) workspace.dataset.view = view;
     }
 
     function renderWarnings(list) {
@@ -1354,6 +1391,10 @@
       const sources = state.sources;
       if (document.body.classList.contains('filters-open')) setFilterPanel(false, false);
       $('#search-btn').disabled = true;
+      // After the validation bail-outs above, not before: a rejected query
+      // never ran, so the page is still browsing and the command bar would
+      // arrive with nothing behind it.
+      setView('results');
       setResultsBusy(true);
       $('#results').innerHTML = `<div class="loading"><span class="spinner"></span>Searching advisories…</div>`;
       $('#summary').textContent = 'Searching…';
@@ -1819,7 +1860,17 @@
       toast('Recent searches cleared', 'ok');
     });
     $('#include_extended').addEventListener('change', updateNvdHint);
-    $$('input[name=source]').forEach(box => box.addEventListener('change', updateNvdHint));
+    $$('input[name=source]').forEach(box => box.addEventListener('change', () => {
+      updateNvdHint();
+      renderFoldValues();
+    }));
+    // applyState() restores a whole query at once -- from history, or from a
+    // shared link -- by writing straight to the controls, which fires no
+    // change event. The headings are refreshed on every path that can move
+    // these values, so a restored search never shows the previous one's.
+    ['#published', '#max_results'].forEach(sel =>
+      $(sel).addEventListener('change', renderFoldValues));
+    renderFoldValues();
     document.addEventListener('mousedown', e => {
       const finder = $('.cwe-finder');
       if (finder && !finder.contains(e.target)) closeCombo();

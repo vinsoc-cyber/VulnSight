@@ -20,6 +20,7 @@ test stayed green.
 
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -221,6 +222,21 @@ class UITestCase(unittest.TestCase):
     def search_and_wait(self):
         self.page.click("#search-btn")
         self.page.wait_for_selector(".card")
+
+    def set_option(self, selector, value):
+        """Choose a value from a <select>, opening its section if it folds.
+
+        Sources and Options ship collapsed, so Playwright refuses to act on
+        a control inside one: `element is not visible`, retried for 30s.
+        Driving `.open` rather than clicking the summary keeps the test
+        about the thing it is testing, and still goes through the state a
+        real user has to reach before they can touch the control."""
+        self.page.eval_on_selector(
+            selector,
+            "el => { const fold = el.closest('details');"
+            "        if (fold) fold.open = true; }")
+        self.page.wait_for_selector(selector, state="visible")
+        self.page.select_option(selector, value)
 
 
 class TestCweFinder(UITestCase):
@@ -656,7 +672,7 @@ class TestFocusSurvivesARerender(UITestCase):
         self.assertTrue(found, "no per-card Retry button was rendered")
 
         # A sort change re-renders every card without changing the data.
-        self.page.select_option("#sort", "cve_id")
+        self.set_option("#sort", "cve_id")
         self.page.wait_for_timeout(300)
 
         still = self.page.evaluate("""() => {
@@ -676,7 +692,7 @@ class TestFocusSurvivesARerender(UITestCase):
           const button = document.querySelector('#results .verdict-retry');
           if (button) button.focus({preventScroll: true});
         }""")
-        self.page.select_option("#sort", "cve_id")
+        self.set_option("#sort", "cve_id")
         self.page.wait_for_timeout(300)
         after = self.page.evaluate("() => Math.round(window.scrollY)")
         self.assertLess(abs(after - before), 200,
@@ -1204,6 +1220,151 @@ class TestTheClassMeasureIsReal(UITestCase):
         widest = max(rows, key=lambda r: r["cwes"])
         self.assertGreater(widest["px"], widest["track"] * 0.95,
                            "the scale is not anchored to the widest class")
+
+
+class TestTheFilterDrawerIsOpaque(UITestCase):
+    """Below the panel breakpoint the rail stops being a column of the page
+    and becomes a panel over it. The rule that makes that happen set
+    position, z-index and a shadow, and never a background -- so the base
+    `background: none`, which is right for a desktop column sharing the
+    page's surface, left the phone drawer transparent and the class map
+    read straight through the controls on top of it.
+
+    `--rail-bg` was declared in all four theme blocks and referenced
+    nowhere, which is how this survived: nothing looks at a colour token
+    with no users."""
+
+    def _drawer_background(self, page):
+        return page.eval_on_selector(
+            ".control-rail", "el => getComputedStyle(el).backgroundColor")
+
+    @staticmethod
+    def _alpha(colour):
+        parts = re.findall(r"[\d.]+", colour)
+        return float(parts[3]) if len(parts) > 3 else (1.0 if parts else 0.0)
+
+    def test_the_open_drawer_hides_the_page_behind_it(self):
+        self.open()
+        for width in (320, 390, 700, 899):
+            page = self.browser.new_page(
+                viewport={"width": width, "height": 844})
+            try:
+                page.goto(self.base, wait_until="networkidle")
+                page.click("#filters-toggle")
+                page.wait_for_selector(".control-rail", state="visible")
+                colour = self._drawer_background(page)
+                self.assertGreaterEqual(
+                    self._alpha(colour), 0.9,
+                    f"at {width}px the filter drawer paints {colour}; the "
+                    f"page shows through the controls")
+            finally:
+                page.close()
+
+    def test_the_desktop_rail_stays_part_of_the_page(self):
+        """The other half of the same decision: above the breakpoint the
+        rail must *not* pick up a fill, or it becomes a second surface."""
+        self.open()
+        self.assertEqual(self._alpha(self._drawer_background(self.page)), 0.0,
+                         "the desktop rail has grown a panel fill")
+
+
+class TestTheCommandBarArrivesWithTheData(UITestCase):
+    """Refine with AI, Retry failed, Confirmed only and Export were all on
+    screen and all disabled before anything had been searched for -- four
+    dead controls above the fold, which reads as a broken page rather than
+    an early one. They are absent now until a search has run."""
+
+    def _bar_is_painted(self):
+        return self.page.eval_on_selector(
+            ".result-command",
+            "el => getComputedStyle(el).display !== 'none'")
+
+    def test_the_bar_is_not_painted_before_a_search(self):
+        self.open()
+        self.assertEqual(
+            self.page.eval_on_selector("#workspace", "el => el.dataset.view"),
+            "browse")
+        self.assertFalse(self._bar_is_painted(),
+                         "the command bar is on screen with nothing to act on")
+
+    def test_the_bar_arrives_with_the_results(self):
+        self.open()
+        self.search_and_wait()
+        self.assertEqual(
+            self.page.eval_on_selector("#workspace", "el => el.dataset.view"),
+            "results")
+        self.assertTrue(self._bar_is_painted(),
+                        "the command bar never arrived")
+
+    def test_a_refused_query_leaves_the_page_browsing(self):
+        """The switch fires when the search starts, which has to be after
+        the validation bail-outs: a query with no source selected never
+        runs, so the bar would arrive with nothing behind it and stay."""
+        self.open()
+        self.page.eval_on_selector_all(
+            "input[name=source]",
+            "els => els.forEach(el => { el.checked = false;"
+            "  el.dispatchEvent(new Event('change', {bubbles: true})); })")
+        self.page.click("#search-btn")
+        self.page.wait_for_selector(".toast")
+        self.assertEqual(
+            self.page.eval_on_selector("#workspace", "el => el.dataset.view"),
+            "browse", "a refused query switched the page to results")
+
+
+class TestAFoldedSectionStillStatesItsValue(UITestCase):
+    """Sources and Options ship collapsed. Folding a control away is only
+    honest if the setting stays on screen -- otherwise the rail hides state
+    rather than clutter, and a query can run against OSV's ~220MB npm
+    export with nothing in the rail saying so."""
+
+    def _fold_value(self, slot):
+        return self.page.eval_on_selector(slot, "el => el.textContent.trim()")
+
+    def test_the_shut_sections_name_their_current_setting(self):
+        self.open()
+        folded = self.page.eval_on_selector_all(
+            ".control-fold", "els => els.map(e => e.open)")
+        self.assertEqual(folded, [False, False],
+                         "the folding sections did not ship shut")
+        self.assertEqual(self._fold_value("#sources-value"), "GHSA")
+        self.assertIn("100 results", self._fold_value("#options-value"))
+
+    def test_ticking_a_source_updates_the_heading(self):
+        self.open()
+        self.page.eval_on_selector(
+            "input[name=source][value=nvd]",
+            "el => { el.checked = true;"
+            "        el.dispatchEvent(new Event('change', {bubbles: true})); }")
+        self.assertEqual(self._fold_value("#sources-value"), "GHSA + NVD")
+
+    def test_replaying_a_saved_search_rewrites_the_headings(self):
+        """applyState() writes straight to .value and .checked, which fires
+        no change event, so the headings would otherwise still describe the
+        query the replay just replaced."""
+        self.open()
+        self.set_option("#max_results", "25")
+        self.page.eval_on_selector_all(
+            ".control-fold", "els => els.forEach(e => { e.open = false; })")
+        self.assertIn("25 results", self._fold_value("#options-value"))
+        # Record the search first; the history row is what gets replayed.
+        self.search_and_wait()
+
+        # Now move the controls behind the app's back -- .value and .checked
+        # fire no change event, which is exactly what applyState() does.
+        self.page.evaluate("""() => {
+          document.querySelector('#max_results').value = '200';
+          const nvd = document.querySelector('input[name=source][value=nvd]');
+          nvd.checked = true;
+          nvd.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        self.assertEqual(self._fold_value("#sources-value"), "GHSA + NVD")
+
+        # Replaying through the app's own path, not by poking the controls.
+        self.page.click("#history-list .history-run")
+        self.page.wait_for_selector(".card")
+        self.assertIn("25 results", self._fold_value("#options-value"))
+        self.assertEqual(self._fold_value("#sources-value"), "GHSA")
 
 
 if __name__ == "__main__":

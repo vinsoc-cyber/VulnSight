@@ -27,15 +27,15 @@ modules/
   ai_classifier.py        1239   provider client, prompt, verdict cache, key rotation
   openapi.py               657   the OpenAPI description of /api/v1
   security.py              467   bind/exposure checks, CSRF origin check, rate limiter
-templates/index.html       410   page shell -- HTML and Jinja only
-static/app.js             1929   all UI logic; server data arrives via window.BOOT
-static/style.css          2145   design tokens + components, light and dark
+templates/index.html       396   page shell -- HTML and Jinja only
+static/app.js             1980   all UI logic; server data arrives via window.BOOT
+static/style.css          2142   design tokens + components, light and dark
 tools/
   checks/                        the revert checks, one module per area
   audit_tests.py           365   finds tests that can no longer fail
-  design_audit.py          726   measures contrast/targets/focus in a real browser
+  design_audit.py          741   measures contrast/targets/focus in a real browser
   generate_cwe_catalog.py  352   regenerates modules/cwe_catalog.py from MITRE XML
-  sync_check_counts.py     203   rewrites the revert-check figures and their index
+  sync_check_counts.py     204   rewrites the revert-check figures and their index
   sync_cwe_catalog_doc.py  147   rewrites the CWE catalog figures in three docs
   revert_checks.py         273   reverts each fix, asserts the suite goes red
   sync_bug_classes_doc.py   95   rewrites the class tables in bug-classes.md
