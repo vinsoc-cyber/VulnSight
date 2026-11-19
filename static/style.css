@@ -552,6 +552,21 @@ summary.section-heading::-webkit-details-marker { display: none; }
 }
 .control-fold[open] > summary.section-heading .fold-value { display: none; }
 
+/* The bug-class list folds the same way, one level in: it is a field inside
+   the Bug class section rather than a section of its own, so it carries
+   .control-fold for the chevron and overrides only what that nesting
+   changes -- the chevron sits at the field's edge, not the rail's, and the
+   heading is a field label rather than an h3.
+
+   It carries no .fold-value, and that is the point of the pair of rules: a
+   fold hides controls, never state, and this one's state is already on
+   screen as the Query-target chips directly above it. A third printing of
+   the same selection is what this pass is removing, not adding. */
+.class-fold > summary.section-heading { min-height: 36px; padding-right: 18px; }
+.class-fold > summary.section-heading .field-label { margin-bottom: 0; }
+.class-fold[open] > summary.section-heading { margin-bottom: 6px; }
+.class-fold > summary.section-heading::after { right: 2px; }
+
 .field { min-width: 0; margin: 0 0 12px; }
 .field-last { margin-bottom: 0; }
 .field > label:not(.cat):not(.check), .field-label {
@@ -692,6 +707,17 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .35; }
   letter-spacing: .04em;
 }
 .taxonomy-group:first-child { margin-top: 0; }
+/* One line per class. The description that used to sit under every label --
+   up to five lines at 11px, twenty-nine times, the largest block of small
+   grey text on the page -- is on `title`, on the map entry beside it, and
+   in docs/bug-classes.md at a width that fits a sentence. What is left is
+   a list the eye can run down.
+
+   A single line of 13px in a 9px-padded row is a 35px target, under the
+   44px this rail is measured against, so the row keeps its height and
+   centres its content in it rather than hanging from the top. */
+.taxonomy-item { align-items: center; min-height: 44px; }
+.taxonomy-item input { margin-top: 0; }
 /* "Kept because it is selected, not because it matches" -- same inset accent
    rule .combo-option.class uses, deliberately quiet. */
 .taxonomy-item.filtered-keep { box-shadow: inset 2px 0 0 var(--accent); }
@@ -2072,29 +2098,41 @@ code {
   background: var(--line);
 }
 
-/* Twenty-nine bordered rectangles of equal size said "these are
-   twenty-nine equal things". They are not. BAC casts a net over 17 CWEs and
-   CLICK over 1, and which net you are about to cast is the first thing you
-   need to know when you pick one. That number was always on the tile, as
-   text, in a form you cannot compare without reading all twenty-nine.
+/* Twenty-nine entries, two facts each: which bug it is, and how wide a net
+   that class casts.
 
-   So the box goes and the number becomes a length. The track doubles as the
-   entry's own baseline, which is why losing the border costs no separation:
-   the rule that would otherwise be decoration is the measurement. */
+   There were four. A mono code in a left gutter -- BAC, CSRF, SSTI -- spelt
+   the name beside it a second time in the API's internal spelling, which is
+   a thing to look up in /api/docs rather than to read twenty-nine times on
+   the way to picking one. And a 2px track under each entry carried, as a
+   length, the CWE count printed as a number directly above it.
+
+   The track was argued for right here: "the box goes and the number becomes
+   a length", so that 29 classes could be compared at a glance. Reversed,
+   later. Nobody chooses a bug class by the size of its CWE set -- you pick
+   the bug you are hunting and then read what it covers -- so the comparison
+   the bar enabled is one no operator makes. What it did do was end at a
+   different x under every entry, because labels wrap to one line or two and
+   the track sat below whatever they did, and 29 ragged underlines is most
+   of why four tidy columns read as a jumble. Separation is the gap now,
+   which is what separation usually is. */
 .map-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  gap: 2px 18px;
+  gap: 6px 18px;
 }
 
 .map-class {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas: "code label" "code count" "track track";
-  align-content: start;
-  gap: 2px 10px;
+  /* Two edges, not one. Labels wrap to one line or two, so any single
+     alignment leaves the other end of the entry ragged: top-align and the
+     counts scatter, centre and both scatter by half a line. Pushed apart,
+     every label in a row starts on the same line and every count ends on
+     the same one, which is the rhythm the bars used to break. */
+  align-content: space-between;
+  gap: 2px;
   min-height: 58px;
-  padding: 9px 10px 0;
+  padding: 9px 12px;
   text-align: left;
   background: none;
   border: 0;
@@ -2103,40 +2141,15 @@ code {
   border-radius: 0;
   cursor: pointer;
 }
-.map-track {
-  grid-area: track;
-  margin-top: 9px;
-  height: 2px;
-  background: var(--line);
-}
-/* The bar is the only thing that lets 29 classes be compared at a glance,
-   and it ran from 100% down to 6% -- real spread, carried in --line-bright
-   against a --line ground: 1.73:1, under the 3:1 WCAG 1.4.11 asks of a
-   graphic that carries meaning. The ramp was there and invisible. The text
-   count beside it is what keeps this legal rather than legible, which is
-   not the same thing. --muted measures 5.79:1 on the same ground, and on a
-   2px rule that is a hairline, not a shout. */
-.map-track > i { display: block; height: 100%; background: var(--muted); }
 .map-class:hover:not(:disabled) { background: var(--panel-2); }
-.map-class:hover:not(:disabled) .map-track > i { background: var(--ink); }
 .map-class.is-picked {
   border-left-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
 }
-.map-class.is-picked .map-track { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); }
-.map-class.is-picked .map-track > i { background: var(--accent); }
-.map-code {
-  grid-area: code;
-  align-self: center;
-  color: var(--accent);
-  font: var(--weight-bold) var(--text-xs)/1 var(--mono);
-  letter-spacing: var(--tracking-code);
-}
 .map-label {
-  grid-area: label;
   color: var(--ink);
   font-size: var(--text-sm);
   font-weight: var(--weight-semi);
   line-height: 1.25;
 }
-.map-count { grid-area: count; color: var(--faint); font-size: var(--text-xs); }
+.map-count { color: var(--faint); font-size: var(--text-xs); }

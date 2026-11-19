@@ -508,13 +508,6 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
         "test_cleanup_stays_clean",
     ),
     (
-        "the class measure stops being proportional",
-        [("static/app.js",
-          "if (fill) fill.style.width = (Math.max(n / widest, 0.03) * 100).toFixed(2) + '%';",
-          "if (fill) fill.style.width = '100%';")],
-        "test_ui_e2e",
-    ),
-    (
         "the status pill state is unannounced at 480px again",
         [("static/style.css",
           "  .pill-value {\n"

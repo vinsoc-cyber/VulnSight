@@ -83,15 +83,6 @@ CHECKS: list[tuple[str, list[Edit], str]] = [
         "test_frontend_js",
     ),
 
-    # --- a graphic that carries meaning ----------------------------------
-    (
-        "the class-map bar goes back to 1.7:1 against its own track",
-        [("static/style.css",
-          ".map-track > i { display: block; height: 100%; background: var(--muted); }",
-          ".map-track > i { display: block; height: 100%; background: var(--line-bright); }")],
-        "test_frontend_js",
-    ),
-
     # --- mono as texture on a label ---------------------------------------
     (
         "the taxonomy group headings go back to the monospace face",

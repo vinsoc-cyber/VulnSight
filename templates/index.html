@@ -113,32 +113,54 @@
           <p class="sr-only" id="selection-live" role="status" aria-live="polite"></p>
         </div>
 
-        <fieldset class="field">
-          <legend class="field-label" id="classes-legend">
-            Bug classes <span class="hint" id="class-count">{{ categories|length }} available</span>
-          </legend>
+        <!-- All twenty-nine classes were on screen twice at rest: here, each
+             with its full description, and again as the workspace map. The
+             landing page measured 29 class names rendered 2x, 14 family
+             headings for 7 families, and 5881 characters of text in a 320px
+             rail against 1415 in the workspace that has five times the
+             width. A second copy of the taxonomy is not a second way in; it
+             is the same way in, printed twice.
+
+             So the map is the taxonomy and this is the control that edits
+             it. It ships shut, and needs no value on its heading the way
+             Sources and Options do -- what is ticked is already named,
+             directly above, as Query-target chips. Open it to change the
+             selection once results have replaced the map.
+
+             The per-class description moved to `title` and to the map's own
+             tooltip: twenty-nine descriptions at 11px is the largest block
+             of small grey text this page has, and none of it is readable at
+             a glance anyway. docs/bug-classes.md carries all of them at a
+             width that fits a sentence. -->
+        <details class="field control-fold class-fold">
+          <summary class="section-heading">
+            <span class="field-label" id="classes-legend">
+              Bug classes <span class="hint" id="class-count">{{ categories|length }} available</span>
+            </span>
+          </summary>
           <div class="class-filter">
             <label class="sr-only" for="class-search">Filter bug classes</label>
             <input id="class-search" type="search" autocomplete="off" spellcheck="false"
                    placeholder="Filter these {{ categories|length }} classes…"
                    aria-describedby="class-count">
           </div>
-          <div class="cats taxonomy-list" id="taxonomy-list">
+          <div class="cats taxonomy-list" id="taxonomy-list"
+               role="group" aria-labelledby="classes-legend">
             {% for g in category_groups %}
             <p class="taxonomy-group" data-group="{{ g.name }}">{{ g.name }}</p>
             {% for c in g['items'] %}
-            <label class="cat taxonomy-item" data-key="{{ c.key }}" data-group="{{ g.name }}">
+            <label class="cat taxonomy-item" data-key="{{ c.key }}" data-group="{{ g.name }}"
+                   title="{{ c.description }}">
               <input type="checkbox" name="category" value="{{ c.key }}" {{ 'checked' if c.key == 'bac' else '' }}>
               <span class="cat-copy">
                 <span class="c-label">{{ c.label }}</span>
-                <span class="c-desc">{{ c.description }}</span>
               </span>
             </label>
             {% endfor %}
             {% endfor %}
             <p class="taxonomy-empty" id="taxonomy-empty" hidden>No bug class matches that. Try the CWE search above.</p>
           </div>
-        </fieldset>
+        </details>
 
         <div class="field field-last compact-field">
           <label class="check switch-check">
@@ -351,7 +373,9 @@
         <div class="empty empty-onboarding">
           <div class="onboarding-head">
             <h3>Search by how the bug works, not by the title.</h3>
-            <p>Pick a class to start — or type a CWE id, a bug name or an alias in the rail.</p>
+            <!-- No "in the rail" here: below 900px the rail is behind the
+                 filters button and there is no rail on screen to point at. -->
+            <p>Pick a class to start, or search by CWE id, bug name or alias.</p>
           </div>
           <div class="class-map" id="class-map" role="group"
                aria-label="Bug classes"></div>
